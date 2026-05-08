@@ -40,6 +40,161 @@ powershell -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 ```
 
+## CentOS 7 Cloud Server Deployment
+
+The verified cloud server project path is:
+
+```bash
+/home/fcheng/work/AStockCrocodile
+```
+
+CentOS 7 ships with an old system Python, and the server's existing `python3.12` may not have the `_ssl` module. Use a CentOS 7 compatible Miniconda Python 3.10 to create the project virtual environment.
+
+### 1. Log in and enter the project
+
+```bash
+ssh fcheng@49.235.114.211
+cd /home/fcheng/work/AStockCrocodile
+```
+
+### 2. Install a CentOS 7 compatible Python bootstrap
+
+Run this once on the server:
+
+```bash
+cd /home/fcheng/work/AStockCrocodile
+MINICONDA="$HOME/miniconda3-py310"
+INSTALLER="/tmp/miniconda-py310-centos7.sh"
+URL="https://repo.anaconda.com/miniconda/Miniconda3-py310_23.5.2-0-Linux-x86_64.sh"
+
+if [ ! -x "$MINICONDA/bin/python" ]; then
+  curl -L --retry 3 -o "$INSTALLER" "$URL"
+  bash "$INSTALLER" -b -p "$MINICONDA"
+fi
+```
+
+Verify that the bootstrap Python has SSL support:
+
+```bash
+$HOME/miniconda3-py310/bin/python - <<'PY'
+import ssl, sys
+print(sys.version.split()[0])
+print(ssl.OPENSSL_VERSION)
+PY
+```
+
+The verified server output used Python `3.10.12` with OpenSSL `3.0.9`.
+
+### 3. Create the project virtual environment
+
+```bash
+cd /home/fcheng/work/AStockCrocodile
+rm -rf .venv
+$HOME/miniconda3-py310/bin/python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt --prefer-binary -i https://pypi.org/simple --timeout 120 --retries 5
+```
+
+If `pandas` tries to build from source and the compiler is killed by memory limits, install binary wheels first and rerun requirements:
+
+```bash
+source /home/fcheng/work/AStockCrocodile/.venv/bin/activate
+python -m pip install --only-binary=:all: "numpy>=1.26" "pandas>=2.2.0" -i https://pypi.org/simple --timeout 120 --retries 5
+python -m pip install -r requirements.txt --prefer-binary -i https://pypi.org/simple --timeout 120 --retries 5
+```
+
+### 4. Configure MySQL connection
+
+Create `env.txt` in the project root. Do not commit this file.
+
+```bash
+cd /home/fcheng/work/AStockCrocodile
+cat > env.txt <<'EOF'
+MYSQL_HOST='your-mysql-host'
+MYSQL_USER='your-mysql-user'
+MYSQL_PASSWORD='your-mysql-password'
+MYSQL_DATABASE='your-database'
+MYSQL_PORT='3306'
+DKANDLES_KTYPE='D'
+EOF
+chmod 600 env.txt
+```
+
+The parser also accepts the PowerShell-style `$env:NAME='value'` lines used on Windows.
+
+### 5. Verify the environment
+
+```bash
+cd /home/fcheng/work/AStockCrocodile
+source .venv/bin/activate
+python -m py_compile a_share_crawler.py
+python a_share_crawler.py --help
+python - <<'PY'
+for name in ["akshare", "pandas", "pymysql", "requests", "apscheduler", "tqdm"]:
+    module = __import__(name)
+    print(name, getattr(module, "__version__", "ok"))
+PY
+```
+
+If the `tests` directory exists on the server, run:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The server environment was verified with `akshare`, `pandas`, `PyMySQL`, `requests`, `APScheduler`, and `tqdm` import checks, `py_compile`, command help, and unit tests.
+
+### 6. Run crawler commands on the server
+
+Incremental daily import:
+
+```bash
+cd /home/fcheng/work/AStockCrocodile
+source .venv/bin/activate
+python a_share_crawler.py run --mode incremental
+```
+
+Full resume import from `2010-01-01` for unfinished stocks:
+
+```bash
+python a_share_crawler.py run --mode full --start-date 20100101
+```
+
+Fetch ex-rights/dividend data and refresh affected qfq K-lines:
+
+```bash
+python a_share_crawler.py exrights
+```
+
+Generate weekly and monthly K-lines from existing daily rows:
+
+```bash
+python a_share_crawler.py generate --period all
+```
+
+Run the scheduler in the foreground:
+
+```bash
+python a_share_crawler.py schedule
+```
+
+Run the scheduler in the background and keep logs:
+
+```bash
+cd /home/fcheng/work/AStockCrocodile
+source .venv/bin/activate
+mkdir -p logs
+nohup python a_share_crawler.py schedule >> logs/scheduler.log 2>&1 &
+```
+
+Check the background scheduler:
+
+```bash
+ps -ef | grep a_share_crawler.py | grep -v grep
+tail -f logs/scheduler.log
+```
+
 ## Full Resume
 
 Full mode does not clear `dkandles`. It refreshes stock basic info, checks each stock's `stockinfo.LatestUpdateKandle`, skips stocks that are already up to date, and continues unfinished stocks from the next missing date. Stocks without `LatestUpdateKandle` start from `2010-01-01`.
