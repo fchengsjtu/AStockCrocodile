@@ -4,6 +4,7 @@ import argparse
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import re
 import os
 import sys
 import time
@@ -47,7 +48,7 @@ PROXY_ENV_KEYS = (
 )
 DEFAULT_REQUEST_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Referer": "https://quote.eastmoney.com/",
+    "Referer": "https://gu.qq.com/",
     "Accept": "application/json,text/plain,*/*",
 }
 ORIGINAL_MERGE_ENVIRONMENT_SETTINGS = requests.sessions.Session.merge_environment_settings
@@ -502,6 +503,20 @@ def _series_or_none(df: pd.DataFrame, column: str, default=None):
     return pd.Series([default] * len(df), index=df.index)
 
 
+def parse_tencent_ratio(content: str, pattern: str) -> float | None:
+    match = re.search(pattern, content or "")
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def parse_tencent_exrights_content(content: str) -> tuple[float | None, float | None, float | None]:
+    bonus_ratio = parse_tencent_ratio(content, "10\\s*\u9001\\s*([0-9]+(?:\\.[0-9]+)?)\\s*\u80a1")
+    transfer_ratio = parse_tencent_ratio(content, "10\\s*\u8f6c\\s*([0-9]+(?:\\.[0-9]+)?)\\s*\u80a1")
+    cash_ratio = parse_tencent_ratio(content, "10\\s*\u6d3e\\s*([0-9]+(?:\\.[0-9]+)?)\\s*\u5143")
+    return bonus_ratio, transfer_ratio, cash_ratio
+
+
 def normalize_exrights_records(records: list[dict], symbol: str | None = None) -> pd.DataFrame:
     if not records:
         return pd.DataFrame()
@@ -511,28 +526,33 @@ def normalize_exrights_records(records: list[dict], symbol: str | None = None) -
     if symbol is not None:
         normalized["SCode"] = normalized["SCode"].replace("000000", normalize_symbol(symbol))
     normalized["SName"] = _series_or_none(df, "SECURITY_NAME_ABBR")
-    normalized["ReportDate"] = _series_or_none(df, "REPORT_DATE").map(parse_date_value)
-    normalized["PlanNoticeDate"] = _series_or_none(df, "PLAN_NOTICE_DATE").map(parse_date_value)
-    normalized["EquityRecordDate"] = _series_or_none(df, "EQUITY_RECORD_DATE").map(parse_date_value)
-    normalized["ExDividendDate"] = _series_or_none(df, "EX_DIVIDEND_DATE").map(parse_date_value)
-    notice_source = _series_or_none(df, "NOTICE_DATE") if "NOTICE_DATE" in df.columns else _series_or_none(df, "PUBLISH_DATE")
-    normalized["NoticeDate"] = notice_source.map(parse_date_value)
-    normalized["AssignProgress"] = _series_or_none(df, "ASSIGN_PROGRESS")
-    normalized["ImplPlanProfile"] = _series_or_none(df, "IMPL_PLAN_PROFILE")
-    normalized["BonusItRatio"] = pd.to_numeric(_series_or_none(df, "BONUS_IT_RATIO"), errors="coerce")
-    normalized["BonusRatio"] = pd.to_numeric(_series_or_none(df, "BONUS_RATIO"), errors="coerce")
-    normalized["TransferRatio"] = pd.to_numeric(_series_or_none(df, "IT_RATIO"), errors="coerce")
-    normalized["PretaxBonusRmb"] = pd.to_numeric(_series_or_none(df, "PRETAX_BONUS_RMB"), errors="coerce")
-    normalized["DividendRatio"] = pd.to_numeric(_series_or_none(df, "DIVIDENT_RATIO"), errors="coerce")
-    normalized["BasicEps"] = pd.to_numeric(_series_or_none(df, "BASIC_EPS"), errors="coerce")
-    normalized["Bvps"] = pd.to_numeric(_series_or_none(df, "BVPS"), errors="coerce")
-    normalized["PerCapitalReserve"] = pd.to_numeric(_series_or_none(df, "PER_CAPITAL_RESERVE"), errors="coerce")
-    normalized["PerUnassignProfit"] = pd.to_numeric(_series_or_none(df, "PER_UNASSIGN_PROFIT"), errors="coerce")
-    normalized["PnpYoyRatio"] = pd.to_numeric(_series_or_none(df, "PNP_YOY_RATIO"), errors="coerce")
-    normalized["TotalShares"] = pd.to_numeric(_series_or_none(df, "TOTAL_SHARES"), errors="coerce")
+    report_year = pd.to_numeric(_series_or_none(df, "nd"), errors="coerce")
+    normalized["ReportDate"] = report_year.map(lambda value: date(int(value), 12, 31) if not pd.isna(value) else None)
+    normalized["PlanNoticeDate"] = None
+    normalized["EquityRecordDate"] = _series_or_none(df, "djr").map(parse_date_value)
+    normalized["ExDividendDate"] = _series_or_none(df, "cqr").map(parse_date_value)
+    normalized["NoticeDate"] = normalized["ExDividendDate"]
+    normalized["AssignProgress"] = "Tencent exrights"
+    normalized["ImplPlanProfile"] = _series_or_none(df, "FHcontent")
+
+    parsed = normalized["ImplPlanProfile"].fillna("").map(parse_tencent_exrights_content)
+    normalized["BonusRatio"] = parsed.map(lambda item: item[0])
+    normalized["TransferRatio"] = parsed.map(lambda item: item[1])
+    content_cash = parsed.map(lambda item: item[2])
+    normalized["PretaxBonusRmb"] = pd.to_numeric(content_cash, errors="coerce")
+    fallback_cash = pd.to_numeric(_series_or_none(df, "fh_sh"), errors="coerce")
+    normalized["PretaxBonusRmb"] = normalized["PretaxBonusRmb"].fillna(fallback_cash)
+    normalized["BonusItRatio"] = normalized[["BonusRatio", "TransferRatio"]].sum(axis=1, min_count=1)
+    normalized["DividendRatio"] = None
+    normalized["BasicEps"] = None
+    normalized["Bvps"] = None
+    normalized["PerCapitalReserve"] = None
+    normalized["PerUnassignProfit"] = None
+    normalized["PnpYoyRatio"] = None
+    normalized["TotalShares"] = None
     normalized = normalized[normalized["SCode"].str.len() == 6]
-    normalized = normalized.dropna(subset=["ReportDate"], how="any")
-    normalized = normalized.sort_values(["SCode", "ReportDate", "NoticeDate"], na_position="last")
+    normalized = normalized.dropna(subset=["ReportDate", "ExDividendDate"], how="any")
+    normalized = normalized.sort_values(["SCode", "ReportDate", "ExDividendDate"], na_position="last")
     return normalized.drop_duplicates(subset=["SCode", "ReportDate", "ExDividendDate", "NoticeDate"], keep="last")
 
 
@@ -568,42 +588,47 @@ def exrights_content_hash(row) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def fetch_exrights_from_eastmoney(symbol: str, retries: int) -> pd.DataFrame:
-    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-    params = {
-        "sortColumns": "REPORT_DATE",
-        "sortTypes": "-1",
-        "pageSize": "500",
-        "pageNumber": "1",
-        "reportName": "RPT_SHAREBONUS_DET",
-        "columns": "ALL",
-        "quoteColumns": "",
-        "source": "WEB",
-        "client": "WEB",
-        "filter": f'(SECURITY_CODE="{normalize_symbol(symbol)}")',
-    }
+def fetch_exrights_from_tencent(symbol: str, retries: int, start_date: str = DEFAULT_START_DATE, end_date: str = DEFAULT_END_DATE) -> pd.DataFrame:
+    from akshare.utils import demjson
+
+    tx_code = tx_symbol(normalize_symbol(symbol))
+    start_year = int(clean_yyyymmdd(start_date)[:4])
+    end_year = int(clean_yyyymmdd(end_date)[:4])
+    url = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
     records: list[dict] = []
-    total_pages = 1
-    page = 1
-    while page <= total_pages:
-        params["pageNumber"] = str(page)
+
+    for year in range(start_year, end_year + 1):
+        params = {
+            "_var": f"kline_day{year}",
+            "param": f"{tx_code},day,{year}-01-01,{year + 1}-12-31,640,",
+            "r": "0.1",
+        }
+        data = None
         for attempt in range(1, retries + 1):
             try:
                 response = requests.get(url, params=params, timeout=20)
                 response.raise_for_status()
-                data = response.json()
-                result = data.get("result") or {}
-                total_pages = int(result.get("pages") or 1)
-                records.extend(result.get("data") or [])
+                data_text = response.text
+                payload = data_text[data_text.find("={") + 1 :] if "={" in data_text else data_text[data_text.find("{") :]
+                data = demjson.decode(payload)
                 break
             except Exception as exc:
                 if attempt == retries:
-                    logging.error("exrights %s fetch failed after %s attempts: %s", symbol, retries, exc)
-                    return pd.DataFrame()
+                    logging.error("exrights %s Tencent fetch failed for %s after %s attempts: %s", symbol, year, retries, exc)
+                    break
                 wait_seconds = min(30, attempt * 3)
-                logging.warning("exrights %s fetch failed on attempt %s; retrying in %s seconds: %s", symbol, attempt, wait_seconds, exc)
+                logging.warning("exrights %s Tencent fetch failed for %s on attempt %s; retrying in %s seconds: %s", symbol, year, attempt, wait_seconds, exc)
                 time.sleep(wait_seconds)
-        page += 1
+        if data is None:
+            continue
+        rows = ((data.get("data") or {}).get(tx_code) or {}).get("day") or []
+        for row in rows:
+            if len(row) <= 6 or not isinstance(row[6], dict) or not row[6]:
+                continue
+            item = dict(row[6])
+            item["SECURITY_CODE"] = normalize_symbol(symbol)
+            item["KDate"] = row[0]
+            records.append(item)
     return normalize_exrights_records(records, symbol=symbol)
 
 
@@ -831,7 +856,7 @@ def crawl_exrights_to_mysql(
             logging.info("Truncated %s before exrights import", EXRIGHTS_TABLE)
 
         def fetch_task(symbol: str) -> tuple[str, pd.DataFrame]:
-            df = fetch_exrights_from_eastmoney(symbol, retries=retries)
+            df = fetch_exrights_from_tencent(symbol, retries=retries, end_date=end_date)
             if sleep_seconds > 0:
                 time.sleep(sleep_seconds)
             return symbol, df

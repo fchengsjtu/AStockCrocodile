@@ -258,7 +258,7 @@ python .\a_share_crawler.py run --mode full --adjust qfq
 
 ## Fetch Ex-rights And Dividends
 
-Dividend, bonus-share, share-transfer, record-date, and ex-dividend/ex-right information is fetched from Eastmoney and written to `exrights`.
+Dividend, bonus-share, share-transfer, record-date, and ex-dividend/ex-right information is extracted from Tencent daily K-line ex-rights fields and written to `exrights`.
 
 ```powershell
 python .\a_share_crawler.py exrights
@@ -267,7 +267,7 @@ python .\a_share_crawler.py exrights
 Available options:
 
 - `--sleep SLEEP`: seconds to pause inside each fetch worker after a request, default `0.05`.
-- `--retries RETRIES`: retry count for Eastmoney requests, default `3`.
+- `--retries RETRIES`: retry count for Tencent requests, default `3`.
 - `--workers WORKERS`: number of concurrent fetch worker threads, default `8`.
 - `--truncate`: truncate `exrights` before importing.
 - `--end-date END_DATE`: end date for K-line refresh when ex-rights rows change, default today.
@@ -275,7 +275,7 @@ Available options:
 - `--no-refresh-klines`: only update `exrights`; do not refresh daily/weekly/monthly K-lines for changed stocks.
 - `--use-env-proxy`: use proxy environment variables.
 
-The program creates `exrights` automatically if it does not exist. Rows are upserted by an internal `SourceKey` built from stock code, report date, ex-dividend/ex-right date, and notice date. A `ContentHash` is stored for each row; when a stock has new or changed ex-rights data, the crawler deletes that stock's daily, weekly, and monthly K-lines, refetches forward-adjusted daily data from `2010-01-01`, and rebuilds weekly/monthly rows for that stock only.
+The program creates `exrights` automatically if it does not exist. Rows are upserted by an internal `SourceKey` built from stock code, report date, ex-dividend/ex-right date, and notice date. Tencent fields such as `FHcontent`, `djr`, `cqr`, and `fh_sh` are normalized into the table columns. A `ContentHash` is stored for each row; when a stock has new or changed ex-rights data, the crawler deletes that stock's daily, weekly, and monthly K-lines, refetches forward-adjusted daily data from `2010-01-01`, and rebuilds weekly/monthly rows for that stock only.
 
 ## Generate Weekly And Monthly K-lines
 
@@ -373,4 +373,4 @@ The crawler writes to:
 - Daily K-lines: `dkandles`, `KType='D'`.
 - Weekly K-lines: `wkandles`, `KType='W'`, generated from `dkandles`.
 - Monthly K-lines: `mkandles`, `KType='M'`, generated from `dkandles`.
-- Ex-rights and dividends: `exrights`, fetched from Eastmoney.
+- Ex-rights and dividends: `exrights`, extracted from Tencent daily K-line ex-rights fields.
