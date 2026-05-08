@@ -90,19 +90,62 @@ class ExRightsTests(unittest.TestCase):
         rows = crawler.rows_for_exrights_insert(df)
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(len(rows[0]), 23)
+        self.assertEqual(len(rows[0]), 24)
         self.assertEqual(rows[0][0], "000001|2025-12-31||2026-03-21")
-        self.assertEqual(rows[0][1], "000001")
-        self.assertIsNone(rows[0][10])
-        self.assertEqual(rows[0][13], 3.6)
-        self.assertIsInstance(rows[0][21], datetime)
+        self.assertEqual(len(rows[0][1]), 64)
+        self.assertEqual(rows[0][2], "000001")
+        self.assertIsNone(rows[0][11])
+        self.assertEqual(rows[0][14], 3.6)
+        self.assertIsInstance(rows[0][22], datetime)
+
+
+    def test_exrights_content_hash_changes_when_material_field_changes(self):
+        base = pd.DataFrame(
+            [
+                {
+                    "SCode": "000001",
+                    "SName": "Ping An Bank",
+                    "ReportDate": date(2025, 12, 31),
+                    "PlanNoticeDate": date(2026, 3, 21),
+                    "EquityRecordDate": None,
+                    "ExDividendDate": None,
+                    "NoticeDate": date(2026, 3, 21),
+                    "AssignProgress": "Plan",
+                    "ImplPlanProfile": "10 pay 3.60",
+                    "BonusItRatio": pd.NA,
+                    "BonusRatio": pd.NA,
+                    "TransferRatio": pd.NA,
+                    "PretaxBonusRmb": 3.6,
+                    "DividendRatio": 0.0316,
+                    "BasicEps": 2.07,
+                    "Bvps": 23.25,
+                    "PerCapitalReserve": 4.15,
+                    "PerUnassignProfit": 13.95,
+                    "PnpYoyRatio": -4.2,
+                    "TotalShares": 19405918198,
+                }
+            ]
+        )
+        changed = base.copy()
+        changed.loc[0, "PretaxBonusRmb"] = 4.0
+
+        base_hash = crawler.rows_for_exrights_insert(base)[0][1]
+        changed_hash = crawler.rows_for_exrights_insert(changed)[0][1]
+
+        self.assertNotEqual(base_hash, changed_hash)
 
     def test_parser_accepts_exrights_command(self):
-        args = crawler.build_parser().parse_args(["exrights", "--workers", "4", "--truncate"])
+        args = crawler.build_parser().parse_args(["exrights", "--workers", "4", "--truncate", "--no-refresh-klines"])
 
         self.assertEqual(args.command, "exrights")
         self.assertEqual(args.workers, 4)
         self.assertTrue(args.truncate)
+        self.assertTrue(args.no_refresh_klines)
+
+    def test_run_parser_defaults_to_qfq_only(self):
+        args = crawler.build_parser().parse_args(["run"])
+
+        self.assertEqual(args.adjust, "qfq")
 
 
 if __name__ == "__main__":

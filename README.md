@@ -1,6 +1,6 @@
 # StockInfoCrawler
 
-A-share daily K-line crawler. The current version fetches daily K-line data from Tencent via AkShare and writes directly to the cloud MySQL database `emstocks`.
+A-share daily K-line crawler. The current version fetches forward-adjusted (`qfq`) daily K-line data from Tencent via AkShare and writes directly to the cloud MySQL database `emstocks`.
 
 It no longer writes CSV files during crawling, and only `daily` K-line import is supported.
 
@@ -84,7 +84,7 @@ Available options:
 - `--mode {full,incremental}`: default `incremental`; both modes continue from `stockinfo.LatestUpdateKandle + 1 day`. `full` is intended for resuming unfinished all-stock runs without clearing existing daily data.
 - `--start-date START_DATE`: start date for full mode; earliest effective date is `20100101`. Accepts `YYYYMMDD` or `YYYY-MM-DD`.
 - `--end-date END_DATE`: end date, default is today's date, format `YYYYMMDD` or `YYYY-MM-DD`.
-- `--adjust {,qfq,hfq}`: adjustment mode. Empty value means no adjustment; `qfq` means forward-adjusted; `hfq` means backward-adjusted.
+- `--adjust {qfq}`: adjustment mode. All K-line data is forward-adjusted; `qfq` is the only supported value.
 - `--sleep SLEEP`: seconds to pause inside each fetch worker after a request, default `0.05`.
 - `--retries RETRIES`: retry count for Tencent requests, default `3`.
 - `--workers WORKERS`: number of concurrent fetch worker threads, default `8`. Database writes remain serialized in the main thread.
@@ -115,9 +115,12 @@ Available options:
 - `--retries RETRIES`: retry count for Eastmoney requests, default `3`.
 - `--workers WORKERS`: number of concurrent fetch worker threads, default `8`.
 - `--truncate`: truncate `exrights` before importing.
+- `--end-date END_DATE`: end date for K-line refresh when ex-rights rows change, default today.
+- `--ktype KTYPE`: value written to refreshed daily rows, default `D`.
+- `--no-refresh-klines`: only update `exrights`; do not refresh daily/weekly/monthly K-lines for changed stocks.
 - `--use-env-proxy`: use proxy environment variables.
 
-The program creates `exrights` automatically if it does not exist. Rows are upserted by an internal `SourceKey` built from stock code, report date, ex-dividend/ex-right date, and notice date.
+The program creates `exrights` automatically if it does not exist. Rows are upserted by an internal `SourceKey` built from stock code, report date, ex-dividend/ex-right date, and notice date. A `ContentHash` is stored for each row; when a stock has new or changed ex-rights data, the crawler deletes that stock's daily, weekly, and monthly K-lines, refetches forward-adjusted daily data from `2010-01-01`, and rebuilds weekly/monthly rows for that stock only.
 
 ## Generate Weekly And Monthly K-lines
 
@@ -139,7 +142,7 @@ Generation targets:
 The current implementation rebuilds the selected target table before inserting regenerated rows.
 ## Schedule Mode
 
-Schedule mode registers three jobs in Asia/Shanghai: daily import at 15:05, weekly generation every Friday at 17:00, and monthly generation at 18:00 on the month last trading day check.
+Schedule mode registers four jobs in Asia/Shanghai: daily import at 15:05, ex-rights change check and qfq K-line refresh at 16:00, weekly generation every Friday at 17:00, and monthly generation at 18:00 on the month last trading day check.
 
 ```powershell
 python .\a_share_crawler.py schedule
@@ -155,7 +158,7 @@ Available schedule options:
 
 - `--mode {full,incremental}`: default `incremental`.
 - `--start-date START_DATE`: start date for full mode, earliest effective date is `20100101`.
-- `--adjust {,qfq,hfq}`: adjustment mode.
+- `--adjust {qfq}`: adjustment mode; `qfq` only.
 - `--sleep SLEEP`: seconds to pause inside each fetch worker after a request, default `0.05`.
 - `--retries RETRIES`: retry count, default `3`.
 - `--workers WORKERS`: number of concurrent fetch worker threads, default `8`.
@@ -204,6 +207,7 @@ The crawler writes to:
 
 ## Notes
 
+- All K-line data is based on forward-adjusted (`qfq`) prices.
 - Full mode does not truncate `dkandles`; it skips stocks whose `LatestUpdateKandle` is already at or after the requested end date.
 - Incremental mode uses `stockinfo.LatestUpdateKandle + 1 day` as each stock's start date; full mode now uses the same missing-date continuation logic.
 - Incremental mode reads the latest 54 historical closes from MySQL to keep MA5/MA8/MA13/MA34/MA55 continuous.

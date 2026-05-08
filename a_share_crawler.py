@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import os
@@ -28,7 +29,7 @@ GENERATE_PERIODS = {"weekly", "monthly", "all"}
 MODES = {"full", "incremental"}
 DEFAULT_START_DATE = "20100101"
 DEFAULT_END_DATE = date.today().strftime("%Y%m%d")
-DEFAULT_ADJUST = ""
+DEFAULT_ADJUST = "qfq"
 DEFAULT_KTYPE = "D"
 BATCH_SIZE = 5000
 EXRIGHTS_TABLE = "exrights"
@@ -236,6 +237,7 @@ def upsert_stock_info(conn: pymysql.connections.Connection, stocks: pd.DataFrame
         INSERT INTO stockinfo (SCode, SName, IsIndex)
         VALUES (%s, %s, 0)
         ON DUPLICATE KEY UPDATE
+            ContentHash = VALUES(ContentHash),
             SName = VALUES(SName),
             IsIndex = COALESCE(IsIndex, VALUES(IsIndex))
     """
@@ -450,6 +452,7 @@ def ensure_exrights_table(conn: pymysql.connections.Connection) -> None:
         CREATE TABLE IF NOT EXISTS {EXRIGHTS_TABLE} (
             Id BIGINT NOT NULL AUTO_INCREMENT,
             SourceKey VARCHAR(96) NOT NULL,
+            ContentHash CHAR(64) NOT NULL,
             SCode VARCHAR(10) NOT NULL,
             SName VARCHAR(64) NULL,
             ReportDate DATE NULL,
@@ -480,6 +483,9 @@ def ensure_exrights_table(conn: pymysql.connections.Connection) -> None:
     """
     with conn.cursor() as cur:
         cur.execute(sql)
+        cur.execute(f"SHOW COLUMNS FROM {EXRIGHTS_TABLE} LIKE 'ContentHash'")
+        if cur.fetchone() is None:
+            cur.execute(f"ALTER TABLE {EXRIGHTS_TABLE} ADD COLUMN ContentHash CHAR(64) NOT NULL DEFAULT '' AFTER SourceKey")
     conn.commit()
 
 
@@ -535,6 +541,33 @@ def exrights_source_key(row) -> str:
     return "|".join("" if pd.isna(part) else str(part) for part in parts)
 
 
+def exrights_content_hash(row) -> str:
+    fields = (
+        row.SCode,
+        row.SName,
+        row.ReportDate,
+        row.PlanNoticeDate,
+        row.EquityRecordDate,
+        row.ExDividendDate,
+        row.NoticeDate,
+        row.AssignProgress,
+        row.ImplPlanProfile,
+        row.BonusItRatio,
+        row.BonusRatio,
+        row.TransferRatio,
+        row.PretaxBonusRmb,
+        row.DividendRatio,
+        row.BasicEps,
+        row.Bvps,
+        row.PerCapitalReserve,
+        row.PerUnassignProfit,
+        row.PnpYoyRatio,
+        row.TotalShares,
+    )
+    text = "|".join("" if pd.isna(field) else str(field) for field in fields)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def fetch_exrights_from_eastmoney(symbol: str, retries: int) -> pd.DataFrame:
     url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
     params = {
@@ -581,6 +614,7 @@ def rows_for_exrights_insert(df: pd.DataFrame) -> list[tuple]:
         rows.append(
             (
                 exrights_source_key(row),
+                exrights_content_hash(row),
                 row.SCode,
                 none_if_nan(row.SName),
                 none_if_nan(row.ReportDate),
@@ -608,18 +642,45 @@ def rows_for_exrights_insert(df: pd.DataFrame) -> list[tuple]:
     return rows
 
 
-def insert_exrights_rows(conn: pymysql.connections.Connection, rows: list[tuple]) -> int:
+def load_exrights_hashes(conn: pymysql.connections.Connection, source_keys: list[str]) -> dict[str, str]:
+    if not source_keys:
+        return {}
+    result: dict[str, str] = {}
+    with conn.cursor() as cur:
+        for batch in iter_batches([(key,) for key in source_keys], BATCH_SIZE):
+            placeholders = ", ".join(["%s"] * len(batch))
+            cur.execute(
+                f"SELECT SourceKey, ContentHash FROM {EXRIGHTS_TABLE} WHERE SourceKey IN ({placeholders})",
+                [item[0] for item in batch],
+            )
+            result.update({source_key: content_hash for source_key, content_hash in cur.fetchall()})
+    return result
+
+
+def changed_symbols_from_exrights_rows(conn: pymysql.connections.Connection, rows: list[tuple]) -> set[str]:
+    existing_hashes = load_exrights_hashes(conn, [row[0] for row in rows])
+    changed = set()
+    for row in rows:
+        source_key, content_hash, symbol = row[0], row[1], row[2]
+        if existing_hashes.get(source_key) != content_hash:
+            changed.add(symbol)
+    return changed
+
+
+def insert_exrights_rows(conn: pymysql.connections.Connection, rows: list[tuple]) -> tuple[int, set[str]]:
     if not rows:
-        return 0
+        return 0, set()
+    changed_symbols = changed_symbols_from_exrights_rows(conn, rows)
     insert_sql = f"""
         INSERT INTO {EXRIGHTS_TABLE}
-            (SourceKey, SCode, SName, ReportDate, PlanNoticeDate, EquityRecordDate, ExDividendDate, NoticeDate,
+            (SourceKey, ContentHash, SCode, SName, ReportDate, PlanNoticeDate, EquityRecordDate, ExDividendDate, NoticeDate,
              AssignProgress, ImplPlanProfile, BonusItRatio, BonusRatio, TransferRatio, PretaxBonusRmb,
              DividendRatio, BasicEps, Bvps, PerCapitalReserve, PerUnassignProfit, PnpYoyRatio,
              TotalShares, CreatedOn, UpdatedOn)
         VALUES
-            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
+            ContentHash = VALUES(ContentHash),
             SName = VALUES(SName),
             PlanNoticeDate = VALUES(PlanNoticeDate),
             EquityRecordDate = VALUES(EquityRecordDate),
@@ -643,10 +704,115 @@ def insert_exrights_rows(conn: pymysql.connections.Connection, rows: list[tuple]
         for batch in iter_batches(rows, BATCH_SIZE):
             cur.executemany(insert_sql, batch)
             inserted += len(batch)
-    return inserted
+    return inserted, changed_symbols
 
 
-def crawl_exrights_to_mysql(workers: int, sleep_seconds: float, retries: int, truncate: bool = False) -> None:
+
+def delete_symbol_rows(conn: pymysql.connections.Connection, table: str, symbols: list[str], ktype: str | None = None) -> None:
+    if table not in {"dkandles", "wkandles", "mkandles"}:
+        raise ValueError(f"unsupported K-line table: {table}")
+    if not symbols:
+        return
+    with conn.cursor() as cur:
+        for batch in iter_batches([(symbol,) for symbol in symbols], BATCH_SIZE):
+            placeholders = ", ".join(["%s"] * len(batch))
+            params = [item[0] for item in batch]
+            if ktype is None:
+                cur.execute(f"DELETE FROM {table} WHERE SCode IN ({placeholders})", params)
+            else:
+                cur.execute(f"DELETE FROM {table} WHERE KType = %s AND SCode IN ({placeholders})", [ktype, *params])
+
+
+def reset_stock_latest_for_symbols(conn: pymysql.connections.Connection, symbols: list[str]) -> None:
+    if not symbols:
+        return
+    with conn.cursor() as cur:
+        for batch in iter_batches([(symbol,) for symbol in symbols], BATCH_SIZE):
+            placeholders = ", ".join(["%s"] * len(batch))
+            cur.execute(
+                f"UPDATE stockinfo SET LatestUpdateKandle = NULL WHERE SCode IN ({placeholders})",
+                [item[0] for item in batch],
+            )
+
+
+def refresh_qfq_klines_for_symbols(
+    symbols: Iterable[str],
+    end_date: str,
+    sleep_seconds: float,
+    retries: int,
+    ktype: str,
+    workers: int,
+) -> None:
+    symbols = sorted({normalize_symbol(symbol) for symbol in symbols})
+    if not symbols:
+        return
+    end_date = clean_yyyymmdd(end_date)
+    logging.info("Start qfq K-line refresh after exrights changes; stocks=%s end=%s", len(symbols), end_date)
+
+    with mysql_connect() as conn:
+        delete_symbol_rows(conn, "dkandles", symbols, ktype)
+        delete_symbol_rows(conn, "wkandles", symbols, "W")
+        delete_symbol_rows(conn, "mkandles", symbols, "M")
+        reset_stock_latest_for_symbols(conn, symbols)
+        conn.commit()
+
+        success_count = 0
+        fail_count = 0
+        total_rows = 0
+
+        def fetch_task(symbol: str) -> tuple[str, pd.DataFrame]:
+            cfg = CrawlConfig(
+                start_date=DEFAULT_START_DATE,
+                end_date=end_date,
+                adjust="qfq",
+                sleep_seconds=sleep_seconds,
+                retries=retries,
+                ktype=ktype,
+            )
+            df = fetch_daily_from_tencent(symbol, cfg)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+            return symbol, df
+
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+            future_to_symbol = {executor.submit(fetch_task, symbol): symbol for symbol in symbols}
+            for future in tqdm(as_completed(future_to_symbol), total=len(future_to_symbol), desc="refresh qfq daily"):
+                symbol = future_to_symbol[future]
+                try:
+                    symbol, df = future.result()
+                except Exception:
+                    fail_count += 1
+                    logging.exception("refresh qfq daily %s fetch task failed", symbol)
+                    continue
+                if df.empty:
+                    fail_count += 1
+                    continue
+                df = add_moving_averages(df)
+                try:
+                    inserted = insert_rows(conn, rows_for_insert(df))
+                    latest_k_time = df["KTime"].max().to_pydatetime()
+                    update_stock_latest(conn, symbol, latest_k_time)
+                    conn.commit()
+                    total_rows += inserted
+                    success_count += 1
+                except Exception:
+                    conn.rollback()
+                    fail_count += 1
+                    logging.exception("refresh qfq daily %s database write failed", symbol)
+
+    logging.info("Finished qfq daily refresh: success=%s failed=%s rows=%s", success_count, fail_count, total_rows)
+    generate_derived_kline("all", symbols=symbols)
+
+
+def crawl_exrights_to_mysql(
+    workers: int,
+    sleep_seconds: float,
+    retries: int,
+    truncate: bool = False,
+    refresh_klines: bool = True,
+    end_date: str = DEFAULT_END_DATE,
+    ktype: str = DEFAULT_KTYPE,
+) -> None:
     setup_logging()
     stocks = get_stock_list()
     logging.info("Start exrights import into MySQL; stocks=%s workers=%s", len(stocks), workers)
@@ -654,6 +820,7 @@ def crawl_exrights_to_mysql(workers: int, sleep_seconds: float, retries: int, tr
     empty_count = 0
     fail_count = 0
     total_rows = 0
+    changed_symbols: set[str] = set()
     with mysql_connect() as conn:
         upsert_stock_info(conn, stocks)
         ensure_exrights_table(conn)
@@ -684,15 +851,25 @@ def crawl_exrights_to_mysql(workers: int, sleep_seconds: float, retries: int, tr
                     empty_count += 1
                     continue
                 try:
-                    inserted = insert_exrights_rows(conn, rows_for_exrights_insert(df))
+                    inserted, row_changed_symbols = insert_exrights_rows(conn, rows_for_exrights_insert(df))
                     conn.commit()
+                    changed_symbols.update(row_changed_symbols)
                     total_rows += inserted
                     success_count += 1
                 except Exception:
                     conn.rollback()
                     fail_count += 1
                     logging.exception("exrights %s database write failed", symbol)
-    logging.info("Finished exrights import: success=%s empty=%s failed=%s rows=%s", success_count, empty_count, fail_count, total_rows)
+    logging.info("Finished exrights import: success=%s empty=%s failed=%s rows=%s changed_stocks=%s", success_count, empty_count, fail_count, total_rows, len(changed_symbols))
+    if refresh_klines and changed_symbols:
+        refresh_qfq_klines_for_symbols(
+            symbols=changed_symbols,
+            end_date=end_date,
+            sleep_seconds=sleep_seconds,
+            retries=retries,
+            ktype=ktype,
+            workers=workers,
+        )
 
 
 def crawl_daily_to_mysql(
@@ -909,7 +1086,7 @@ def load_daily_for_symbol(conn: pymysql.connections.Connection, symbol: str) -> 
     return pd.DataFrame(rows, columns=["SCode", "KTime", "Amount", "Volume", "Open", "Close", "High", "Low"])
 
 
-def generate_derived_kline(period: str) -> None:
+def generate_derived_kline(period: str, symbols: Iterable[str] | None = None) -> None:
     setup_logging()
     periods = ["weekly", "monthly"] if period == "all" else [period]
     for item in periods:
@@ -917,9 +1094,12 @@ def generate_derived_kline(period: str) -> None:
             raise ValueError(f"period must be one of {sorted(GENERATE_PERIODS)}")
 
     with mysql_connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT SCode FROM dkandles WHERE KType = 'D' ORDER BY SCode")
-            symbols = [row[0] for row in cur.fetchall()]
+        if symbols is None:
+            with conn.cursor() as cur:
+                cur.execute("SELECT DISTINCT SCode FROM dkandles WHERE KType = 'D' ORDER BY SCode")
+                target_symbols = [row[0] for row in cur.fetchall()]
+        else:
+            target_symbols = sorted({normalize_symbol(symbol) for symbol in symbols})
 
         for item in periods:
             cfg = DERIVED_KLINE_CONFIG[item]
@@ -927,12 +1107,15 @@ def generate_derived_kline(period: str) -> None:
             total_rows = 0
             success_count = 0
             fail_count = 0
-            logging.info("Start generating %s K-lines into %s from dkandles; stocks=%s", item, table, len(symbols))
-            with conn.cursor() as cur:
-                cur.execute(f"TRUNCATE TABLE {table}")
+            logging.info("Start generating %s K-lines into %s from dkandles; stocks=%s", item, table, len(target_symbols))
+            if symbols is None:
+                with conn.cursor() as cur:
+                    cur.execute(f"TRUNCATE TABLE {table}")
+            else:
+                delete_symbol_rows(conn, table, target_symbols, cfg["ktype"])
             conn.commit()
 
-            for symbol in tqdm(symbols, total=len(symbols), desc=f"generate {item}"):
+            for symbol in tqdm(target_symbols, total=len(target_symbols), desc=f"generate {item}"):
                 try:
                     daily_df = load_daily_for_symbol(conn, symbol)
                     derived_df = aggregate_daily_to_period(daily_df, item)
@@ -991,6 +1174,18 @@ def scheduled_crawl(mode: str, start_date: str, adjust: str, sleep_seconds: floa
     )
 
 
+def scheduled_exrights_refresh(sleep_seconds: float, retries: int, ktype: str, workers: int) -> None:
+    crawl_exrights_to_mysql(
+        workers=workers,
+        sleep_seconds=sleep_seconds,
+        retries=retries,
+        truncate=False,
+        refresh_klines=True,
+        end_date=date.today().strftime("%Y%m%d"),
+        ktype=ktype,
+    )
+
+
 def run_scheduler(mode: str, start_date: str, adjust: str, sleep_seconds: float, retries: int, ktype: str, workers: int) -> None:
     setup_logging()
     scheduler = BlockingScheduler(timezone="Asia/Shanghai")
@@ -1001,6 +1196,15 @@ def run_scheduler(mode: str, start_date: str, adjust: str, sleep_seconds: float,
         minute=5,
         args=[mode, start_date, adjust, sleep_seconds, retries, ktype, workers],
         id="a_share_daily_mysql_after_close",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        scheduled_exrights_refresh,
+        "cron",
+        hour=16,
+        minute=0,
+        args=[sleep_seconds, retries, ktype, workers],
+        id="a_share_exrights_qfq_refresh",
         replace_existing=True,
     )
     scheduler.add_job(
@@ -1020,7 +1224,7 @@ def run_scheduler(mode: str, start_date: str, adjust: str, sleep_seconds: float,
         id="a_share_monthly_generation_last_trade_day",
         replace_existing=True,
     )
-    logging.info("Scheduler started: daily 15:05, weekly Friday 17:00, monthly last trading day 18:00; daily mode=%s", mode)
+    logging.info("Scheduler started: daily 15:05, exrights/qfq refresh 16:00, weekly Friday 17:00, monthly last trading day 18:00; daily mode=%s", mode)
     scheduler.start()
 
 
@@ -1033,7 +1237,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--mode", choices=sorted(MODES), default="incremental", help="full resumes unfinished stocks without clearing; incremental also fetches after stockinfo.LatestUpdateKandle")
     run_parser.add_argument("--start-date", default=DEFAULT_START_DATE, help="Start date for full mode; earliest allowed is 20100101")
     run_parser.add_argument("--end-date", default=DEFAULT_END_DATE, help="End date, format YYYYMMDD")
-    run_parser.add_argument("--adjust", default=DEFAULT_ADJUST, choices=["", "qfq", "hfq"])
+    run_parser.add_argument("--adjust", default=DEFAULT_ADJUST, choices=["qfq"], help="K-line adjustment mode; qfq only")
     run_parser.add_argument("--sleep", type=float, default=0.05)
     run_parser.add_argument("--retries", type=int, default=3)
     run_parser.add_argument("--workers", type=int, default=8, help="Number of concurrent fetch worker threads")
@@ -1043,7 +1247,7 @@ def build_parser() -> argparse.ArgumentParser:
     schedule_parser = subparsers.add_parser("schedule", help="Run daily MySQL import on a schedule")
     schedule_parser.add_argument("--mode", choices=sorted(MODES), default="incremental")
     schedule_parser.add_argument("--start-date", default=DEFAULT_START_DATE)
-    schedule_parser.add_argument("--adjust", default=DEFAULT_ADJUST, choices=["", "qfq", "hfq"])
+    schedule_parser.add_argument("--adjust", default=DEFAULT_ADJUST, choices=["qfq"], help="K-line adjustment mode; qfq only")
     schedule_parser.add_argument("--sleep", type=float, default=0.05)
     schedule_parser.add_argument("--retries", type=int, default=3)
     schedule_parser.add_argument("--workers", type=int, default=8, help="Number of concurrent fetch worker threads")
@@ -1058,6 +1262,9 @@ def build_parser() -> argparse.ArgumentParser:
     exrights_parser.add_argument("--retries", type=int, default=3)
     exrights_parser.add_argument("--workers", type=int, default=8, help="Number of concurrent fetch worker threads")
     exrights_parser.add_argument("--truncate", action="store_true", help="Truncate exrights before importing")
+    exrights_parser.add_argument("--end-date", default=DEFAULT_END_DATE, help="End date for qfq K-line refresh after exrights changes, format YYYYMMDD")
+    exrights_parser.add_argument("--ktype", default=os.environ.get("DKANDLES_KTYPE", DEFAULT_KTYPE))
+    exrights_parser.add_argument("--no-refresh-klines", action="store_true", help="Do not refresh qfq daily/weekly/monthly K-lines for stocks whose exrights rows changed")
     exrights_parser.add_argument("--use-env-proxy", action="store_true", help="Use HTTP_PROXY/HTTPS_PROXY/ALL_PROXY from the environment")
     return parser
 
@@ -1088,6 +1295,9 @@ def main(argv: Iterable[str] | None = None) -> None:
             sleep_seconds=args.sleep,
             retries=args.retries,
             truncate=args.truncate,
+            refresh_klines=not args.no_refresh_klines,
+            end_date=args.end_date,
+            ktype=args.ktype,
         )
     elif args.command == "schedule":
         run_scheduler(
