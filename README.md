@@ -1,0 +1,196 @@
+# StockInfoCrawler
+
+A-share daily K-line crawler. The current version fetches daily K-line data from Tencent via AkShare and writes directly to the cloud MySQL database `emstocks`.
+
+It no longer writes CSV files during crawling, and only `daily` K-line import is supported.
+
+## Environment
+
+Create `env.txt` in the project root. The program reads this file automatically before connecting to MySQL.
+
+```powershell
+$env:MYSQL_HOST='your-mysql-host'
+$env:MYSQL_USER='your-mysql-user'
+$env:MYSQL_PASSWORD='your-mysql-password'
+$env:MYSQL_DATABASE='your-database'
+```
+
+Optional values:
+
+```powershell
+$env:MYSQL_PORT='3306'
+$env:DKANDLES_KTYPE='D'
+```
+
+`env.txt` is ignored by git because it contains credentials.
+
+## Install
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+pip install PyMySQL
+```
+
+If PowerShell blocks activation:
+
+```powershell
+powershell -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+## Full Resume
+
+Full mode does not clear `dkandles`. It refreshes stock basic info, checks each stock's `stockinfo.LatestUpdateKandle`, skips stocks that are already up to date, and continues unfinished stocks from the next missing date. Stocks without `LatestUpdateKandle` start from `2010-01-01`.
+
+```powershell
+python .\a_share_crawler.py run --mode full --period daily
+```
+
+Equivalent minimal command, because `--period daily` is the only supported period:
+
+```powershell
+python .\a_share_crawler.py run --mode full
+```
+
+## Incremental Update
+
+Incremental mode is the default. It refreshes stock basic info, reads each stock's `stockinfo.LatestUpdateKandle`, and only fetches dates after that value.
+
+```powershell
+python .\a_share_crawler.py run
+```
+
+Equivalent explicit command:
+
+```powershell
+python .\a_share_crawler.py run --mode incremental --period daily
+```
+
+After each stock is written successfully, `stockinfo.LatestUpdateKandle` is updated to that stock's newest imported daily K-line time, e.g. `2026-05-06 15:00:00`.
+
+## Run Parameters
+
+### `run`
+
+```powershell
+python .\a_share_crawler.py run [options]
+```
+
+Available options:
+
+- `--period {daily}`: only `daily` is supported.
+- `--mode {full,incremental}`: default `incremental`; both modes continue from `stockinfo.LatestUpdateKandle + 1 day`. `full` is intended for resuming unfinished all-stock runs without clearing existing daily data.
+- `--start-date START_DATE`: start date for full mode; earliest effective date is `20100101`. Accepts `YYYYMMDD` or `YYYY-MM-DD`.
+- `--end-date END_DATE`: end date, default is today's date, format `YYYYMMDD` or `YYYY-MM-DD`.
+- `--adjust {,qfq,hfq}`: adjustment mode. Empty value means no adjustment; `qfq` means forward-adjusted; `hfq` means backward-adjusted.
+- `--sleep SLEEP`: seconds to pause inside each fetch worker after a request, default `0.05`.
+- `--retries RETRIES`: retry count for Tencent requests, default `3`.
+- `--workers WORKERS`: number of concurrent fetch worker threads, default `8`. Database writes remain serialized in the main thread.
+- `--ktype KTYPE`: value written to `dkandles.KType`, default `D` or `DKANDLES_KTYPE` from environment.
+- `--use-env-proxy`: use proxy environment variables instead of forcing direct requests.
+
+Examples:
+
+```powershell
+python .\a_share_crawler.py run --mode full --start-date 20100101 --end-date 20260506 --ktype D
+python .\a_share_crawler.py run --mode incremental --sleep 0.1 --retries 5 --workers 12
+python .\a_share_crawler.py run --mode full --adjust qfq
+```
+
+
+## Generate Weekly And Monthly K-lines
+
+Weekly and monthly K-lines are generated from existing daily rows in `dkandles`; no market API is called for this step.
+
+Manual generation:
+
+```powershell
+python .\a_share_crawler.py generate --period weekly
+python .\a_share_crawler.py generate --period monthly
+python .\a_share_crawler.py generate --period all
+```
+
+Generation targets:
+
+- Weekly K-lines: `wkandles`, `KType='W'`, `KTime` is Friday `17:00:00` for the week.
+- Monthly K-lines: `mkandles`, `KType='M'`, `KTime` is the month's last actual trading day at `18:00:00`.
+
+The current implementation rebuilds the selected target table before inserting regenerated rows.
+## Schedule Mode
+
+Schedule mode registers three jobs in Asia/Shanghai: daily import at 15:05, weekly generation every Friday at 17:00, and monthly generation at 18:00 on the month last trading day check.
+
+```powershell
+python .\a_share_crawler.py schedule
+```
+
+Default schedule mode is incremental. To schedule full resume runs:
+
+```powershell
+python .\a_share_crawler.py schedule --mode full
+```
+
+Available schedule options:
+
+- `--mode {full,incremental}`: default `incremental`.
+- `--start-date START_DATE`: start date for full mode, earliest effective date is `20100101`.
+- `--adjust {,qfq,hfq}`: adjustment mode.
+- `--sleep SLEEP`: seconds to pause inside each fetch worker after a request, default `0.05`.
+- `--retries RETRIES`: retry count, default `3`.
+- `--workers WORKERS`: number of concurrent fetch worker threads, default `8`.
+- `--ktype KTYPE`: value written to `dkandles.KType`, default `D`.
+- `--use-env-proxy`: use proxy environment variables.
+
+PowerShell helper:
+
+```powershell
+.\run_scheduler.ps1
+```
+
+## Database Writes
+
+The crawler writes to:
+
+- `dkandles`: daily K-line rows.
+- `stockinfo`: stock basic info and `LatestUpdateKandle`.
+
+`dkandles` fields written by the crawler:
+
+- `SCode`
+- `KType`
+- `KTime` (`15:00:00` on the trading day)
+- `Amount`
+- `Volume`
+- `MA5`
+- `MA8`
+- `MA13`
+- `Open`
+- `Close`
+- `High`
+- `Low`
+- `CreatedOn`
+- `UpdatedOn`
+- `MA55`
+- `MA34`
+
+`stockinfo` fields updated by the crawler:
+
+- `SCode`
+- `SName`
+- `IsIndex`
+- `LatestUpdateKandle` (latest imported daily K-line time)
+
+## Notes
+
+- Full mode does not truncate `dkandles`; it skips stocks whose `LatestUpdateKandle` is already at or after the requested end date.
+- Incremental mode uses `stockinfo.LatestUpdateKandle + 1 day` as each stock's start date; full mode now uses the same missing-date continuation logic.
+- Incremental mode reads the latest 54 historical closes from MySQL to keep MA5/MA8/MA13/MA34/MA55 continuous.
+- Fetching uses a thread pool controlled by `--workers`; MySQL insert/update work is performed in the main thread to keep transactions stable.
+- Requests are direct by default; proxy environment variables are ignored unless `--use-env-proxy` is passed.
+## Table Mapping
+
+- Daily K-lines: `dkandles`, `KType='D'`.
+- Weekly K-lines: `wkandles`, `KType='W'`, generated from `dkandles`.
+- Monthly K-lines: `mkandles`, `KType='M'`, generated from `dkandles`.

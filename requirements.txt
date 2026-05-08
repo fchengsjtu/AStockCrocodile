@@ -1,0 +1,5 @@
+akshare>=1.17.0
+APScheduler>=3.10.4
+pandas>=2.2.0
+tqdm>=4.66.0
+PyMySQL>=1.1.0
