@@ -18,6 +18,7 @@ if LOCAL_DEPS.exists():
 import akshare as ak
 import pandas as pd
 import pymysql
+import requests
 import requests.sessions
 from apscheduler.schedulers.blocking import BlockingScheduler
 from tqdm import tqdm
@@ -30,6 +31,7 @@ DEFAULT_END_DATE = date.today().strftime("%Y%m%d")
 DEFAULT_ADJUST = ""
 DEFAULT_KTYPE = "D"
 BATCH_SIZE = 5000
+EXRIGHTS_TABLE = "exrights"
 MA_WINDOWS = (5, 8, 13, 34, 55)
 PROJECT_ROOT = Path(__file__).resolve().parent
 LOG_DIR = PROJECT_ROOT / "logs"
@@ -442,6 +444,257 @@ def insert_rows(conn: pymysql.connections.Connection, rows: list[tuple]) -> int:
     return inserted
 
 
+
+def ensure_exrights_table(conn: pymysql.connections.Connection) -> None:
+    sql = f"""
+        CREATE TABLE IF NOT EXISTS {EXRIGHTS_TABLE} (
+            Id BIGINT NOT NULL AUTO_INCREMENT,
+            SourceKey VARCHAR(96) NOT NULL,
+            SCode VARCHAR(10) NOT NULL,
+            SName VARCHAR(64) NULL,
+            ReportDate DATE NULL,
+            PlanNoticeDate DATE NULL,
+            EquityRecordDate DATE NULL,
+            ExDividendDate DATE NULL,
+            NoticeDate DATE NULL,
+            AssignProgress VARCHAR(64) NULL,
+            ImplPlanProfile VARCHAR(255) NULL,
+            BonusItRatio DECIMAL(18,6) NULL,
+            BonusRatio DECIMAL(18,6) NULL,
+            TransferRatio DECIMAL(18,6) NULL,
+            PretaxBonusRmb DECIMAL(18,6) NULL,
+            DividendRatio DECIMAL(18,6) NULL,
+            BasicEps DECIMAL(18,6) NULL,
+            Bvps DECIMAL(18,6) NULL,
+            PerCapitalReserve DECIMAL(18,6) NULL,
+            PerUnassignProfit DECIMAL(18,6) NULL,
+            PnpYoyRatio DECIMAL(18,6) NULL,
+            TotalShares DECIMAL(24,2) NULL,
+            CreatedOn DATETIME NOT NULL,
+            UpdatedOn DATETIME NOT NULL,
+            PRIMARY KEY (Id),
+            UNIQUE KEY ux_exrights_source_key (SourceKey),
+            KEY idx_exrights_symbol (SCode),
+            KEY idx_exrights_ex_dividend_date (ExDividendDate)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql)
+    conn.commit()
+
+
+def parse_date_value(value) -> date | None:
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return None
+    return parsed.date()
+
+
+def _series_or_none(df: pd.DataFrame, column: str, default=None):
+    if column in df.columns:
+        return df[column]
+    return pd.Series([default] * len(df), index=df.index)
+
+
+def normalize_exrights_records(records: list[dict], symbol: str | None = None) -> pd.DataFrame:
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records)
+    normalized = pd.DataFrame(index=df.index)
+    normalized["SCode"] = _series_or_none(df, "SECURITY_CODE", symbol or "").astype(str).map(normalize_symbol)
+    if symbol is not None:
+        normalized["SCode"] = normalized["SCode"].replace("000000", normalize_symbol(symbol))
+    normalized["SName"] = _series_or_none(df, "SECURITY_NAME_ABBR")
+    normalized["ReportDate"] = _series_or_none(df, "REPORT_DATE").map(parse_date_value)
+    normalized["PlanNoticeDate"] = _series_or_none(df, "PLAN_NOTICE_DATE").map(parse_date_value)
+    normalized["EquityRecordDate"] = _series_or_none(df, "EQUITY_RECORD_DATE").map(parse_date_value)
+    normalized["ExDividendDate"] = _series_or_none(df, "EX_DIVIDEND_DATE").map(parse_date_value)
+    notice_source = _series_or_none(df, "NOTICE_DATE") if "NOTICE_DATE" in df.columns else _series_or_none(df, "PUBLISH_DATE")
+    normalized["NoticeDate"] = notice_source.map(parse_date_value)
+    normalized["AssignProgress"] = _series_or_none(df, "ASSIGN_PROGRESS")
+    normalized["ImplPlanProfile"] = _series_or_none(df, "IMPL_PLAN_PROFILE")
+    normalized["BonusItRatio"] = pd.to_numeric(_series_or_none(df, "BONUS_IT_RATIO"), errors="coerce")
+    normalized["BonusRatio"] = pd.to_numeric(_series_or_none(df, "BONUS_RATIO"), errors="coerce")
+    normalized["TransferRatio"] = pd.to_numeric(_series_or_none(df, "IT_RATIO"), errors="coerce")
+    normalized["PretaxBonusRmb"] = pd.to_numeric(_series_or_none(df, "PRETAX_BONUS_RMB"), errors="coerce")
+    normalized["DividendRatio"] = pd.to_numeric(_series_or_none(df, "DIVIDENT_RATIO"), errors="coerce")
+    normalized["BasicEps"] = pd.to_numeric(_series_or_none(df, "BASIC_EPS"), errors="coerce")
+    normalized["Bvps"] = pd.to_numeric(_series_or_none(df, "BVPS"), errors="coerce")
+    normalized["PerCapitalReserve"] = pd.to_numeric(_series_or_none(df, "PER_CAPITAL_RESERVE"), errors="coerce")
+    normalized["PerUnassignProfit"] = pd.to_numeric(_series_or_none(df, "PER_UNASSIGN_PROFIT"), errors="coerce")
+    normalized["PnpYoyRatio"] = pd.to_numeric(_series_or_none(df, "PNP_YOY_RATIO"), errors="coerce")
+    normalized["TotalShares"] = pd.to_numeric(_series_or_none(df, "TOTAL_SHARES"), errors="coerce")
+    normalized = normalized[normalized["SCode"].str.len() == 6]
+    normalized = normalized.dropna(subset=["ReportDate"], how="any")
+    normalized = normalized.sort_values(["SCode", "ReportDate", "NoticeDate"], na_position="last")
+    return normalized.drop_duplicates(subset=["SCode", "ReportDate", "ExDividendDate", "NoticeDate"], keep="last")
+
+
+def exrights_source_key(row) -> str:
+    parts = [row.SCode, row.ReportDate, row.ExDividendDate, row.NoticeDate]
+    return "|".join("" if pd.isna(part) else str(part) for part in parts)
+
+
+def fetch_exrights_from_eastmoney(symbol: str, retries: int) -> pd.DataFrame:
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    params = {
+        "sortColumns": "REPORT_DATE",
+        "sortTypes": "-1",
+        "pageSize": "500",
+        "pageNumber": "1",
+        "reportName": "RPT_SHAREBONUS_DET",
+        "columns": "ALL",
+        "quoteColumns": "",
+        "source": "WEB",
+        "client": "WEB",
+        "filter": f'(SECURITY_CODE="{normalize_symbol(symbol)}")',
+    }
+    records: list[dict] = []
+    total_pages = 1
+    page = 1
+    while page <= total_pages:
+        params["pageNumber"] = str(page)
+        for attempt in range(1, retries + 1):
+            try:
+                response = requests.get(url, params=params, timeout=20)
+                response.raise_for_status()
+                data = response.json()
+                result = data.get("result") or {}
+                total_pages = int(result.get("pages") or 1)
+                records.extend(result.get("data") or [])
+                break
+            except Exception as exc:
+                if attempt == retries:
+                    logging.error("exrights %s fetch failed after %s attempts: %s", symbol, retries, exc)
+                    return pd.DataFrame()
+                wait_seconds = min(30, attempt * 3)
+                logging.warning("exrights %s fetch failed on attempt %s; retrying in %s seconds: %s", symbol, attempt, wait_seconds, exc)
+                time.sleep(wait_seconds)
+        page += 1
+    return normalize_exrights_records(records, symbol=symbol)
+
+
+def rows_for_exrights_insert(df: pd.DataFrame) -> list[tuple]:
+    now = datetime.now()
+    rows = []
+    for row in df.itertuples(index=False):
+        rows.append(
+            (
+                exrights_source_key(row),
+                row.SCode,
+                none_if_nan(row.SName),
+                none_if_nan(row.ReportDate),
+                none_if_nan(row.PlanNoticeDate),
+                none_if_nan(row.EquityRecordDate),
+                none_if_nan(row.ExDividendDate),
+                none_if_nan(row.NoticeDate),
+                none_if_nan(row.AssignProgress),
+                none_if_nan(row.ImplPlanProfile),
+                none_if_nan(row.BonusItRatio),
+                none_if_nan(row.BonusRatio),
+                none_if_nan(row.TransferRatio),
+                none_if_nan(row.PretaxBonusRmb),
+                none_if_nan(row.DividendRatio),
+                none_if_nan(row.BasicEps),
+                none_if_nan(row.Bvps),
+                none_if_nan(row.PerCapitalReserve),
+                none_if_nan(row.PerUnassignProfit),
+                none_if_nan(row.PnpYoyRatio),
+                none_if_nan(row.TotalShares),
+                now,
+                now,
+            )
+        )
+    return rows
+
+
+def insert_exrights_rows(conn: pymysql.connections.Connection, rows: list[tuple]) -> int:
+    if not rows:
+        return 0
+    insert_sql = f"""
+        INSERT INTO {EXRIGHTS_TABLE}
+            (SourceKey, SCode, SName, ReportDate, PlanNoticeDate, EquityRecordDate, ExDividendDate, NoticeDate,
+             AssignProgress, ImplPlanProfile, BonusItRatio, BonusRatio, TransferRatio, PretaxBonusRmb,
+             DividendRatio, BasicEps, Bvps, PerCapitalReserve, PerUnassignProfit, PnpYoyRatio,
+             TotalShares, CreatedOn, UpdatedOn)
+        VALUES
+            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            SName = VALUES(SName),
+            PlanNoticeDate = VALUES(PlanNoticeDate),
+            EquityRecordDate = VALUES(EquityRecordDate),
+            AssignProgress = VALUES(AssignProgress),
+            ImplPlanProfile = VALUES(ImplPlanProfile),
+            BonusItRatio = VALUES(BonusItRatio),
+            BonusRatio = VALUES(BonusRatio),
+            TransferRatio = VALUES(TransferRatio),
+            PretaxBonusRmb = VALUES(PretaxBonusRmb),
+            DividendRatio = VALUES(DividendRatio),
+            BasicEps = VALUES(BasicEps),
+            Bvps = VALUES(Bvps),
+            PerCapitalReserve = VALUES(PerCapitalReserve),
+            PerUnassignProfit = VALUES(PerUnassignProfit),
+            PnpYoyRatio = VALUES(PnpYoyRatio),
+            TotalShares = VALUES(TotalShares),
+            UpdatedOn = VALUES(UpdatedOn)
+    """
+    inserted = 0
+    with conn.cursor() as cur:
+        for batch in iter_batches(rows, BATCH_SIZE):
+            cur.executemany(insert_sql, batch)
+            inserted += len(batch)
+    return inserted
+
+
+def crawl_exrights_to_mysql(workers: int, sleep_seconds: float, retries: int, truncate: bool = False) -> None:
+    setup_logging()
+    stocks = get_stock_list()
+    logging.info("Start exrights import into MySQL; stocks=%s workers=%s", len(stocks), workers)
+    success_count = 0
+    empty_count = 0
+    fail_count = 0
+    total_rows = 0
+    with mysql_connect() as conn:
+        upsert_stock_info(conn, stocks)
+        ensure_exrights_table(conn)
+        if truncate:
+            with conn.cursor() as cur:
+                cur.execute(f"TRUNCATE TABLE {EXRIGHTS_TABLE}")
+            conn.commit()
+            logging.info("Truncated %s before exrights import", EXRIGHTS_TABLE)
+
+        def fetch_task(symbol: str) -> tuple[str, pd.DataFrame]:
+            df = fetch_exrights_from_eastmoney(symbol, retries=retries)
+            if sleep_seconds > 0:
+                time.sleep(sleep_seconds)
+            return symbol, df
+
+        symbols = [normalize_symbol(getattr(row, "code")) for row in stocks.itertuples(index=False)]
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+            future_to_symbol = {executor.submit(fetch_task, symbol): symbol for symbol in symbols}
+            for future in tqdm(as_completed(future_to_symbol), total=len(future_to_symbol), desc="exrights -> mysql"):
+                symbol = future_to_symbol[future]
+                try:
+                    symbol, df = future.result()
+                except Exception:
+                    fail_count += 1
+                    logging.exception("exrights %s fetch task failed", symbol)
+                    continue
+                if df.empty:
+                    empty_count += 1
+                    continue
+                try:
+                    inserted = insert_exrights_rows(conn, rows_for_exrights_insert(df))
+                    conn.commit()
+                    total_rows += inserted
+                    success_count += 1
+                except Exception:
+                    conn.rollback()
+                    fail_count += 1
+                    logging.exception("exrights %s database write failed", symbol)
+    logging.info("Finished exrights import: success=%s empty=%s failed=%s rows=%s", success_count, empty_count, fail_count, total_rows)
+
+
 def crawl_daily_to_mysql(
     mode: str,
     start_date: str,
@@ -799,12 +1052,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate_parser = subparsers.add_parser("generate", help="Generate weekly/monthly K-lines from existing dkandles")
     generate_parser.add_argument("--period", choices=sorted(GENERATE_PERIODS), required=True)
+
+    exrights_parser = subparsers.add_parser("exrights", help="Fetch dividend/bonus/share-transfer data into exrights")
+    exrights_parser.add_argument("--sleep", type=float, default=0.05)
+    exrights_parser.add_argument("--retries", type=int, default=3)
+    exrights_parser.add_argument("--workers", type=int, default=8, help="Number of concurrent fetch worker threads")
+    exrights_parser.add_argument("--truncate", action="store_true", help="Truncate exrights before importing")
+    exrights_parser.add_argument("--use-env-proxy", action="store_true", help="Use HTTP_PROXY/HTTPS_PROXY/ALL_PROXY from the environment")
     return parser
 
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    if args.use_env_proxy:
+    if getattr(args, "use_env_proxy", False):
         restore_requests_proxy_handling()
     else:
         force_requests_direct()
@@ -822,6 +1082,13 @@ def main(argv: Iterable[str] | None = None) -> None:
         )
     elif args.command == "generate":
         generate_derived_kline(args.period)
+    elif args.command == "exrights":
+        crawl_exrights_to_mysql(
+            workers=args.workers,
+            sleep_seconds=args.sleep,
+            retries=args.retries,
+            truncate=args.truncate,
+        )
     elif args.command == "schedule":
         run_scheduler(
             mode=args.mode,

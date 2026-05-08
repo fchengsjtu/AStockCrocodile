@@ -100,6 +100,25 @@ python .\a_share_crawler.py run --mode full --adjust qfq
 ```
 
 
+
+## Fetch Ex-rights And Dividends
+
+Dividend, bonus-share, share-transfer, record-date, and ex-dividend/ex-right information is fetched from Eastmoney and written to `exrights`.
+
+```powershell
+python .\a_share_crawler.py exrights
+```
+
+Available options:
+
+- `--sleep SLEEP`: seconds to pause inside each fetch worker after a request, default `0.05`.
+- `--retries RETRIES`: retry count for Eastmoney requests, default `3`.
+- `--workers WORKERS`: number of concurrent fetch worker threads, default `8`.
+- `--truncate`: truncate `exrights` before importing.
+- `--use-env-proxy`: use proxy environment variables.
+
+The program creates `exrights` automatically if it does not exist. Rows are upserted by an internal `SourceKey` built from stock code, report date, ex-dividend/ex-right date, and notice date.
+
 ## Generate Weekly And Monthly K-lines
 
 Weekly and monthly K-lines are generated from existing daily rows in `dkandles`; no market API is called for this step.
@@ -155,6 +174,7 @@ The crawler writes to:
 
 - `dkandles`: daily K-line rows.
 - `stockinfo`: stock basic info and `LatestUpdateKandle`.
+- `exrights`: dividend, bonus-share, share-transfer, record-date, and ex-dividend/ex-right rows.
 
 `dkandles` fields written by the crawler:
 
@@ -194,3 +214,4 @@ The crawler writes to:
 - Daily K-lines: `dkandles`, `KType='D'`.
 - Weekly K-lines: `wkandles`, `KType='W'`, generated from `dkandles`.
 - Monthly K-lines: `mkandles`, `KType='M'`, generated from `dkandles`.
+- Ex-rights and dividends: `exrights`, fetched from Eastmoney.
