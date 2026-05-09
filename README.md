@@ -339,6 +339,11 @@ Default strategy:
 - Optional liquidity filter by 5-day average `Amount`.
 - Near limit-up days are excluded by default.
 
+Available strategies:
+
+- `ma_bullish_v1`: the moving-average strategy above.
+- `news_hot_v1`: news hotspot strategy. It ranks stocks by concept heat from `news.ConceptHeat`, news-to-stock relation strength, source credibility, news heat, and recent stock performance. It recommends 3 to 5 stocks by default.
+
 Run selection for the latest trading day:
 
 ```powershell
@@ -349,6 +354,12 @@ Run selection for a specific day:
 
 ```powershell
 python .\stock_selector.py --date 20260508 --min-turnover-amount 50000 --limit 50
+```
+
+Run the news hotspot strategy:
+
+```powershell
+python .\stock_selector.py --strategy news_hot_v1 --date 20260508
 ```
 
 `backtest_strategy.py` runs a historical backtest with these definitions:
@@ -420,6 +431,7 @@ Main stored fields:
 - `CredibilityLevel`: source credibility level from 1 to 10; 1 is highest and 10 is lowest.
 - `Heat`: click count or heat value when the source exposes it; otherwise `0`.
 - `RelatedConcepts`: JSON array, ordered from strongest to weakest relationship, with at most 10 concepts.
+- `ConceptHeat`: JSON array with each related concept and its share of the current news batch. The crawler keeps up to 10000 news rows by default, so the concept heat is computed as concept news count divided by crawled news count.
 
 Additional useful fields include `Title`, `Summary`, `SourceName`, `PublishTime`, and `ContentHash`.
 

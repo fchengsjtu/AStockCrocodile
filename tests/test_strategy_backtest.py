@@ -141,6 +141,58 @@ class StrategyBacktestTests(unittest.TestCase):
 
         self.assertTrue(result.iloc[-1]["Selected"])
 
+    def test_compute_news_hot_selection_recommends_three_to_five(self):
+        base = date(2026, 1, 1)
+        rows = []
+        for code, name in [("000001", "AlphaAI"), ("000002", "BetaAI"), ("000003", "GammaAI"), ("000004", "DeltaAI"), ("000005", "EpsilonAI"), ("000006", "Zeta")]:
+            for i in range(30):
+                close = 10.0 + i * 0.05
+                rows.append(
+                    {
+                        "SCode": code,
+                        "SName": name,
+                        "TradeDate": base + timedelta(days=i),
+                        "Open": close - 0.02,
+                        "Close": close,
+                        "High": close + 0.1,
+                        "Low": close - 0.1,
+                        "Amount": 1000.0 + i,
+                        "Volume": 10000.0,
+                        "MA5": close - 0.1,
+                        "MA8": close - 0.2,
+                        "MA13": close - 0.3,
+                        "MA34": close - 0.4,
+                        "MA55": close - 0.5,
+                    }
+                )
+        daily_df = pd.DataFrame(rows)
+        news_df = pd.DataFrame(
+            [
+                {
+                    "Title": f"{name} AI order grows",
+                    "Summary": "AI demand improves",
+                    "Heat": 1000,
+                    "CredibilityLevel": 3,
+                    "RelatedConcepts": '["AI"]',
+                    "ConceptHeat": '[{"concept":"AI","heat":0.8}]',
+                }
+                for name in ["AlphaAI", "BetaAI", "GammaAI", "DeltaAI", "EpsilonAI"]
+            ]
+        )
+
+        selected = stock_selector.compute_news_hot_selection(
+            daily_df=daily_df,
+            news_df=news_df,
+            trade_date=base + timedelta(days=29),
+            min_recommendations=3,
+            max_recommendations=5,
+        )
+
+        self.assertGreaterEqual(len(selected), 3)
+        self.assertLessEqual(len(selected), 5)
+        self.assertEqual(set(selected["StrategyName"]), {stock_selector.STRATEGY_NEWS_HOT})
+        self.assertTrue((selected["Reason"].str.contains("news_hot")).all())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,7 @@ from a_share_crawler import mysql_connect, none_if_nan
 
 NEWS_TABLE = "news"
 DEFAULT_SOURCES = ("eastmoney", "ths", "caixin")
+DEFAULT_NEWS_LIMIT = 10000
 MAX_RELATED_CONCEPTS = 10
 
 SOURCE_CREDIBILITY = {
@@ -67,6 +68,7 @@ def ensure_news_table(conn: pymysql.connections.Connection) -> None:
             CredibilityLevel TINYINT NOT NULL,
             Heat BIGINT NOT NULL DEFAULT 0,
             RelatedConcepts JSON NULL,
+            ConceptHeat JSON NULL,
             ContentHash CHAR(64) NOT NULL DEFAULT '',
             CreatedOn DATETIME NOT NULL,
             UpdatedOn DATETIME NOT NULL,
@@ -78,6 +80,9 @@ def ensure_news_table(conn: pymysql.connections.Connection) -> None:
     """
     with conn.cursor() as cur:
         cur.execute(sql)
+        cur.execute("SHOW COLUMNS FROM news LIKE 'ConceptHeat'")
+        if cur.fetchone() is None:
+            cur.execute("ALTER TABLE news ADD COLUMN ConceptHeat JSON NULL AFTER RelatedConcepts")
     conn.commit()
 
 
@@ -120,9 +125,56 @@ def score_related_concepts(title: str | None, summary: str | None, limit: int = 
 def content_hash(row: dict) -> str:
     payload = "|".join(
         str(row.get(key) or "")
-        for key in ("NewsLink", "Title", "Summary", "SourceName", "PublishTime", "CredibilityLevel", "Heat", "RelatedConcepts")
+        for key in ("NewsLink", "Title", "Summary", "SourceName", "PublishTime", "CredibilityLevel", "Heat", "RelatedConcepts", "ConceptHeat")
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def parse_json_list(value) -> list:
+    if value is None or pd.isna(value):
+        return []
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def compute_concept_heat(news_df: pd.DataFrame) -> dict[str, float]:
+    if news_df.empty or "RelatedConcepts" not in news_df.columns:
+        return {}
+    total = len(news_df)
+    counts: dict[str, int] = {}
+    for value in news_df["RelatedConcepts"]:
+        concepts = parse_json_list(value)
+        for concept in set(str(item) for item in concepts[:MAX_RELATED_CONCEPTS] if item):
+            counts[concept] = counts.get(concept, 0) + 1
+    if total == 0:
+        return {}
+    return {concept: count / total for concept, count in counts.items()}
+
+
+def apply_concept_heat(news_df: pd.DataFrame) -> pd.DataFrame:
+    if news_df.empty:
+        return news_df
+    result = news_df.copy()
+    heat_map = compute_concept_heat(result)
+    values = []
+    hashes = []
+    for row in result.itertuples(index=False):
+        concepts = parse_json_list(getattr(row, "RelatedConcepts", None))
+        concept_heat = [
+            {"concept": concept, "heat": heat_map.get(str(concept), 0.0)}
+            for concept in concepts[:MAX_RELATED_CONCEPTS]
+        ]
+        values.append(json.dumps(concept_heat, ensure_ascii=False))
+    result["ConceptHeat"] = values
+    for row in result.to_dict("records"):
+        hashes.append(content_hash(row))
+    result["ContentHash"] = hashes
+    return result
 
 
 def normalize_news_frame(df: pd.DataFrame, source: str, mapping: dict[str, str]) -> pd.DataFrame:
@@ -147,10 +199,11 @@ def normalize_news_frame(df: pd.DataFrame, source: str, mapping: dict[str, str])
             "CredibilityLevel": SOURCE_CREDIBILITY.get(source, 5),
             "Heat": heat,
             "RelatedConcepts": json.dumps(related, ensure_ascii=False),
+            "ConceptHeat": None,
         }
         row["ContentHash"] = content_hash(row)
         rows.append(row)
-    columns = ["NewsLink", "Title", "Summary", "SourceName", "PublishTime", "CredibilityLevel", "Heat", "RelatedConcepts", "ContentHash"]
+    columns = ["NewsLink", "Title", "Summary", "SourceName", "PublishTime", "CredibilityLevel", "Heat", "RelatedConcepts", "ConceptHeat", "ContentHash"]
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -197,13 +250,13 @@ def crawl_news(sources: Iterable[str], limit: int) -> pd.DataFrame:
         if not frame.empty:
             frames.append(frame)
     if not frames:
-        return pd.DataFrame(columns=["NewsLink", "Title", "Summary", "SourceName", "PublishTime", "CredibilityLevel", "Heat", "RelatedConcepts", "ContentHash"])
+        return pd.DataFrame(columns=["NewsLink", "Title", "Summary", "SourceName", "PublishTime", "CredibilityLevel", "Heat", "RelatedConcepts", "ConceptHeat", "ContentHash"])
     result = pd.concat(frames, ignore_index=True)
     result = result.drop_duplicates(subset=["NewsLink"], keep="first")
     result = result.sort_values(["PublishTime", "Heat"], ascending=[False, False], na_position="last")
     if limit > 0:
         result = result.head(limit)
-    return result.reset_index(drop=True)
+    return apply_concept_heat(result.reset_index(drop=True))
 
 
 def save_news(conn: pymysql.connections.Connection, news_df: pd.DataFrame) -> int:
@@ -223,6 +276,7 @@ def save_news(conn: pymysql.connections.Connection, news_df: pd.DataFrame) -> in
                 row.CredibilityLevel,
                 row.Heat,
                 row.RelatedConcepts,
+                row.ConceptHeat,
                 row.ContentHash,
                 now,
                 now,
@@ -230,8 +284,8 @@ def save_news(conn: pymysql.connections.Connection, news_df: pd.DataFrame) -> in
         )
     sql = f"""
         INSERT INTO {NEWS_TABLE}
-            (NewsLink, Title, Summary, SourceName, PublishTime, CredibilityLevel, Heat, RelatedConcepts, ContentHash, CreatedOn, UpdatedOn)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (NewsLink, Title, Summary, SourceName, PublishTime, CredibilityLevel, Heat, RelatedConcepts, ConceptHeat, ContentHash, CreatedOn, UpdatedOn)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             Title = VALUES(Title),
             Summary = VALUES(Summary),
@@ -240,6 +294,7 @@ def save_news(conn: pymysql.connections.Connection, news_df: pd.DataFrame) -> in
             CredibilityLevel = VALUES(CredibilityLevel),
             Heat = VALUES(Heat),
             RelatedConcepts = VALUES(RelatedConcepts),
+            ConceptHeat = VALUES(ConceptHeat),
             ContentHash = VALUES(ContentHash),
             UpdatedOn = VALUES(UpdatedOn)
     """
@@ -264,7 +319,7 @@ def run_news_crawler(config: NewsConfig) -> pd.DataFrame:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Crawl stock market news into MySQL")
     parser.add_argument("--sources", default=",".join(DEFAULT_SOURCES), help="Comma-separated sources: eastmoney,ths,caixin")
-    parser.add_argument("--limit", type=int, default=200, help="Maximum news rows to keep after de-duplication; <=0 means no limit")
+    parser.add_argument("--limit", type=int, default=DEFAULT_NEWS_LIMIT, help="Maximum news rows to keep after de-duplication; <=0 means no limit")
     parser.add_argument("--output", help="Optional CSV path for crawled news rows")
     parser.add_argument("--no-save-db", action="store_true", help="Do not save news rows to MySQL")
     return parser

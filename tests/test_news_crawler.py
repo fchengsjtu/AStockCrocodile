@@ -51,6 +51,42 @@ class NewsCrawlerTests(unittest.TestCase):
         self.assertIn("锂电池", related)
         self.assertTrue(row["ContentHash"])
 
+    def test_apply_concept_heat_sets_percentage(self):
+        df = pd.DataFrame(
+            [
+                {
+                    "NewsLink": "https://example.com/1",
+                    "Title": "AI",
+                    "Summary": "",
+                    "SourceName": "test",
+                    "PublishTime": pd.Timestamp("2026-05-09"),
+                    "CredibilityLevel": 5,
+                    "Heat": 0,
+                    "RelatedConcepts": '["AI"]',
+                    "ConceptHeat": None,
+                    "ContentHash": "",
+                },
+                {
+                    "NewsLink": "https://example.com/2",
+                    "Title": "AI and bank",
+                    "Summary": "",
+                    "SourceName": "test",
+                    "PublishTime": pd.Timestamp("2026-05-09"),
+                    "CredibilityLevel": 5,
+                    "Heat": 0,
+                    "RelatedConcepts": '["AI","bank"]',
+                    "ConceptHeat": None,
+                    "ContentHash": "",
+                },
+            ]
+        )
+
+        result = news_crawler.apply_concept_heat(df)
+
+        concept_heat = json.loads(result.iloc[0]["ConceptHeat"])
+        self.assertEqual(concept_heat[0]["concept"], "AI")
+        self.assertEqual(concept_heat[0]["heat"], 1.0)
+
     def test_crawl_news_deduplicates_and_limits(self):
         original_fetchers = news_crawler.FETCHERS
         try:
