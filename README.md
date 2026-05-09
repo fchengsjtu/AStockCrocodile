@@ -402,6 +402,45 @@ Run without saving to MySQL:
 python .\kline_statistics.py --start-date 20240101 --end-date 20241231 --no-save-db
 ```
 
+## News Crawler
+
+`news_crawler.py` crawls stock-market news from AkShare-backed public sources and writes rows to MySQL table `news`.
+
+Default sources:
+
+- `eastmoney`
+- `ths`
+- `caixin`
+
+The program creates `news` automatically. Rows are de-duplicated by `NewsLink`.
+
+Main stored fields:
+
+- `NewsLink`: news URL.
+- `CredibilityLevel`: source credibility level from 1 to 10; 1 is highest and 10 is lowest.
+- `Heat`: click count or heat value when the source exposes it; otherwise `0`.
+- `RelatedConcepts`: JSON array, ordered from strongest to weakest relationship, with at most 10 concepts.
+
+Additional useful fields include `Title`, `Summary`, `SourceName`, `PublishTime`, and `ContentHash`.
+
+Run news crawling:
+
+```powershell
+python .\news_crawler.py
+```
+
+Run selected sources and limit rows:
+
+```powershell
+python .\news_crawler.py --sources eastmoney,ths --limit 100
+```
+
+Run without saving to MySQL:
+
+```powershell
+python .\news_crawler.py --no-save-db --output data\news.csv
+```
+
 ## Database Writes
 
 The crawler writes to:
