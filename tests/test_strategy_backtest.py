@@ -273,6 +273,21 @@ class StrategyBacktestTests(unittest.TestCase):
 
         self.assertTrue(selected.empty)
 
+    def test_load_backtest_daily_for_symbols_returns_empty_without_symbols(self):
+        class FailingConnection:
+            def cursor(self):
+                raise AssertionError("database should not be queried without symbols")
+
+        result = backtest.load_backtest_daily_for_symbols(
+            FailingConnection(),
+            [],
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            "D",
+        )
+
+        self.assertTrue(result.empty)
+
 
 if __name__ == "__main__":
     unittest.main()

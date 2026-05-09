@@ -392,6 +392,8 @@ python .\backtest_strategy.py --strategy-name weekly_volume_drop_v1 --start-date
 python .\backtest_strategy.py --strategy-name news_hot_v1 --start-date 20240101 --end-date 20241231
 ```
 
+Long-range `weekly_volume_drop_v1` backtests use a low-memory path: weekly rows are scanned by stock batches first, then only selected symbols' daily rows are loaded for the forward-window evaluation.
+
 Run without saving the summary table:
 
 ```powershell

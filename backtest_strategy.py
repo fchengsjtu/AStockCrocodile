@@ -25,6 +25,7 @@ DEFAULT_LOOKBACK_DAYS = 90
 DEFAULT_FORWARD_DAYS = 16
 DEFAULT_STRATEGY_NAME = STRATEGY_MA_BULLISH
 BACKTEST_RESULT_TABLE = "strategybacktestresults"
+SYMBOL_BATCH_SIZE = 300
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,66 @@ def load_backtest_daily(conn, start_date: date, end_date: date, ktype: str) -> p
     return df
 
 
+def normalize_daily_frame(rows) -> pd.DataFrame:
+    columns = ["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume", "MA5", "MA8", "MA13", "MA34", "MA55"]
+    df = pd.DataFrame(rows, columns=columns)
+    if df.empty:
+        return df
+    df["TradeDate"] = pd.to_datetime(df["TradeDate"]).dt.date
+    for column in columns[3:]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df
+
+
+def iter_batches(items: list[str], batch_size: int) -> Iterable[list[str]]:
+    for index in range(0, len(items), batch_size):
+        yield items[index : index + batch_size]
+
+
+def load_symbols(conn, table_name: str, ktype: str, start_date: date, end_date: date) -> list[str]:
+    sql = f"""
+        SELECT DISTINCT SCode
+        FROM {table_name}
+        WHERE KType = %s AND KTime >= %s AND KTime < %s
+        ORDER BY SCode
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (ktype, start_date, end_date + timedelta(days=1)))
+        rows = cur.fetchall()
+    return [row[0] for row in rows]
+
+
+def load_backtest_daily_for_symbols(conn, symbols: list[str], start_date: date, end_date: date, ktype: str) -> pd.DataFrame:
+    if not symbols:
+        return normalize_daily_frame([])
+    frames = []
+    load_start = start_date
+    load_end = end_date + timedelta(days=DEFAULT_FORWARD_DAYS * 2)
+    for batch in iter_batches(symbols, SYMBOL_BATCH_SIZE):
+        placeholders = ",".join(["%s"] * len(batch))
+        sql = f"""
+            SELECT dk.SCode, si.SName, DATE(dk.KTime) AS TradeDate,
+                   dk.Open, dk.Close, dk.High, dk.Low, dk.Amount, dk.Volume,
+                   dk.MA5, dk.MA8, dk.MA13, dk.MA34, dk.MA55
+            FROM dkandles dk
+            LEFT JOIN stockinfo si ON si.SCode = dk.SCode
+            WHERE dk.KType = %s
+              AND dk.SCode IN ({placeholders})
+              AND dk.KTime >= %s AND dk.KTime < %s
+            ORDER BY dk.SCode, dk.KTime
+        """
+        params = [ktype, *batch, load_start, load_end + timedelta(days=1)]
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        frame = normalize_daily_frame(rows)
+        if not frame.empty:
+            frames.append(frame)
+    if not frames:
+        return normalize_daily_frame([])
+    return pd.concat(frames, ignore_index=True)
+
+
 def load_backtest_weekly(conn, start_date: date, end_date: date) -> pd.DataFrame:
     load_start = start_date - timedelta(days=70)
     load_end = end_date + timedelta(days=7)
@@ -88,6 +149,41 @@ def load_backtest_weekly(conn, start_date: date, end_date: date) -> pd.DataFrame
     for column in columns[3:]:
         df[column] = pd.to_numeric(df[column], errors="coerce")
     return df
+
+
+def load_backtest_weekly_for_symbols(conn, symbols: list[str], start_date: date, end_date: date) -> pd.DataFrame:
+    if not symbols:
+        return pd.DataFrame(columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"])
+    load_start = start_date - timedelta(days=70)
+    load_end = end_date + timedelta(days=7)
+    frames = []
+    for batch in iter_batches(symbols, SYMBOL_BATCH_SIZE):
+        placeholders = ",".join(["%s"] * len(batch))
+        sql = f"""
+            SELECT wk.SCode, si.SName, DATE(wk.KTime) AS TradeDate,
+                   wk.Open, wk.Close, wk.High, wk.Low, wk.Amount, wk.Volume
+            FROM wkandles wk
+            LEFT JOIN stockinfo si ON si.SCode = wk.SCode
+            WHERE wk.KType = 'W'
+              AND wk.SCode IN ({placeholders})
+              AND wk.KTime >= %s AND wk.KTime < %s
+            ORDER BY wk.SCode, wk.KTime
+        """
+        params = [*batch, load_start, load_end + timedelta(days=1)]
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        columns = ["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"]
+        frame = pd.DataFrame(rows, columns=columns)
+        if frame.empty:
+            continue
+        frame["TradeDate"] = pd.to_datetime(frame["TradeDate"]).dt.date
+        for column in columns[3:]:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame(columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"])
+    return pd.concat(frames, ignore_index=True)
 
 
 def weighted_average_price(window: pd.DataFrame) -> float | None:
@@ -250,6 +346,23 @@ def build_weekly_volume_drop_signals(weekly_df: pd.DataFrame, start_date: date, 
     return pd.concat(frames, ignore_index=True)
 
 
+def build_weekly_volume_drop_signals_stream(conn, start_date: date, end_date: date, config: BacktestConfig) -> pd.DataFrame:
+    symbols = load_symbols(conn, "wkandles", "W", start_date - timedelta(days=70), end_date + timedelta(days=7))
+    frames = []
+    for batch in iter_batches(symbols, SYMBOL_BATCH_SIZE):
+        weekly_df = load_backtest_weekly_for_symbols(conn, batch, start_date, end_date)
+        selected = build_weekly_volume_drop_signals(weekly_df, start_date, end_date, config)
+        if not selected.empty:
+            frames.append(selected)
+    if not frames:
+        return pd.DataFrame(columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])
+    result = pd.concat(frames, ignore_index=True)
+    result = result.sort_values(["TradeDate", "Score", "SCode"], ascending=[True, False, True])
+    if config.limit_per_day is not None and config.limit_per_day > 0:
+        result = result.groupby("TradeDate", group_keys=False).head(config.limit_per_day)
+    return result.reset_index(drop=True)
+
+
 def build_backtest_signals(conn, daily_df: pd.DataFrame, start_date: date, end_date: date, config: BacktestConfig) -> pd.DataFrame:
     if config.strategy_name == STRATEGY_MA_BULLISH:
         return build_ma_bullish_signals(daily_df, start_date, end_date, config)
@@ -259,6 +372,29 @@ def build_backtest_signals(conn, daily_df: pd.DataFrame, start_date: date, end_d
         weekly_df = load_backtest_weekly(conn, start_date, end_date)
         return build_weekly_volume_drop_signals(weekly_df, start_date, end_date, config)
     raise ValueError(f"unsupported strategy: {config.strategy_name}")
+
+
+def run_weekly_volume_drop_backtest(config: BacktestConfig, start_date: date, end_date: date) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
+    with mysql_connect() as conn:
+        selected = build_weekly_volume_drop_signals_stream(conn, start_date, end_date, config)
+        symbols = sorted(selected["SCode"].dropna().unique().tolist()) if not selected.empty else []
+        daily_df = load_backtest_daily_for_symbols(conn, symbols, start_date, end_date, config.ktype)
+    trade_frames = build_trade_day_positions(daily_df)
+    evaluated = []
+    for row in selected.itertuples(index=False):
+        item = evaluate_selection(row, trade_frames)
+        if item is not None:
+            evaluated.append(item)
+    results = pd.DataFrame(evaluated)
+    summary = summarize_results(results)
+    stock_summary = summarize_results_by_selection(results, start_date, end_date)
+    if config.output:
+        results.to_csv(config.output, index=False, encoding="utf-8-sig")
+    if config.save_db:
+        with mysql_connect() as conn:
+            saved = save_backtest_summary(conn, stock_summary)
+        summary["db_saved"] = saved
+    return results, summary, stock_summary
 
 
 def summarize_results(results: pd.DataFrame) -> dict:
@@ -416,6 +552,8 @@ def run_backtest(config: BacktestConfig) -> tuple[pd.DataFrame, dict, pd.DataFra
         raise ValueError("start-date and end-date are required")
     if start_date > end_date:
         raise ValueError("start-date must be <= end-date")
+    if config.strategy_name == STRATEGY_WEEKLY_VOLUME_DROP:
+        return run_weekly_volume_drop_backtest(config, start_date, end_date)
 
     with mysql_connect() as conn:
         daily_df = load_backtest_daily(conn, start_date, end_date, config.ktype)
