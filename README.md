@@ -326,6 +326,47 @@ PowerShell helper:
 .\run_scheduler.ps1
 ```
 
+
+## Stock Selection And Backtesting
+
+`stock_selector.py` runs the stock selection strategy and writes selected rows to MySQL table `stockselection`.
+
+Default strategy:
+
+- MA bullish alignment: `MA5 > MA8 > MA13 > MA34 > MA55`.
+- Close is above `MA5`.
+- The candle is bullish: `Close > Open`.
+- Optional liquidity filter by 5-day average `Amount`.
+- Near limit-up days are excluded by default.
+
+Run selection for the latest trading day:
+
+```powershell
+python .\stock_selector.py
+```
+
+Run selection for a specific day:
+
+```powershell
+python .\stock_selector.py --date 20260508 --min-turnover-amount 50000 --limit 50
+```
+
+`backtest_strategy.py` runs a historical backtest with these definitions:
+
+- Success: from the 3rd to the 8th trading day after selection, the minimum `Low` is at least 2% above the selection day's `Close`.
+- Failure: from the 3rd to the 8th trading day after selection, the weighted average price is at least 1% below the selection day's `Close`.
+- Explosive: from the 3rd to the 8th trading day after selection, the minimum `Low` is at least 20% above the selection day's `Close`.
+
+Weighted average price uses Tencent units stored in `dkandles`: `sum(Amount) * 100 / sum(Volume)`, because `Amount` is in 10k yuan and `Volume` is in lots.
+
+Run backtest:
+
+```powershell
+python .\backtest_strategy.py --start-date 20240101 --end-date 20241231 --limit-per-day 50 --output data\backtest-2024.csv
+```
+
+The output summary includes total selections, success rate, failure rate, and explosive rate. The optional CSV stores detailed rows for each evaluated selection.
+
 ## Database Writes
 
 The crawler writes to:
