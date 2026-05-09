@@ -46,6 +46,7 @@ class StrategyBacktestTests(unittest.TestCase):
         self.assertEqual(result["ForwardEnd"], base + timedelta(days=8))
         self.assertTrue(result["Success"])
         self.assertFalse(result["Explosive"])
+        self.assertAlmostEqual(result["RiseRate"], 0.03)
 
     def test_evaluate_selection_failure_and_explosive(self):
         base = date(2026, 1, 1)
@@ -89,6 +90,27 @@ class StrategyBacktestTests(unittest.TestCase):
         failure = backtest.evaluate_selection(selection, frames)
 
         self.assertTrue(failure["Failure"])
+        self.assertAlmostEqual(failure["WeightedDropRate"], -0.02)
+
+    def test_summarize_results_by_stock(self):
+        results = pd.DataFrame(
+            [
+                {"SCode": "000001", "Success": True, "Failure": False, "Explosive": False, "RiseRate": 0.03, "WeightedDropRate": 0.01},
+                {"SCode": "000001", "Success": False, "Failure": True, "Explosive": False, "RiseRate": -0.01, "WeightedDropRate": -0.02},
+                {"SCode": "000002", "Success": True, "Failure": False, "Explosive": True, "RiseRate": 0.21, "WeightedDropRate": 0.05},
+            ]
+        )
+
+        summary = backtest.summarize_results_by_stock(results, "test_strategy", date(2026, 1, 1), date(2026, 1, 31))
+
+        first = summary[summary["SCode"] == "000001"].iloc[0]
+        self.assertEqual(first["StrategyName"], "test_strategy")
+        self.assertEqual(first["SampleCount"], 2)
+        self.assertEqual(first["SuccessRate"], 0.5)
+        self.assertAlmostEqual(first["AvgRiseRate"], 0.01)
+        self.assertEqual(first["FailureRate"], 0.5)
+        self.assertAlmostEqual(first["AvgDropRate"], -0.005)
+        self.assertEqual(first["ExplosiveRate"], 0.0)
 
     def test_compute_strategy_frame_marks_default_signal(self):
         base = date(2026, 1, 1)

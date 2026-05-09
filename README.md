@@ -359,10 +359,18 @@ python .\stock_selector.py --date 20260508 --min-turnover-amount 50000 --limit 5
 
 Weighted average price uses Tencent units stored in `dkandles`: `sum(Amount) * 100 / sum(Volume)`, because `Amount` is in 10k yuan and `Volume` is in lots.
 
+Backtest summaries are saved to MySQL table `strategybacktestresults` by default. Each row is grouped by stock code, strategy name, and backtest date range, with `SuccessRate`, `AvgRiseRate`, `FailureRate`, `AvgDropRate`, and `ExplosiveRate`. `AvgRiseRate` uses the 3rd-to-8th trading-day minimum low versus the selection close; `AvgDropRate` uses the same window's weighted average price versus the selection close.
+
 Run backtest:
 
 ```powershell
 python .\backtest_strategy.py --start-date 20240101 --end-date 20241231 --limit-per-day 50 --output data\backtest-2024.csv
+```
+
+Run without saving the summary table:
+
+```powershell
+python .\backtest_strategy.py --start-date 20240101 --end-date 20241231 --no-save-db
 ```
 
 The output summary includes total selections, success rate, failure rate, and explosive rate. The optional CSV stores detailed rows for each evaluated selection.

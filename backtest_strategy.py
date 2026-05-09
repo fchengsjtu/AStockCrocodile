@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Iterable
 
 import pandas as pd
+import pymysql
 
-from a_share_crawler import DEFAULT_KTYPE, mysql_connect
+from a_share_crawler import DEFAULT_KTYPE, mysql_connect, none_if_nan
 from stock_selector import compute_strategy_frame, parse_date
 
 DEFAULT_LOOKBACK_DAYS = 90
 DEFAULT_FORWARD_DAYS = 16
+DEFAULT_STRATEGY_NAME = "ma_bullish_v1"
+BACKTEST_RESULT_TABLE = "strategybacktestresults"
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,8 @@ class BacktestConfig:
     limit_per_day: int | None
     ktype: str
     output: str | None
+    strategy_name: str
+    save_db: bool
 
 
 def load_backtest_daily(conn, start_date: date, end_date: date, ktype: str) -> pd.DataFrame:
@@ -60,6 +65,31 @@ def weighted_average_price(window: pd.DataFrame) -> float | None:
     return float(typical)
 
 
+def ensure_backtest_result_table(conn: pymysql.connections.Connection) -> None:
+    sql = f"""
+        CREATE TABLE IF NOT EXISTS {BACKTEST_RESULT_TABLE} (
+            Id BIGINT NOT NULL AUTO_INCREMENT,
+            SCode VARCHAR(10) NOT NULL,
+            StrategyName VARCHAR(64) NOT NULL,
+            StartDate DATE NOT NULL,
+            EndDate DATE NOT NULL,
+            SampleCount INT NOT NULL,
+            SuccessRate DECIMAL(18,6) NOT NULL,
+            AvgRiseRate DECIMAL(18,6) NULL,
+            FailureRate DECIMAL(18,6) NOT NULL,
+            AvgDropRate DECIMAL(18,6) NULL,
+            ExplosiveRate DECIMAL(18,6) NOT NULL,
+            CreatedOn DATETIME NOT NULL,
+            PRIMARY KEY (Id),
+            UNIQUE KEY ux_strategybacktest_code_strategy_range (SCode, StrategyName, StartDate, EndDate),
+            KEY idx_strategybacktest_strategy (StrategyName)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql)
+    conn.commit()
+
+
 def build_trade_day_positions(daily_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     result = {}
     for symbol, group in daily_df.groupby("SCode", sort=False):
@@ -85,6 +115,8 @@ def evaluate_selection(row, trade_frames: dict[str, pd.DataFrame]) -> dict | Non
     close_price = float(row.Close)
     min_low = float(window["Low"].min(skipna=True))
     weighted_avg = weighted_average_price(window)
+    rise_rate = min_low / close_price - 1 if close_price > 0 else None
+    weighted_drop_rate = weighted_avg / close_price - 1 if weighted_avg is not None and close_price > 0 else None
     success = min_low >= close_price * 1.02
     explosive = min_low >= close_price * 1.20
     failure = weighted_avg is not None and weighted_avg <= close_price * 0.99
@@ -97,6 +129,8 @@ def evaluate_selection(row, trade_frames: dict[str, pd.DataFrame]) -> dict | Non
         "ForwardEnd": window.iloc[-1]["TradeDate"],
         "ForwardMinLow": min_low,
         "ForwardWeightedAvg": weighted_avg,
+        "RiseRate": rise_rate,
+        "WeightedDropRate": weighted_drop_rate,
         "Success": success,
         "Failure": failure,
         "Explosive": explosive,
@@ -126,6 +160,8 @@ def summarize_results(results: pd.DataFrame) -> dict:
             "success_rate": 0.0,
             "failure_rate": 0.0,
             "explosive_rate": 0.0,
+            "avg_rise_rate": 0.0,
+            "avg_drop_rate": 0.0,
         }
     success_count = int(results["Success"].sum())
     failure_count = int(results["Failure"].sum())
@@ -138,10 +174,91 @@ def summarize_results(results: pd.DataFrame) -> dict:
         "success_rate": success_count / total,
         "failure_rate": failure_count / total,
         "explosive_rate": explosive_count / total,
+        "avg_rise_rate": float(results["RiseRate"].mean(skipna=True)),
+        "avg_drop_rate": float(results["WeightedDropRate"].mean(skipna=True)),
     }
 
 
-def run_backtest(config: BacktestConfig) -> tuple[pd.DataFrame, dict]:
+def summarize_results_by_stock(results: pd.DataFrame, strategy_name: str, start_date: date, end_date: date) -> pd.DataFrame:
+    columns = [
+        "SCode",
+        "StrategyName",
+        "StartDate",
+        "EndDate",
+        "SampleCount",
+        "SuccessRate",
+        "AvgRiseRate",
+        "FailureRate",
+        "AvgDropRate",
+        "ExplosiveRate",
+    ]
+    if results.empty:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for symbol, group in results.groupby("SCode", sort=True):
+        sample_count = len(group)
+        rows.append(
+            {
+                "SCode": symbol,
+                "StrategyName": strategy_name,
+                "StartDate": start_date,
+                "EndDate": end_date,
+                "SampleCount": sample_count,
+                "SuccessRate": float(group["Success"].sum() / sample_count),
+                "AvgRiseRate": float(group["RiseRate"].mean(skipna=True)),
+                "FailureRate": float(group["Failure"].sum() / sample_count),
+                "AvgDropRate": float(group["WeightedDropRate"].mean(skipna=True)),
+                "ExplosiveRate": float(group["Explosive"].sum() / sample_count),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def save_backtest_summary(
+    conn: pymysql.connections.Connection,
+    summary_df: pd.DataFrame,
+) -> int:
+    ensure_backtest_result_table(conn)
+    if summary_df.empty:
+        return 0
+    now = datetime.now()
+    rows = []
+    for row in summary_df.itertuples(index=False):
+        rows.append(
+            (
+                row.SCode,
+                row.StrategyName,
+                row.StartDate,
+                row.EndDate,
+                row.SampleCount,
+                none_if_nan(row.SuccessRate),
+                none_if_nan(row.AvgRiseRate),
+                none_if_nan(row.FailureRate),
+                none_if_nan(row.AvgDropRate),
+                none_if_nan(row.ExplosiveRate),
+                now,
+            )
+        )
+    sql = f"""
+        INSERT INTO {BACKTEST_RESULT_TABLE}
+            (SCode, StrategyName, StartDate, EndDate, SampleCount, SuccessRate, AvgRiseRate, FailureRate, AvgDropRate, ExplosiveRate, CreatedOn)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            SampleCount = VALUES(SampleCount),
+            SuccessRate = VALUES(SuccessRate),
+            AvgRiseRate = VALUES(AvgRiseRate),
+            FailureRate = VALUES(FailureRate),
+            AvgDropRate = VALUES(AvgDropRate),
+            ExplosiveRate = VALUES(ExplosiveRate),
+            CreatedOn = VALUES(CreatedOn)
+    """
+    with conn.cursor() as cur:
+        cur.executemany(sql, rows)
+    conn.commit()
+    return len(rows)
+
+
+def run_backtest(config: BacktestConfig) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
     start_date = parse_date(config.start_date)
     end_date = parse_date(config.end_date)
     if start_date is None or end_date is None:
@@ -154,7 +271,8 @@ def run_backtest(config: BacktestConfig) -> tuple[pd.DataFrame, dict]:
     if daily_df.empty:
         results = pd.DataFrame()
         summary = summarize_results(results)
-        return results, summary
+        stock_summary = summarize_results_by_stock(results, config.strategy_name, start_date, end_date)
+        return results, summary, stock_summary
 
     strategy_df = compute_strategy_frame(daily_df, min_turnover_amount=config.min_turnover_amount)
     selected = select_historical_signals(strategy_df, start_date, end_date, config.limit_per_day)
@@ -166,16 +284,25 @@ def run_backtest(config: BacktestConfig) -> tuple[pd.DataFrame, dict]:
             evaluated.append(item)
     results = pd.DataFrame(evaluated)
     summary = summarize_results(results)
+    stock_summary = summarize_results_by_stock(results, config.strategy_name, start_date, end_date)
     if config.output:
         results.to_csv(config.output, index=False, encoding="utf-8-sig")
-    return results, summary
+    if config.save_db:
+        with mysql_connect() as conn:
+            saved = save_backtest_summary(conn, stock_summary)
+        summary["db_saved"] = saved
+    return results, summary, stock_summary
 
 
 def print_summary(summary: dict) -> None:
     print(f"total={summary['total']}")
     print(f"success={summary['success_count']} success_rate={summary['success_rate']:.2%}")
+    print(f"avg_rise_rate={summary['avg_rise_rate']:.2%}")
     print(f"failure={summary['failure_count']} failure_rate={summary['failure_rate']:.2%}")
+    print(f"avg_drop_rate={summary['avg_drop_rate']:.2%}")
     print(f"explosive={summary['explosive_count']} explosive_rate={summary['explosive_rate']:.2%}")
+    if "db_saved" in summary:
+        print(f"db_saved={summary['db_saved']}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -186,12 +313,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit-per-day", type=int, default=None, help="Maximum selected stocks per trade date")
     parser.add_argument("--ktype", default=DEFAULT_KTYPE)
     parser.add_argument("--output", help="Optional CSV path for detailed backtest rows")
+    parser.add_argument("--strategy-name", default=DEFAULT_STRATEGY_NAME, help="Strategy name stored with backtest summary")
+    parser.add_argument("--no-save-db", action="store_true", help="Do not save per-stock backtest summary to MySQL")
     return parser
 
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    _, summary = run_backtest(
+    _, summary, _ = run_backtest(
         BacktestConfig(
             start_date=args.start_date,
             end_date=args.end_date,
@@ -199,6 +328,8 @@ def main(argv: Iterable[str] | None = None) -> None:
             limit_per_day=args.limit_per_day,
             ktype=args.ktype,
             output=args.output,
+            strategy_name=args.strategy_name,
+            save_db=not args.no_save_db,
         )
     )
     print_summary(summary)
