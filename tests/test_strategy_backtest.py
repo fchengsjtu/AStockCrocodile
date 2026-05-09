@@ -288,6 +288,12 @@ class StrategyBacktestTests(unittest.TestCase):
 
         self.assertTrue(result.empty)
 
+    def test_iter_batches_uses_small_chunks(self):
+        batches = list(backtest.iter_batches(["000001", "000002", "000003"], 2))
+
+        self.assertEqual(batches, [["000001", "000002"], ["000003"]])
+        self.assertLessEqual(backtest.DEFAULT_SYMBOL_BATCH_SIZE, 100)
+
 
 if __name__ == "__main__":
     unittest.main()

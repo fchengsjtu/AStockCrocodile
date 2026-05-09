@@ -392,7 +392,11 @@ python .\backtest_strategy.py --strategy-name weekly_volume_drop_v1 --start-date
 python .\backtest_strategy.py --strategy-name news_hot_v1 --start-date 20240101 --end-date 20241231
 ```
 
-Long-range `weekly_volume_drop_v1` backtests use a low-memory path: weekly rows are scanned by stock batches first, then only selected symbols' daily rows are loaded for the forward-window evaluation.
+Long-range backtests use a low-memory path for all strategies: symbols are scanned in batches, strategy signals are collected, and then only selected symbols' daily rows are loaded for the forward-window evaluation. The default batch size is `80`; use `--batch-size` to tune it for smaller servers.
+
+```powershell
+python .\backtest_strategy.py --strategy-name weekly_volume_drop_v1 --start-date 20100101 --end-date 20251231 --batch-size 50
+```
 
 Run without saving the summary table:
 
