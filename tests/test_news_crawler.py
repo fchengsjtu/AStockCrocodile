@@ -141,6 +141,45 @@ class NewsCrawlerTests(unittest.TestCase):
         finally:
             news_crawler.FETCHERS = original_fetchers
 
+    def test_default_sources_include_requested_media(self):
+        expected = {
+            "yicai",
+            "eeo",
+            "21jingji",
+            "caijing",
+            "ce",
+            "jwview",
+            "stcn",
+            "cnstock",
+            "sina",
+            "xueqiu",
+            "jiemian",
+            "hexun",
+            "stockstar",
+        }
+
+        self.assertTrue(expected.issubset(set(news_crawler.DEFAULT_SOURCES)))
+        self.assertTrue(expected.issubset(set(news_crawler.FETCHERS)))
+
+    def test_rows_to_news_frame_normalizes_generic_source(self):
+        result = news_crawler.rows_to_news_frame(
+            [
+                {
+                    "Title": "Market news title",
+                    "Summary": "AI and chips demand",
+                    "PublishTime": "2026-05-09 12:00:00",
+                    "NewsLink": "https://example.com/market/1",
+                    "Heat": "2,000",
+                }
+            ],
+            "sina",
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.iloc[0]["SourceName"], "sina")
+        self.assertEqual(result.iloc[0]["NewsLink"], "https://example.com/market/1")
+        self.assertEqual(result.iloc[0]["Heat"], 2000)
+
 
 if __name__ == "__main__":
     unittest.main()

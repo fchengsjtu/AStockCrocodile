@@ -2,26 +2,134 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
+import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Callable, Iterable
+from urllib.parse import urljoin
 
 import akshare as ak
 import pandas as pd
 import pymysql
+import requests
 
 from a_share_crawler import mysql_connect, none_if_nan
 
 NEWS_TABLE = "news"
-DEFAULT_SOURCES = ("eastmoney", "ths", "caixin")
+DEFAULT_SOURCES = (
+    "eastmoney",
+    "ths",
+    "caixin",
+    "yicai",
+    "eeo",
+    "21jingji",
+    "caijing",
+    "ce",
+    "jwview",
+    "stcn",
+    "cnstock",
+    "sina",
+    "xueqiu",
+    "jiemian",
+    "hexun",
+    "stockstar",
+)
 DEFAULT_NEWS_LIMIT = 10000
 MAX_RELATED_CONCEPTS = 10
+REQUEST_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+}
 
 SOURCE_CREDIBILITY = {
     "eastmoney": 3,
     "ths": 4,
     "caixin": 2,
+    "yicai": 2,
+    "eeo": 2,
+    "21jingji": 2,
+    "caijing": 2,
+    "ce": 3,
+    "jwview": 3,
+    "stcn": 2,
+    "cnstock": 2,
+    "sina": 4,
+    "xueqiu": 6,
+    "jiemian": 3,
+    "hexun": 4,
+    "stockstar": 4,
+}
+
+WEB_SOURCE_CONFIGS = {
+    "yicai": {
+        "url": "https://www.yicai.com/",
+        "base_url": "https://www.yicai.com/",
+        "mode": "html",
+    },
+    "eeo": {
+        "url": "https://www.eeo.com.cn/finance/rss.xml",
+        "base_url": "https://www.eeo.com.cn/",
+        "mode": "rss",
+    },
+    "21jingji": {
+        "url": "https://www.21jingji.com/",
+        "base_url": "https://www.21jingji.com/",
+        "mode": "html",
+    },
+    "caijing": {
+        "url": "https://www.caijing.com.cn/",
+        "base_url": "https://www.caijing.com.cn/",
+        "mode": "html",
+    },
+    "ce": {
+        "url": "http://www.ce.cn/",
+        "base_url": "http://www.ce.cn/",
+        "mode": "html",
+    },
+    "jwview": {
+        "url": "https://www.jwview.com/",
+        "base_url": "https://www.jwview.com/",
+        "mode": "html",
+    },
+    "stcn": {
+        "url": "https://www.stcn.com/",
+        "base_url": "https://www.stcn.com/",
+        "mode": "html",
+    },
+    "cnstock": {
+        "url": "https://www.cnstock.com/",
+        "base_url": "https://www.cnstock.com/",
+        "mode": "html",
+    },
+    "sina": {
+        "url": "https://finance.sina.com.cn/",
+        "base_url": "https://finance.sina.com.cn/",
+        "mode": "html",
+    },
+    "xueqiu": {
+        "url": "https://xueqiu.com/",
+        "base_url": "https://xueqiu.com/",
+        "mode": "html",
+    },
+    "jiemian": {
+        "url": "https://www.jiemian.com/lists/48.html",
+        "base_url": "https://www.jiemian.com/",
+        "mode": "html",
+    },
+    "hexun": {
+        "url": "https://www.hexun.com/",
+        "base_url": "https://www.hexun.com/",
+        "mode": "html",
+    },
+    "stockstar": {
+        "url": "https://www.stockstar.com/",
+        "base_url": "https://www.stockstar.com/",
+        "mode": "html",
+    },
 }
 
 CONCEPT_KEYWORDS = {
@@ -105,6 +213,107 @@ def normalize_heat(value) -> int:
         return int(float(text) * multiplier)
     except ValueError:
         return 0
+
+
+def clean_text(value: str | None) -> str:
+    if value is None:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", str(value))
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def decode_response_text(response: requests.Response) -> str:
+    response.encoding = response.apparent_encoding or response.encoding
+    return response.text
+
+
+def fetch_text(url: str) -> str:
+    response = requests.get(url, headers=REQUEST_HEADERS, timeout=20)
+    response.raise_for_status()
+    return decode_response_text(response)
+
+
+def normalize_publish_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return parsedate_to_datetime(value).replace(tzinfo=None)
+    except (TypeError, ValueError, AttributeError):
+        return normalize_time(value)
+
+
+def rows_to_news_frame(rows: list[dict], source: str) -> pd.DataFrame:
+    if not rows:
+        return normalize_news_frame(pd.DataFrame(), source, {"link": "NewsLink"})
+    df = pd.DataFrame(rows)
+    return normalize_news_frame(
+        df,
+        source,
+        {"title": "Title", "summary": "Summary", "publish_time": "PublishTime", "link": "NewsLink", "heat": "Heat"},
+    )
+
+
+def fetch_rss_source(source: str, url: str) -> pd.DataFrame:
+    text = fetch_text(url)
+    text = re.sub(r"^\s*<\?xml[^>]*\?>", "", text, count=1)
+    root = ET.fromstring(text)
+    rows = []
+    for item in root.findall(".//item"):
+        title = clean_text(item.findtext("title"))
+        link = clean_text(item.findtext("link"))
+        summary = clean_text(item.findtext("description"))
+        publish_time = normalize_publish_time(item.findtext("pubDate") or item.findtext("date"))
+        if not link:
+            continue
+        rows.append(
+            {
+                "Title": title,
+                "Summary": summary,
+                "PublishTime": publish_time,
+                "NewsLink": link,
+                "Heat": 0,
+            }
+        )
+    return rows_to_news_frame(rows, source)
+
+
+def fetch_html_source(source: str, url: str, base_url: str) -> pd.DataFrame:
+    text = fetch_text(url)
+    rows = []
+    seen = set()
+    pattern = re.compile(r"<a\b[^>]*?href=[\"'](?P<href>[^\"'#]+)[\"'][^>]*>(?P<title>.*?)</a>", re.IGNORECASE | re.DOTALL)
+    for match in pattern.finditer(text):
+        href = html.unescape(match.group("href")).strip()
+        title = clean_text(match.group("title"))
+        if len(title) < 8:
+            continue
+        if href.startswith(("javascript:", "mailto:")):
+            continue
+        link = urljoin(base_url, href)
+        if not link.startswith(("http://", "https://")) or link in seen:
+            continue
+        seen.add(link)
+        rows.append(
+            {
+                "Title": title[:512],
+                "Summary": title,
+                "PublishTime": None,
+                "NewsLink": link,
+                "Heat": 0,
+            }
+        )
+        if len(rows) >= 300:
+            break
+    return rows_to_news_frame(rows, source)
+
+
+def fetch_web_source(source: str) -> pd.DataFrame:
+    config = WEB_SOURCE_CONFIGS[source]
+    if config["mode"] == "rss":
+        return fetch_rss_source(source, config["url"])
+    return fetch_html_source(source, config["url"], config["base_url"])
 
 
 def score_related_concepts(title: str | None, summary: str | None, limit: int = MAX_RELATED_CONCEPTS) -> list[str]:
@@ -240,13 +449,20 @@ FETCHERS: dict[str, Callable[[], pd.DataFrame]] = {
     "caixin": fetch_caixin_news,
 }
 
+for _source_name in WEB_SOURCE_CONFIGS:
+    FETCHERS[_source_name] = lambda source_name=_source_name: fetch_web_source(source_name)
+
 
 def crawl_news(sources: Iterable[str], limit: int) -> pd.DataFrame:
     frames = []
     for source in sources:
         if source not in FETCHERS:
             raise ValueError(f"unsupported news source: {source}")
-        frame = FETCHERS[source]()
+        try:
+            frame = FETCHERS[source]()
+        except Exception as exc:
+            print(f"WARNING source={source} failed: {exc}")
+            continue
         if not frame.empty:
             frames.append(frame)
     if not frames:
@@ -318,7 +534,7 @@ def run_news_crawler(config: NewsConfig) -> pd.DataFrame:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Crawl stock market news into MySQL")
-    parser.add_argument("--sources", default=",".join(DEFAULT_SOURCES), help="Comma-separated sources: eastmoney,ths,caixin")
+    parser.add_argument("--sources", default=",".join(DEFAULT_SOURCES), help="Comma-separated sources; default includes all configured sources")
     parser.add_argument("--limit", type=int, default=DEFAULT_NEWS_LIMIT, help="Maximum news rows to keep after de-duplication; <=0 means no limit")
     parser.add_argument("--output", help="Optional CSV path for crawled news rows")
     parser.add_argument("--no-save-db", action="store_true", help="Do not save news rows to MySQL")

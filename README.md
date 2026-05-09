@@ -436,6 +436,19 @@ Default sources:
 - `eastmoney`
 - `ths`
 - `caixin`
+- `yicai`: 第一财经
+- `eeo`: 经济观察网
+- `21jingji`: 21世纪经济报道
+- `caijing`: 财经网
+- `ce`: 中国经济网
+- `jwview`: 中新经纬
+- `stcn`: 证券时报网
+- `cnstock`: 中国证券网
+- `sina`: 新浪财经
+- `xueqiu`: 雪球
+- `jiemian`: 界面新闻
+- `hexun`: 和讯网
+- `stockstar`: 证券之星
 
 The program creates `news` automatically. Rows are de-duplicated by `NewsLink`.
 
@@ -458,7 +471,7 @@ python .\news_crawler.py
 Run selected sources and limit rows:
 
 ```powershell
-python .\news_crawler.py --sources eastmoney,ths --limit 100
+python .\news_crawler.py --sources eastmoney,ths,yicai,stcn,sina --limit 1000
 ```
 
 Run without saving to MySQL:
