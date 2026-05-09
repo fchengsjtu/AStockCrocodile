@@ -343,6 +343,7 @@ Available strategies:
 
 - `ma_bullish_v1`: the moving-average strategy above.
 - `news_hot_v1`: news hotspot strategy. It ranks stocks by concept heat from `news.ConceptHeat`, news-to-stock relation strength, source credibility, news heat, and recent stock performance. It recommends 3 to 5 stocks by default.
+- `weekly_volume_drop_v1`: weekly two-bar volume-drop strategy. It selects stocks whose latest two weekly K-lines fall consecutively, whose two-week average volume is at least 1.5 times the previous five-week average volume, and whose latest weekly close is at least 15% below the close before the two-week drop.
 
 Run selection for the latest trading day:
 
@@ -360,6 +361,12 @@ Run the news hotspot strategy:
 
 ```powershell
 python .\stock_selector.py --strategy news_hot_v1 --date 20260508
+```
+
+Run the weekly volume-drop strategy:
+
+```powershell
+python .\stock_selector.py --strategy weekly_volume_drop_v1 --date 20260508
 ```
 
 `backtest_strategy.py` runs a historical backtest with these definitions:

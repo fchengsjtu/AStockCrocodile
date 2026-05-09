@@ -193,6 +193,59 @@ class StrategyBacktestTests(unittest.TestCase):
         self.assertEqual(set(selected["StrategyName"]), {stock_selector.STRATEGY_NEWS_HOT})
         self.assertTrue((selected["Reason"].str.contains("news_hot")).all())
 
+    def test_compute_weekly_volume_drop_selection_marks_signal(self):
+        base = date(2026, 1, 2)
+        closes = [12.0, 12.2, 12.1, 12.3, 12.4, 12.0, 11.0, 10.0]
+        volumes = [1000, 1100, 1000, 1200, 1000, 3000, 3200, 1000]
+        rows = []
+        for i, (close, volume) in enumerate(zip(closes, volumes)):
+            rows.append(
+                {
+                    "SCode": "000001",
+                    "SName": "Signal",
+                    "TradeDate": base + timedelta(days=i * 7),
+                    "Open": close + 0.2,
+                    "Close": close,
+                    "High": close + 0.5,
+                    "Low": close - 0.5,
+                    "Amount": volume * close / 100,
+                    "Volume": volume,
+                }
+            )
+        df = pd.DataFrame(rows)
+
+        selected = stock_selector.compute_weekly_volume_drop_selection(df, base + timedelta(days=7 * 7))
+
+        self.assertEqual(len(selected), 1)
+        row = selected.iloc[0]
+        self.assertEqual(row["SCode"], "000001")
+        self.assertEqual(row["StrategyName"], stock_selector.STRATEGY_WEEKLY_VOLUME_DROP)
+        self.assertIn("weekly_volume_drop", row["Reason"])
+
+    def test_compute_weekly_volume_drop_selection_rejects_low_volume(self):
+        base = date(2026, 1, 2)
+        closes = [12.0, 12.2, 12.1, 12.3, 12.4, 12.0, 11.0, 10.0]
+        rows = []
+        for i, close in enumerate(closes):
+            rows.append(
+                {
+                    "SCode": "000001",
+                    "SName": "NoSignal",
+                    "TradeDate": base + timedelta(days=i * 7),
+                    "Open": close + 0.2,
+                    "Close": close,
+                    "High": close + 0.5,
+                    "Low": close - 0.5,
+                    "Amount": 1000.0,
+                    "Volume": 1000.0,
+                }
+            )
+        df = pd.DataFrame(rows)
+
+        selected = stock_selector.compute_weekly_volume_drop_selection(df, base + timedelta(days=7 * 7))
+
+        self.assertTrue(selected.empty)
+
 
 if __name__ == "__main__":
     unittest.main()

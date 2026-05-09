@@ -16,7 +16,8 @@ SELECTION_TABLE = "stockselection"
 DEFAULT_LOOKBACK_DAYS = 140
 STRATEGY_MA_BULLISH = "ma_bullish_v1"
 STRATEGY_NEWS_HOT = "news_hot_v1"
-STRATEGIES = (STRATEGY_MA_BULLISH, STRATEGY_NEWS_HOT)
+STRATEGY_WEEKLY_VOLUME_DROP = "weekly_volume_drop_v1"
+STRATEGIES = (STRATEGY_MA_BULLISH, STRATEGY_NEWS_HOT, STRATEGY_WEEKLY_VOLUME_DROP)
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,29 @@ def compute_strategy_frame(daily_df: pd.DataFrame, min_turnover_amount: float = 
     df["Selected"] = ma_ready & ma_bullish & price_confirm & liquidity & not_extreme
     df["Score"] = (df["Close"] / df["MA55"] - 1).where(df["MA55"] > 0)
     df["Reason"] = "MA5>MA8>MA13>MA34>MA55; close>MA5; bullish candle"
+    return df
+
+
+def load_weekly_window(conn: pymysql.connections.Connection, trade_date: date, lookback_weeks: int = 20) -> pd.DataFrame:
+    start_date = trade_date - timedelta(days=lookback_weeks * 7 + 14)
+    sql = """
+        SELECT wk.SCode, si.SName, DATE(wk.KTime) AS TradeDate,
+               wk.Open, wk.Close, wk.High, wk.Low, wk.Amount, wk.Volume
+        FROM wkandles wk
+        LEFT JOIN stockinfo si ON si.SCode = wk.SCode
+        WHERE wk.KType = 'W' AND wk.KTime >= %s AND wk.KTime < %s
+        ORDER BY wk.SCode, wk.KTime
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (start_date, trade_date + timedelta(days=1)))
+        rows = cur.fetchall()
+    columns = ["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"]
+    df = pd.DataFrame(rows, columns=columns)
+    if df.empty:
+        return df
+    df["TradeDate"] = pd.to_datetime(df["TradeDate"]).dt.date
+    for column in columns[3:]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
     return df
 
 
@@ -302,6 +326,66 @@ def compute_news_hot_selection(
     return selected.head(top_n)[columns]
 
 
+def compute_weekly_volume_drop_selection(
+    weekly_df: pd.DataFrame,
+    trade_date: date,
+    volume_multiplier: float = 1.5,
+    drop_threshold: float = 0.15,
+) -> pd.DataFrame:
+    columns = ["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"]
+    if weekly_df.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for symbol, group in weekly_df.groupby("SCode", sort=False):
+        frame = group.sort_values("TradeDate").reset_index(drop=True)
+        eligible = frame[frame["TradeDate"] <= trade_date]
+        if len(eligible) < 8:
+            continue
+        pos = int(eligible.index[-1])
+        if pos < 7:
+            continue
+
+        first_drop_week = frame.iloc[pos - 1]
+        second_drop_week = frame.iloc[pos]
+        before_drop_week = frame.iloc[pos - 2]
+        prior_five = frame.iloc[pos - 7 : pos - 2]
+        if len(prior_five) < 5:
+            continue
+
+        close_before = before_drop_week["Close"]
+        first_close = first_drop_week["Close"]
+        second_close = second_drop_week["Close"]
+        prior_volume_avg = prior_five["Volume"].mean(skipna=True)
+        drop_volume_avg = pd.Series([first_drop_week["Volume"], second_drop_week["Volume"]]).mean(skipna=True)
+        if pd.isna(close_before) or pd.isna(first_close) or pd.isna(second_close) or close_before <= 0:
+            continue
+        if pd.isna(prior_volume_avg) or prior_volume_avg <= 0 or pd.isna(drop_volume_avg):
+            continue
+
+        consecutive_down = first_close < close_before and second_close < first_close
+        volume_expanded = drop_volume_avg >= prior_volume_avg * volume_multiplier
+        drop_rate = second_close / close_before - 1
+        big_drop = drop_rate <= -drop_threshold
+        if consecutive_down and volume_expanded and big_drop:
+            volume_ratio = float(drop_volume_avg / prior_volume_avg)
+            score = abs(float(drop_rate)) * 0.7 + min(volume_ratio / volume_multiplier, 3.0) * 0.3
+            rows.append(
+                {
+                    "TradeDate": second_drop_week["TradeDate"],
+                    "SCode": symbol,
+                    "SName": second_drop_week["SName"],
+                    "Close": second_close,
+                    "Score": score,
+                    "Reason": f"weekly_volume_drop; drop={drop_rate:.2%}; volume_ratio={volume_ratio:.2f}",
+                    "StrategyName": STRATEGY_WEEKLY_VOLUME_DROP,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(rows, columns=columns).sort_values(["Score", "SCode"], ascending=[False, True]).reset_index(drop=True)
+
+
 def select_stocks_for_date(
     conn: pymysql.connections.Connection,
     trade_date: date,
@@ -312,6 +396,13 @@ def select_stocks_for_date(
     min_recommendations: int = 3,
     max_recommendations: int = 5,
 ) -> pd.DataFrame:
+    if strategy == STRATEGY_WEEKLY_VOLUME_DROP:
+        weekly_df = load_weekly_window(conn, trade_date)
+        selected = compute_weekly_volume_drop_selection(weekly_df, trade_date)
+        if limit is not None and limit > 0:
+            selected = selected.head(limit)
+        return selected
+
     daily_df = load_daily_window(conn, trade_date, DEFAULT_LOOKBACK_DAYS, ktype)
     if strategy == STRATEGY_NEWS_HOT:
         news_df = load_news_for_date(conn, trade_date)
