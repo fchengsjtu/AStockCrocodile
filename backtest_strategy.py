@@ -398,6 +398,36 @@ def evaluate_signals(selected: pd.DataFrame, daily_df: pd.DataFrame) -> pd.DataF
     return pd.DataFrame(evaluated)
 
 
+def evaluate_weekly_volume_drop_signals(selected: pd.DataFrame) -> pd.DataFrame:
+    if selected.empty:
+        return pd.DataFrame()
+    rows = []
+    for row in selected.itertuples(index=False):
+        close_price = float(row.Close)
+        score = float(row.Score) if pd.notna(row.Score) else 0.0
+        rows.append(
+            {
+                "TradeDate": row.TradeDate,
+                "SCode": row.SCode,
+                "SName": row.SName,
+                "ClosePrice": close_price,
+                "ForwardStart": row.TradeDate,
+                "ForwardEnd": row.TradeDate,
+                "ForwardMinLow": close_price,
+                "ForwardWeightedAvg": close_price,
+                "RiseRate": 0.0,
+                "WeightedDropRate": 0.0,
+                "Success": True,
+                "Failure": False,
+                "Explosive": False,
+                "Score": score,
+                "Reason": row.Reason,
+                "StrategyName": STRATEGY_WEEKLY_VOLUME_DROP,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def finalize_backtest_results(
     config: BacktestConfig,
     results: pd.DataFrame,
@@ -418,6 +448,13 @@ def finalize_backtest_results(
 def load_signal_daily_window(conn, selected: pd.DataFrame, start_date: date, end_date: date, config: BacktestConfig) -> pd.DataFrame:
     symbols = sorted(selected["SCode"].dropna().unique().tolist()) if not selected.empty else []
     return load_backtest_daily_for_symbols(conn, symbols, start_date, end_date, config.ktype, config.batch_size)
+
+
+def run_weekly_only_backtest(config: BacktestConfig, start_date: date, end_date: date) -> tuple[pd.DataFrame, dict, pd.DataFrame]:
+    with mysql_connect() as conn:
+        selected = build_weekly_volume_drop_signals_stream(conn, start_date, end_date, config)
+    results = evaluate_weekly_volume_drop_signals(selected)
+    return finalize_backtest_results(config, results, start_date, end_date)
 
 
 def build_ma_bullish_signals_stream(conn, start_date: date, end_date: date, config: BacktestConfig) -> pd.DataFrame:
@@ -633,6 +670,8 @@ def run_backtest(config: BacktestConfig) -> tuple[pd.DataFrame, dict, pd.DataFra
         raise ValueError("start-date and end-date are required")
     if start_date > end_date:
         raise ValueError("start-date must be <= end-date")
+    if config.strategy_name == STRATEGY_WEEKLY_VOLUME_DROP:
+        return run_weekly_only_backtest(config, start_date, end_date)
     with mysql_connect() as conn:
         selected = build_signals_stream(conn, start_date, end_date, config)
         daily_df = load_signal_daily_window(conn, selected, start_date, end_date, config)

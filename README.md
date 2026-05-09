@@ -392,7 +392,7 @@ python .\backtest_strategy.py --strategy-name weekly_volume_drop_v1 --start-date
 python .\backtest_strategy.py --strategy-name news_hot_v1 --start-date 20240101 --end-date 20241231
 ```
 
-Long-range backtests use a low-memory path for all strategies: symbols are scanned in batches, strategy signals are collected, and then only selected symbols' daily rows are loaded for the forward-window evaluation. The default batch size is `80`; use `--batch-size` to tune it for smaller servers.
+Long-range backtests use a low-memory path for all strategies: symbols are scanned in batches and strategy signals are collected. Daily strategies load only selected symbols' daily rows for the forward-window evaluation. `weekly_volume_drop_v1` is a weekly-only strategy and does not load `dkandles` during backtest. The default batch size is `80`; use `--batch-size` to tune it for smaller servers.
 
 ```powershell
 python .\backtest_strategy.py --strategy-name weekly_volume_drop_v1 --start-date 20100101 --end-date 20251231 --batch-size 50

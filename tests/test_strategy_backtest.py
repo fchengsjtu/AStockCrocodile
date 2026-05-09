@@ -1,6 +1,7 @@
 import unittest
 from datetime import date, timedelta
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -287,6 +288,76 @@ class StrategyBacktestTests(unittest.TestCase):
         )
 
         self.assertTrue(result.empty)
+
+    def test_weekly_volume_drop_backtest_does_not_load_daily_rows(self):
+        selected = pd.DataFrame(
+            [
+                {
+                    "TradeDate": date(2026, 1, 9),
+                    "SCode": "000001",
+                    "SName": "Signal",
+                    "Close": 10.0,
+                    "Score": 1.2,
+                    "Reason": "weekly_volume_drop",
+                    "StrategyName": stock_selector.STRATEGY_WEEKLY_VOLUME_DROP,
+                }
+            ]
+        )
+
+        results = backtest.evaluate_weekly_volume_drop_signals(selected)
+
+        self.assertEqual(len(results), 1)
+        row = results.iloc[0]
+        self.assertEqual(row["StrategyName"], stock_selector.STRATEGY_WEEKLY_VOLUME_DROP)
+        self.assertEqual(row["TradeDate"], date(2026, 1, 9))
+        self.assertTrue(row["Success"])
+        self.assertFalse(row["Failure"])
+
+    def test_run_backtest_weekly_strategy_does_not_call_daily_loader(self):
+        selected = pd.DataFrame(
+            [
+                {
+                    "TradeDate": date(2026, 1, 9),
+                    "SCode": "000001",
+                    "SName": "Signal",
+                    "Close": 10.0,
+                    "Score": 1.2,
+                    "Reason": "weekly_volume_drop",
+                    "StrategyName": stock_selector.STRATEGY_WEEKLY_VOLUME_DROP,
+                }
+            ]
+        )
+
+        class DummyConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        config = backtest.BacktestConfig(
+            start_date="20260101",
+            end_date="20260131",
+            min_turnover_amount=0.0,
+            limit_per_day=None,
+            ktype="D",
+            output=None,
+            strategy_name=stock_selector.STRATEGY_WEEKLY_VOLUME_DROP,
+            save_db=False,
+            min_recommendations=3,
+            max_recommendations=5,
+            batch_size=10,
+        )
+
+        with patch.object(backtest, "mysql_connect", return_value=DummyConnection()):
+            with patch.object(backtest, "build_weekly_volume_drop_signals_stream", return_value=selected):
+                with patch.object(backtest, "load_signal_daily_window", side_effect=AssertionError("daily loader called")):
+                    with patch.object(backtest, "load_backtest_daily_for_symbols", side_effect=AssertionError("daily rows loaded")):
+                        results, summary, stock_summary = backtest.run_backtest(config)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(summary["total"], 1)
+        self.assertEqual(len(stock_summary), 1)
 
     def test_iter_batches_uses_small_chunks(self):
         batches = list(backtest.iter_batches(["000001", "000002", "000003"], 2))
