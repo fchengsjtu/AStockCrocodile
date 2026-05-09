@@ -7,6 +7,33 @@ import a_share_crawler as crawler
 
 
 class ExRightsTests(unittest.TestCase):
+
+    def test_normalize_tencent_kline_rows_maps_amount_and_volume(self):
+        rows = [
+            [
+                "2026-05-08",
+                "11.34",
+                "11.30",
+                "11.42",
+                "11.30",
+                "798820.00",
+                {},
+                "0.41",
+                "90573.78",
+                "",
+            ]
+        ]
+
+        df = crawler.normalize_tencent_kline_rows(rows, symbol="000001", ktype="D")
+
+        self.assertEqual(len(df), 1)
+        row = df.iloc[0]
+        self.assertEqual(row["SCode"], "000001")
+        self.assertEqual(row["KType"], "D")
+        self.assertEqual(row["Volume"], 798820.00)
+        self.assertEqual(row["Amount"], 90573.78)
+        self.assertEqual(row["KTime"].hour, 15)
+
     def test_parse_tencent_exrights_content(self):
         bonus, transfer, cash = crawler.parse_tencent_exrights_content("10\u90016\u80a1, 10\u8f6c2\u80a1, 10\u6d3e1.7\u5143")
 

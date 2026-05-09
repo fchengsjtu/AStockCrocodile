@@ -320,55 +320,92 @@ def update_stock_latest(conn: pymysql.connections.Connection, symbol: str, lates
     conn.commit()
 
 
+def normalize_tencent_kline_rows(rows: list, symbol: str, ktype: str) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    parsed_rows = []
+    for row in rows:
+        if len(row) < 6:
+            continue
+        parsed_rows.append(
+            {
+                "KTime": row[0],
+                "Open": row[1],
+                "Close": row[2],
+                "High": row[3],
+                "Low": row[4],
+                "Volume": row[5],
+                "Amount": row[8] if len(row) > 8 else None,
+            }
+        )
+    if not parsed_rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(parsed_rows)
+    df["SCode"] = normalize_symbol(symbol)
+    df["KType"] = ktype
+    df["KTime"] = pd.to_datetime(df["KTime"], errors="coerce").dt.normalize() + pd.Timedelta(hours=15)
+    for column in ("Open", "Close", "High", "Low", "Volume", "Amount"):
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    df = df.dropna(subset=["KTime", "Open", "Close", "High", "Low", "Volume"])
+    df = df[df["KTime"] >= pd.Timestamp("2010-01-01")]
+    return df.sort_values("KTime").drop_duplicates(subset=["SCode", "KType", "KTime"], keep="last")
+
+
 def fetch_daily_from_tencent(symbol: str, cfg: CrawlConfig) -> pd.DataFrame:
+    from akshare.utils import demjson
+
     start_date = effective_full_start_date(cfg.start_date)
     end_date = clean_yyyymmdd(cfg.end_date)
     if start_date > end_date:
         return pd.DataFrame()
 
-    for attempt in range(1, cfg.retries + 1):
-        try:
-            df = ak.stock_zh_a_hist_tx(
-                symbol=tx_symbol(symbol),
-                start_date=start_date,
-                end_date=end_date,
-                adjust=cfg.adjust,
-                timeout=20,
-            )
-            break
-        except Exception as exc:
-            if attempt == cfg.retries:
-                logging.error("daily %s Tencent fetch failed after %s attempts: %s", symbol, cfg.retries, exc)
-                return pd.DataFrame()
-            wait_seconds = min(30, attempt * 3)
-            logging.warning("daily %s Tencent fetch failed on attempt %s; retrying in %s seconds: %s", symbol, attempt, wait_seconds, exc)
-            time.sleep(wait_seconds)
-    else:
-        return pd.DataFrame()
+    tx_code = tx_symbol(symbol)
+    start_year = int(start_date[:4])
+    end_year = int(end_date[:4])
+    url = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
+    rows: list = []
 
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    df = df.rename(
-        columns={
-            "date": "KTime",
-            "open": "Open",
-            "close": "Close",
-            "high": "High",
-            "low": "Low",
-            "amount": "Volume",
+    for year in range(start_year, end_year + 1):
+        params = {
+            "_var": f"kline_day{cfg.adjust}{year}",
+            "param": f"{tx_code},day,{year}-01-01,{year + 1}-12-31,640,{cfg.adjust}",
+            "r": "0.1",
         }
-    )
-    df["SCode"] = symbol
-    df["KType"] = cfg.ktype
-    df["KTime"] = pd.to_datetime(df["KTime"], errors="coerce").dt.normalize() + pd.Timedelta(hours=15)
-    for column in ("Open", "Close", "High", "Low", "Volume"):
-        df[column] = pd.to_numeric(df[column], errors="coerce")
-    df["Amount"] = 0
-    df = df.dropna(subset=["KTime", "Open", "Close", "High", "Low", "Volume"])
-    df = df[df["KTime"] >= pd.Timestamp("2010-01-01")]
-    df = df.sort_values("KTime").drop_duplicates(subset=["SCode", "KType", "KTime"], keep="last")
-    return df
+        data = None
+        for attempt in range(1, cfg.retries + 1):
+            try:
+                response = requests.get(url, params=params, timeout=20)
+                response.raise_for_status()
+                data_text = response.text
+                payload = data_text[data_text.find("={") + 1 :] if "={" in data_text else data_text[data_text.find("{") :]
+                data = demjson.decode(payload)
+                break
+            except Exception as exc:
+                if attempt == cfg.retries:
+                    logging.error("daily %s Tencent fetch failed for %s after %s attempts: %s", symbol, year, cfg.retries, exc)
+                    break
+                wait_seconds = min(30, attempt * 3)
+                logging.warning("daily %s Tencent fetch failed for %s on attempt %s; retrying in %s seconds: %s", symbol, year, attempt, wait_seconds, exc)
+                time.sleep(wait_seconds)
+        if data is None:
+            continue
+
+        data_json = (data.get("data") or {}).get(tx_code) or {}
+        if cfg.adjust == "qfq":
+            year_rows = data_json.get("qfqday") or data_json.get("day") or []
+        elif cfg.adjust == "hfq":
+            year_rows = data_json.get("hfqday") or data_json.get("day") or []
+        else:
+            year_rows = data_json.get("day") or []
+        rows.extend(year_rows)
+
+    df = normalize_tencent_kline_rows(rows, symbol=symbol, ktype=cfg.ktype)
+    if df.empty:
+        return df
+    start_ts = pd.to_datetime(start_date, format="%Y%m%d")
+    end_ts = pd.to_datetime(end_date, format="%Y%m%d") + pd.Timedelta(hours=23, minutes=59, seconds=59)
+    return df[(df["KTime"] >= start_ts) & (df["KTime"] <= end_ts)]
 
 
 def load_ma_warmup(conn: pymysql.connections.Connection, symbol: str, ktype: str, before_date: str) -> pd.DataFrame:
