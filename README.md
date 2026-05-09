@@ -375,6 +375,33 @@ python .\backtest_strategy.py --start-date 20240101 --end-date 20241231 --no-sav
 
 The output summary includes total selections, success rate, failure rate, and explosive rate. The optional CSV stores detailed rows for each evaluated selection.
 
+## K-line Statistics
+
+`kline_statistics.py` computes statistics from existing daily rows in `dkandles` and writes matched rows to MySQL table `klinestatistics`.
+
+The default statistic type is `short_term_surge_3d_20pct`: the close price on the 3rd trading day after the start-rise date is at least 20% above the start-rise date close.
+
+Stored fields include:
+
+- `SCode`
+- `SName`
+- `StartRiseDate`: 起涨点日期
+- `PrevTradeDate`: 起涨点前一个交易日
+- `GainRate`: 起涨点之后第 3 个交易日相对起涨点日期收盘价的涨幅
+- `StatType`: 统计类型
+
+Run K-line statistics:
+
+```powershell
+python .\kline_statistics.py --start-date 20240101 --end-date 20241231
+```
+
+Run without saving to MySQL:
+
+```powershell
+python .\kline_statistics.py --start-date 20240101 --end-date 20241231 --no-save-db
+```
+
 ## Database Writes
 
 The crawler writes to:
