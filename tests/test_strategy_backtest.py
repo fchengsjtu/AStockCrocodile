@@ -112,6 +112,33 @@ class StrategyBacktestTests(unittest.TestCase):
         self.assertAlmostEqual(first["AvgDropRate"], -0.005)
         self.assertEqual(first["ExplosiveRate"], 0.0)
 
+    def test_summarize_results_by_selection_keeps_range_and_stores_selection_date(self):
+        results = pd.DataFrame(
+            [
+                {
+                    "SCode": "000001",
+                    "StrategyName": stock_selector.STRATEGY_WEEKLY_VOLUME_DROP,
+                    "TradeDate": date(2026, 1, 9),
+                    "ForwardEnd": date(2026, 1, 21),
+                    "Success": True,
+                    "Failure": False,
+                    "Explosive": False,
+                    "RiseRate": 0.03,
+                    "WeightedDropRate": 0.01,
+                }
+            ]
+        )
+
+        summary = backtest.summarize_results_by_selection(results, date(2026, 1, 1), date(2026, 1, 31))
+
+        row = summary.iloc[0]
+        self.assertEqual(row["StartDate"], date(2026, 1, 1))
+        self.assertEqual(row["EndDate"], date(2026, 1, 31))
+        self.assertEqual(row["SelectionDate"], date(2026, 1, 9))
+        self.assertEqual(row["SampleCount"], 1)
+        self.assertEqual(row["SuccessRate"], 1.0)
+        self.assertEqual(row["StrategyName"], stock_selector.STRATEGY_WEEKLY_VOLUME_DROP)
+
     def test_compute_strategy_frame_marks_default_signal(self):
         base = date(2026, 1, 1)
         rows = []

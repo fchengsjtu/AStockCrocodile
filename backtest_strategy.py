@@ -9,11 +9,21 @@ import pandas as pd
 import pymysql
 
 from a_share_crawler import DEFAULT_KTYPE, mysql_connect, none_if_nan
-from stock_selector import compute_strategy_frame, parse_date
+from stock_selector import (
+    STRATEGIES,
+    STRATEGY_MA_BULLISH,
+    STRATEGY_NEWS_HOT,
+    STRATEGY_WEEKLY_VOLUME_DROP,
+    compute_news_hot_selection,
+    compute_strategy_frame,
+    compute_weekly_volume_drop_selection,
+    load_news_for_date,
+    parse_date,
+)
 
 DEFAULT_LOOKBACK_DAYS = 90
 DEFAULT_FORWARD_DAYS = 16
-DEFAULT_STRATEGY_NAME = "ma_bullish_v1"
+DEFAULT_STRATEGY_NAME = STRATEGY_MA_BULLISH
 BACKTEST_RESULT_TABLE = "strategybacktestresults"
 
 
@@ -27,6 +37,8 @@ class BacktestConfig:
     output: str | None
     strategy_name: str
     save_db: bool
+    min_recommendations: int
+    max_recommendations: int
 
 
 def load_backtest_daily(conn, start_date: date, end_date: date, ktype: str) -> pd.DataFrame:
@@ -45,6 +57,30 @@ def load_backtest_daily(conn, start_date: date, end_date: date, ktype: str) -> p
         cur.execute(sql, (ktype, load_start, load_end + timedelta(days=1)))
         rows = cur.fetchall()
     columns = ["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume", "MA5", "MA8", "MA13", "MA34", "MA55"]
+    df = pd.DataFrame(rows, columns=columns)
+    if df.empty:
+        return df
+    df["TradeDate"] = pd.to_datetime(df["TradeDate"]).dt.date
+    for column in columns[3:]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df
+
+
+def load_backtest_weekly(conn, start_date: date, end_date: date) -> pd.DataFrame:
+    load_start = start_date - timedelta(days=70)
+    load_end = end_date + timedelta(days=7)
+    sql = """
+        SELECT wk.SCode, si.SName, DATE(wk.KTime) AS TradeDate,
+               wk.Open, wk.Close, wk.High, wk.Low, wk.Amount, wk.Volume
+        FROM wkandles wk
+        LEFT JOIN stockinfo si ON si.SCode = wk.SCode
+        WHERE wk.KType = 'W' AND wk.KTime >= %s AND wk.KTime < %s
+        ORDER BY wk.SCode, wk.KTime
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (load_start, load_end + timedelta(days=1)))
+        rows = cur.fetchall()
+    columns = ["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"]
     df = pd.DataFrame(rows, columns=columns)
     if df.empty:
         return df
@@ -73,6 +109,7 @@ def ensure_backtest_result_table(conn: pymysql.connections.Connection) -> None:
             StrategyName VARCHAR(64) NOT NULL,
             StartDate DATE NOT NULL,
             EndDate DATE NOT NULL,
+            SelectionDate DATE NULL,
             SampleCount INT NOT NULL,
             SuccessRate DECIMAL(18,6) NOT NULL,
             AvgRiseRate DECIMAL(18,6) NULL,
@@ -81,12 +118,24 @@ def ensure_backtest_result_table(conn: pymysql.connections.Connection) -> None:
             ExplosiveRate DECIMAL(18,6) NOT NULL,
             CreatedOn DATETIME NOT NULL,
             PRIMARY KEY (Id),
-            UNIQUE KEY ux_strategybacktest_code_strategy_range (SCode, StrategyName, StartDate, EndDate),
+            UNIQUE KEY ux_strategybacktest_code_strategy_selection (SCode, StrategyName, StartDate, EndDate, SelectionDate),
             KEY idx_strategybacktest_strategy (StrategyName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
     with conn.cursor() as cur:
         cur.execute(sql)
+        cur.execute(f"SHOW COLUMNS FROM {BACKTEST_RESULT_TABLE} LIKE 'SelectionDate'")
+        if cur.fetchone() is None:
+            cur.execute(f"ALTER TABLE {BACKTEST_RESULT_TABLE} ADD COLUMN SelectionDate DATE NULL AFTER EndDate")
+        cur.execute(f"SHOW INDEX FROM {BACKTEST_RESULT_TABLE} WHERE Key_name = 'ux_strategybacktest_code_strategy_range'")
+        if cur.fetchone() is not None:
+            cur.execute(f"ALTER TABLE {BACKTEST_RESULT_TABLE} DROP INDEX ux_strategybacktest_code_strategy_range")
+        cur.execute(f"SHOW INDEX FROM {BACKTEST_RESULT_TABLE} WHERE Key_name = 'ux_strategybacktest_code_strategy_selection'")
+        if cur.fetchone() is None:
+            cur.execute(
+                f"ALTER TABLE {BACKTEST_RESULT_TABLE} "
+                "ADD UNIQUE KEY ux_strategybacktest_code_strategy_selection (SCode, StrategyName, StartDate, EndDate, SelectionDate)"
+            )
     conn.commit()
 
 
@@ -105,6 +154,8 @@ def evaluate_selection(row, trade_frames: dict[str, pd.DataFrame]) -> dict | Non
         return None
     frame = trade_frames[symbol]
     matches = frame.index[frame["TradeDate"] == row.TradeDate].tolist()
+    if not matches:
+        matches = frame.index[frame["TradeDate"] >= row.TradeDate].tolist()
     if not matches:
         return None
     pos = matches[0]
@@ -136,6 +187,7 @@ def evaluate_selection(row, trade_frames: dict[str, pd.DataFrame]) -> dict | Non
         "Explosive": explosive,
         "Score": row.Score,
         "Reason": row.Reason,
+        "StrategyName": getattr(row, "StrategyName", DEFAULT_STRATEGY_NAME),
     }
 
 
@@ -146,7 +198,67 @@ def select_historical_signals(strategy_df: pd.DataFrame, start_date: date, end_d
     selected = selected.sort_values(["TradeDate", "Score", "Amount"], ascending=[True, False, False])
     if limit_per_day is not None and limit_per_day > 0:
         selected = selected.groupby("TradeDate", group_keys=False).head(limit_per_day)
+    selected["StrategyName"] = STRATEGY_MA_BULLISH
     return selected
+
+
+def build_ma_bullish_signals(daily_df: pd.DataFrame, start_date: date, end_date: date, config: BacktestConfig) -> pd.DataFrame:
+    strategy_df = compute_strategy_frame(daily_df, min_turnover_amount=config.min_turnover_amount)
+    selected = select_historical_signals(strategy_df, start_date, end_date, config.limit_per_day)
+    if selected.empty:
+        return selected
+    return selected[["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"]]
+
+
+def build_news_hot_signals(conn, daily_df: pd.DataFrame, start_date: date, end_date: date, config: BacktestConfig) -> pd.DataFrame:
+    if daily_df.empty:
+        return pd.DataFrame(columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])
+    frames = []
+    trade_dates = sorted(day for day in daily_df["TradeDate"].dropna().unique() if start_date <= day <= end_date)
+    for trade_date in trade_dates:
+        news_df = load_news_for_date(conn, trade_date)
+        selected = compute_news_hot_selection(
+            daily_df=daily_df,
+            news_df=news_df,
+            trade_date=trade_date,
+            min_recommendations=config.min_recommendations,
+            max_recommendations=config.max_recommendations,
+        )
+        if config.limit_per_day is not None and config.limit_per_day > 0:
+            selected = selected.head(config.limit_per_day)
+        if not selected.empty:
+            frames.append(selected)
+    if not frames:
+        return pd.DataFrame(columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])
+    return pd.concat(frames, ignore_index=True)
+
+
+def build_weekly_volume_drop_signals(weekly_df: pd.DataFrame, start_date: date, end_date: date, config: BacktestConfig) -> pd.DataFrame:
+    if weekly_df.empty:
+        return pd.DataFrame(columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])
+    frames = []
+    trade_dates = sorted(day for day in weekly_df["TradeDate"].dropna().unique() if start_date <= day <= end_date)
+    for trade_date in trade_dates:
+        selected = compute_weekly_volume_drop_selection(weekly_df, trade_date)
+        selected = selected[selected["TradeDate"] == trade_date].copy() if not selected.empty else selected
+        if config.limit_per_day is not None and config.limit_per_day > 0:
+            selected = selected.head(config.limit_per_day)
+        if not selected.empty:
+            frames.append(selected)
+    if not frames:
+        return pd.DataFrame(columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])
+    return pd.concat(frames, ignore_index=True)
+
+
+def build_backtest_signals(conn, daily_df: pd.DataFrame, start_date: date, end_date: date, config: BacktestConfig) -> pd.DataFrame:
+    if config.strategy_name == STRATEGY_MA_BULLISH:
+        return build_ma_bullish_signals(daily_df, start_date, end_date, config)
+    if config.strategy_name == STRATEGY_NEWS_HOT:
+        return build_news_hot_signals(conn, daily_df, start_date, end_date, config)
+    if config.strategy_name == STRATEGY_WEEKLY_VOLUME_DROP:
+        weekly_df = load_backtest_weekly(conn, start_date, end_date)
+        return build_weekly_volume_drop_signals(weekly_df, start_date, end_date, config)
+    raise ValueError(f"unsupported strategy: {config.strategy_name}")
 
 
 def summarize_results(results: pd.DataFrame) -> dict:
@@ -214,6 +326,42 @@ def summarize_results_by_stock(results: pd.DataFrame, strategy_name: str, start_
     return pd.DataFrame(rows, columns=columns)
 
 
+def summarize_results_by_selection(results: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:
+    columns = [
+        "SCode",
+        "StrategyName",
+        "StartDate",
+        "EndDate",
+        "SelectionDate",
+        "SampleCount",
+        "SuccessRate",
+        "AvgRiseRate",
+        "FailureRate",
+        "AvgDropRate",
+        "ExplosiveRate",
+    ]
+    if results.empty:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for row in results.itertuples(index=False):
+        rows.append(
+            {
+                "SCode": row.SCode,
+                "StrategyName": getattr(row, "StrategyName", DEFAULT_STRATEGY_NAME),
+                "StartDate": start_date,
+                "EndDate": end_date,
+                "SelectionDate": row.TradeDate,
+                "SampleCount": 1,
+                "SuccessRate": 1.0 if row.Success else 0.0,
+                "AvgRiseRate": row.RiseRate,
+                "FailureRate": 1.0 if row.Failure else 0.0,
+                "AvgDropRate": row.WeightedDropRate,
+                "ExplosiveRate": 1.0 if row.Explosive else 0.0,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def save_backtest_summary(
     conn: pymysql.connections.Connection,
     summary_df: pd.DataFrame,
@@ -224,12 +372,14 @@ def save_backtest_summary(
     now = datetime.now()
     rows = []
     for row in summary_df.itertuples(index=False):
+        selection_date = getattr(row, "SelectionDate", None)
         rows.append(
             (
                 row.SCode,
                 row.StrategyName,
                 row.StartDate,
                 row.EndDate,
+                selection_date,
                 row.SampleCount,
                 none_if_nan(row.SuccessRate),
                 none_if_nan(row.AvgRiseRate),
@@ -241,9 +391,10 @@ def save_backtest_summary(
         )
     sql = f"""
         INSERT INTO {BACKTEST_RESULT_TABLE}
-            (SCode, StrategyName, StartDate, EndDate, SampleCount, SuccessRate, AvgRiseRate, FailureRate, AvgDropRate, ExplosiveRate, CreatedOn)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (SCode, StrategyName, StartDate, EndDate, SelectionDate, SampleCount, SuccessRate, AvgRiseRate, FailureRate, AvgDropRate, ExplosiveRate, CreatedOn)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
+            SelectionDate = VALUES(SelectionDate),
             SampleCount = VALUES(SampleCount),
             SuccessRate = VALUES(SuccessRate),
             AvgRiseRate = VALUES(AvgRiseRate),
@@ -268,14 +419,7 @@ def run_backtest(config: BacktestConfig) -> tuple[pd.DataFrame, dict, pd.DataFra
 
     with mysql_connect() as conn:
         daily_df = load_backtest_daily(conn, start_date, end_date, config.ktype)
-    if daily_df.empty:
-        results = pd.DataFrame()
-        summary = summarize_results(results)
-        stock_summary = summarize_results_by_stock(results, config.strategy_name, start_date, end_date)
-        return results, summary, stock_summary
-
-    strategy_df = compute_strategy_frame(daily_df, min_turnover_amount=config.min_turnover_amount)
-    selected = select_historical_signals(strategy_df, start_date, end_date, config.limit_per_day)
+        selected = build_backtest_signals(conn, daily_df, start_date, end_date, config)
     trade_frames = build_trade_day_positions(daily_df)
     evaluated = []
     for row in selected.itertuples(index=False):
@@ -284,7 +428,7 @@ def run_backtest(config: BacktestConfig) -> tuple[pd.DataFrame, dict, pd.DataFra
             evaluated.append(item)
     results = pd.DataFrame(evaluated)
     summary = summarize_results(results)
-    stock_summary = summarize_results_by_stock(results, config.strategy_name, start_date, end_date)
+    stock_summary = summarize_results_by_selection(results, start_date, end_date)
     if config.output:
         results.to_csv(config.output, index=False, encoding="utf-8-sig")
     if config.save_db:
@@ -313,7 +457,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit-per-day", type=int, default=None, help="Maximum selected stocks per trade date")
     parser.add_argument("--ktype", default=DEFAULT_KTYPE)
     parser.add_argument("--output", help="Optional CSV path for detailed backtest rows")
-    parser.add_argument("--strategy-name", default=DEFAULT_STRATEGY_NAME, help="Strategy name stored with backtest summary")
+    parser.add_argument("--strategy-name", choices=STRATEGIES, default=DEFAULT_STRATEGY_NAME, help="Strategy to backtest")
+    parser.add_argument("--min-recommendations", type=int, default=3, help="Minimum recommendations for news_hot_v1")
+    parser.add_argument("--max-recommendations", type=int, default=5, help="Maximum recommendations for news_hot_v1")
     parser.add_argument("--no-save-db", action="store_true", help="Do not save per-stock backtest summary to MySQL")
     return parser
 
@@ -330,6 +476,8 @@ def main(argv: Iterable[str] | None = None) -> None:
             output=args.output,
             strategy_name=args.strategy_name,
             save_db=not args.no_save_db,
+            min_recommendations=args.min_recommendations,
+            max_recommendations=args.max_recommendations,
         )
     )
     print_summary(summary)
