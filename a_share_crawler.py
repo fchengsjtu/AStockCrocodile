@@ -233,12 +233,22 @@ def next_yyyymmdd(value: date | datetime | str | None) -> str | None:
     return (datetime.strptime(current, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
 
 
+def ensure_stockinfo_contenthash_default(conn: pymysql.connections.Connection) -> None:
+    with conn.cursor() as cur:
+        cur.execute("SHOW COLUMNS FROM stockinfo LIKE 'ContentHash'")
+        if cur.fetchone() is None:
+            return
+        cur.execute("UPDATE stockinfo SET ContentHash = '' WHERE ContentHash IS NULL")
+        cur.execute("ALTER TABLE stockinfo MODIFY COLUMN ContentHash CHAR(64) NOT NULL DEFAULT ''")
+    conn.commit()
+
+
 def upsert_stock_info(conn: pymysql.connections.Connection, stocks: pd.DataFrame) -> None:
+    ensure_stockinfo_contenthash_default(conn)
     sql = """
         INSERT INTO stockinfo (SCode, SName, IsIndex)
         VALUES (%s, %s, 0)
         ON DUPLICATE KEY UPDATE
-            ContentHash = VALUES(ContentHash),
             SName = VALUES(SName),
             IsIndex = COALESCE(IsIndex, VALUES(IsIndex))
     """
@@ -453,7 +463,7 @@ def ensure_exrights_table(conn: pymysql.connections.Connection) -> None:
         CREATE TABLE IF NOT EXISTS {EXRIGHTS_TABLE} (
             Id BIGINT NOT NULL AUTO_INCREMENT,
             SourceKey VARCHAR(96) NOT NULL,
-            ContentHash CHAR(64) NOT NULL,
+            ContentHash CHAR(64) NOT NULL DEFAULT '',
             SCode VARCHAR(10) NOT NULL,
             SName VARCHAR(64) NULL,
             ReportDate DATE NULL,
@@ -487,6 +497,9 @@ def ensure_exrights_table(conn: pymysql.connections.Connection) -> None:
         cur.execute(f"SHOW COLUMNS FROM {EXRIGHTS_TABLE} LIKE 'ContentHash'")
         if cur.fetchone() is None:
             cur.execute(f"ALTER TABLE {EXRIGHTS_TABLE} ADD COLUMN ContentHash CHAR(64) NOT NULL DEFAULT '' AFTER SourceKey")
+        else:
+            cur.execute(f"UPDATE {EXRIGHTS_TABLE} SET ContentHash = SourceKey WHERE ContentHash = '' OR ContentHash IS NULL")
+            cur.execute(f"ALTER TABLE {EXRIGHTS_TABLE} MODIFY COLUMN ContentHash CHAR(64) NOT NULL DEFAULT ''")
     conn.commit()
 
 

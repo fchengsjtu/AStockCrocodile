@@ -140,6 +140,85 @@ class ExRightsTests(unittest.TestCase):
         self.assertTrue(args.truncate)
         self.assertTrue(args.no_refresh_klines)
 
+
+    def test_stockinfo_upsert_does_not_write_contenthash(self):
+        class FakeCursor:
+            def __init__(self):
+                self.sql = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, sql, params=None):
+                self.sql.append(sql)
+                if "SHOW COLUMNS FROM stockinfo" in sql:
+                    self.fetchone_result = None
+
+            def fetchone(self):
+                return getattr(self, "fetchone_result", None)
+
+            def executemany(self, sql, rows):
+                self.sql.append(sql)
+
+        class FakeConn:
+            def __init__(self):
+                self.cursor_obj = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_obj
+
+            def commit(self):
+                pass
+
+        conn = FakeConn()
+        stocks = pd.DataFrame([{"code": "000001", "name": "Ping An Bank"}])
+
+        crawler.upsert_stock_info(conn, stocks)
+
+        stockinfo_sql = "\n".join(conn.cursor_obj.sql)
+        self.assertIn("INSERT INTO stockinfo", stockinfo_sql)
+        self.assertNotIn("ContentHash = VALUES(ContentHash)", stockinfo_sql)
+
+    def test_stockinfo_contenthash_default_is_fixed_when_column_exists(self):
+        class FakeCursor:
+            def __init__(self):
+                self.sql = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, sql, params=None):
+                self.sql.append(sql)
+
+            def fetchone(self):
+                return ("ContentHash", "char(64)", "NO", "", None, "")
+
+        class FakeConn:
+            def __init__(self):
+                self.cursor_obj = FakeCursor()
+                self.commits = 0
+
+            def cursor(self):
+                return self.cursor_obj
+
+            def commit(self):
+                self.commits += 1
+
+        conn = FakeConn()
+
+        crawler.ensure_stockinfo_contenthash_default(conn)
+
+        sql = "\n".join(conn.cursor_obj.sql)
+        self.assertIn("UPDATE stockinfo SET ContentHash = ''", sql)
+        self.assertIn("ALTER TABLE stockinfo MODIFY COLUMN ContentHash CHAR(64) NOT NULL DEFAULT ''", sql)
+        self.assertEqual(conn.commits, 1)
+
     def test_run_parser_defaults_to_qfq_only(self):
         args = crawler.build_parser().parse_args(["run"])
 
