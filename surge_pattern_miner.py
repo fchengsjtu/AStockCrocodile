@@ -492,8 +492,8 @@ def evaluate_patterns(
                     continue
                 scanned += 1
                 is_success = (symbol, item.TradeDate) in positive_keys
-                for pattern in iter_pattern_keys(features, config.max_pattern_size):
-                    if pattern not in target_patterns:
+                for pattern in target_patterns:
+                    if not set(pattern).issubset(features):
                         continue
                     counts[pattern][0] += 1
                     if is_success:

@@ -485,6 +485,7 @@ Set `DEEPSEEK_API_KEY` in the environment or in `env.txt`. Useful options:
 - `--training-mode summary`: keep the previous feature-summary training mode.
 - `--training-mode raw-kline`: use the new raw K-line mode; DeepSeek receives selected positive samples containing only 55 daily bars and 55 weekly bars ending at `SelectionDate`.
 - `--raw-sample-size 30`: number of positive raw K-line samples sent to DeepSeek in raw mode.
+- `--min-pattern-size 3 --max-pattern-size 8`: require each LLM pattern to contain at least 3 and at most 8 feature clauses.
 - `--candidate-count 80`: number of LLM candidate patterns to validate.
 - `--llm-response-file data\llm_patterns.json`: validate a saved LLM JSON response without calling the API.
 - `--api-base-url https://api.deepseek.com/v1`: override the DeepSeek-compatible endpoint.

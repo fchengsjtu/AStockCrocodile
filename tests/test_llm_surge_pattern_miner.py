@@ -11,9 +11,9 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
         response = json.dumps(
             {
                 "patterns": [
-                    {"name": "ok", "features": ["D_CLOSE_GT_MA5", "W_MA5_GT_MA13"]},
-                    {"name": "joined", "features": ["D_CLOSE_GT_MA5 && W_MA5_GT_MA13"]},
-                    {"name": "text", "pattern": "D_CLOSE_GT_MA5 && W_MA5_GT_MA13"},
+                    {"name": "ok", "features": ["D_CLOSE_GT_MA5", "W_MA5_GT_MA13", "D_RET_5_GE_5"]},
+                    {"name": "joined", "features": ["D_CLOSE_GT_MA5 && W_MA5_GT_MA13 && D_RET_5_GE_5"]},
+                    {"name": "text", "pattern": "D_CLOSE_GT_MA5 && W_MA5_GT_MA13 && D_RET_5_GE_5"},
                     {"name": "unknown", "features": ["D_CLOSE_GT_MA5", "NOT_A_FEATURE"]},
                     {"name": "too_big", "features": ["A", "B", "C"]},
                 ]
@@ -22,20 +22,32 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
 
         patterns = llm_surge_pattern_miner.parse_llm_patterns(
             response,
-            {"D_CLOSE_GT_MA5", "W_MA5_GT_MA13", "A", "B", "C"},
-            max_pattern_size=2,
+            {"D_CLOSE_GT_MA5", "W_MA5_GT_MA13", "D_RET_5_GE_5", "A", "B", "C"},
+            min_pattern_size=3,
+            max_pattern_size=8,
         )
 
-        self.assertEqual(patterns, [("D_CLOSE_GT_MA5", "W_MA5_GT_MA13")])
+        self.assertEqual(patterns, [("D_CLOSE_GT_MA5", "D_RET_5_GE_5", "W_MA5_GT_MA13"), ("A", "B", "C")])
 
     def test_fallback_patterns_from_counts_uses_high_support(self):
         patterns = llm_surge_pattern_miner.fallback_patterns_from_counts(
             Counter({("A", "B"): 5, ("C",): 3, ("A", "B", "C"): 10}),
-            max_pattern_size=2,
+            min_pattern_size=3,
+            max_pattern_size=8,
             limit=2,
         )
 
-        self.assertEqual(patterns, [("A", "B"), ("C",)])
+        self.assertEqual(patterns, [("A", "B", "C")])
+
+    def test_fallback_patterns_from_counts_builds_from_single_features(self):
+        patterns = llm_surge_pattern_miner.fallback_patterns_from_counts(
+            Counter({("A",): 5, ("B",): 4, ("C",): 3, ("D",): 2}),
+            min_pattern_size=3,
+            max_pattern_size=8,
+            limit=2,
+        )
+
+        self.assertEqual(patterns, [("A", "B", "C"), ("A", "B", "D")])
 
     def test_build_llm_prompt_contains_feature_summary(self):
         config = llm_surge_pattern_miner.LlmPatternConfig(
@@ -47,7 +59,8 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
             success_rates=(0.25, 0.5),
             min_sample_count=20,
             min_positive_support=5,
-            max_pattern_size=2,
+            min_pattern_size=3,
+            max_pattern_size=8,
             daily_window=56,
             weekly_window=56,
             batch_size=40,
@@ -89,7 +102,8 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
             success_rates=(0.25, 0.5),
             min_sample_count=20,
             min_positive_support=5,
-            max_pattern_size=2,
+            min_pattern_size=3,
+            max_pattern_size=8,
             daily_window=55,
             weekly_window=55,
             batch_size=40,
@@ -127,6 +141,15 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
         self.assertIn('"input_mode": "raw-kline"', prompt)
         self.assertIn('"daily_bars"', prompt)
         self.assertIn("D_CLOSE_GT_MA5", prompt)
+
+    def test_estimate_positive_support_uses_min_single_support_for_large_patterns(self):
+        support = llm_surge_pattern_miner.estimate_positive_support(
+            ("A", "B", "C"),
+            Counter({("A",): 9, ("B",): 7, ("C",): 5}),
+            Counter(),
+        )
+
+        self.assertEqual(support, 5)
 
 
 if __name__ == "__main__":

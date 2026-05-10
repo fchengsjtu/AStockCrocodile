@@ -9,6 +9,7 @@ import urllib.request
 from collections import Counter
 from dataclasses import dataclass
 from datetime import date, timedelta
+from itertools import combinations
 from typing import Iterable
 
 import pandas as pd
@@ -24,7 +25,6 @@ from surge_pattern_miner import (
     evaluate_patterns,
     extract_features_for_date,
     iter_batches,
-    iter_pattern_keys,
     load_kline_for_symbols,
     load_positive_events,
     make_frame_map,
@@ -41,6 +41,8 @@ DEFAULT_CANDIDATE_COUNT = 80
 DEFAULT_BATCH_SIZE = 40
 DEFAULT_API_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_API_KEY_ENV = "DEEPSEEK_API_KEY"
+DEFAULT_MIN_PATTERN_SIZE = 3
+DEFAULT_MAX_PATTERN_SIZE = 8
 TRAINING_MODE_SUMMARY = "summary"
 TRAINING_MODE_RAW_KLINE = "raw-kline"
 DEFAULT_RAW_KLINE_WINDOW = 55
@@ -57,6 +59,7 @@ class LlmPatternConfig:
     success_rates: tuple[float, ...]
     min_sample_count: int
     min_positive_support: int
+    min_pattern_size: int
     max_pattern_size: int
     daily_window: int
     weekly_window: int
@@ -123,8 +126,11 @@ def collect_positive_feature_summary(conn, positives: pd.DataFrame, config: LlmP
                 continue
             feature_rows += 1
             batch_feature_rows += 1
-            for pattern in iter_pattern_keys(features, config.max_pattern_size):
-                feature_counts[pattern] += 1
+            ordered_features = sorted(features)
+            for feature in ordered_features:
+                feature_counts[(feature,)] += 1
+            for pair in combinations(ordered_features, 2):
+                feature_counts[pair] += 1
         print(
             f"llm summary batch {batch_index} symbols={len(batch)} events={len(batch_events)} "
             f"feature_rows={batch_feature_rows} candidate_patterns={len(feature_counts)}",
@@ -220,8 +226,8 @@ def collect_positive_kline_samples(conn, positives: pd.DataFrame, config: LlmPat
             features = extract_features_for_date(daily_frame, weekly_frame, event.SelectionDate, config.daily_window, config.weekly_window)
             if not features:
                 continue
-            for pattern in iter_pattern_keys(features, config.max_pattern_size):
-                feature_counts[pattern] += 1
+            for feature in sorted(features):
+                feature_counts[(feature,)] += 1
             samples.append(
                 {
                     "scode": event.SCode,
@@ -261,6 +267,7 @@ def build_llm_prompt(
             "weekly": f"SelectionDate plus previous {config.weekly_window - 1} weekly bars",
         },
         "positive_feature_rows": feature_rows,
+        "min_features_per_pattern": config.min_pattern_size,
         "max_features_per_pattern": config.max_pattern_size,
         "candidate_count": config.candidate_count,
         "top_single_features": _format_counter(single_counts, feature_rows, config.top_features),
@@ -271,7 +278,7 @@ def build_llm_prompt(
         "Propose diverse, testable pattern candidates using ONLY exact feature tokens present in the JSON. "
         "Prefer robust combinations that could generalize, not merely the highest-support pairs. "
         "Return strict JSON only, with this schema: "
-        '{"patterns":[{"name":"short_name","features":["TOKEN_A","TOKEN_B"],"rationale":"brief reason"}]}. '
+        '{"patterns":[{"name":"short_name","features":["TOKEN_A","TOKEN_B","TOKEN_C"],"rationale":"brief reason"}]}. '
         "Do not include markdown or extra commentary.\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
@@ -298,6 +305,8 @@ def build_raw_kline_llm_prompt(
             "weekly": f"{config.weekly_window} weekly bars ending at SelectionDate, latest weekly bar on or before SelectionDate included",
         },
         "candidate_count": config.candidate_count,
+        "min_features_per_pattern": config.min_pattern_size,
+        "max_features_per_pattern": config.max_pattern_size,
         "allowed_feature_tokens": valid_features,
         "positive_samples": samples,
     }
@@ -306,7 +315,7 @@ def build_raw_kline_llm_prompt(
         "Study ONLY the raw daily_bars and weekly_bars in the positive samples, then propose diverse setup patterns. "
         "For validation compatibility, every returned feature must be chosen exactly from allowed_feature_tokens. "
         "Return strict JSON only, with this schema: "
-        '{"patterns":[{"name":"short_name","features":["TOKEN_A","TOKEN_B"],"rationale":"brief reason from raw K-line windows"}]}. '
+        '{"patterns":[{"name":"short_name","features":["TOKEN_A","TOKEN_B","TOKEN_C"],"rationale":"brief reason from raw K-line windows"}]}. '
         "Do not include markdown or extra commentary.\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
@@ -356,7 +365,7 @@ def extract_json_object(text: str) -> dict:
     return json.loads(stripped)
 
 
-def parse_llm_patterns(response_text: str, valid_features: set[str], max_pattern_size: int) -> list[tuple[str, ...]]:
+def parse_llm_patterns(response_text: str, valid_features: set[str], min_pattern_size: int, max_pattern_size: int) -> list[tuple[str, ...]]:
     payload = extract_json_object(response_text)
     patterns = []
     seen = set()
@@ -372,7 +381,7 @@ def parse_llm_patterns(response_text: str, valid_features: set[str], max_pattern
                 continue
             expanded_features.extend(part.strip() for part in feature.split("&&") if part.strip())
         features = tuple(feature for feature in expanded_features if feature in valid_features)
-        if not features or len(features) > max_pattern_size:
+        if len(features) < min_pattern_size or len(features) > max_pattern_size:
             continue
         features = tuple(sorted(set(features)))
         if len(features) != len(expanded_features):
@@ -383,13 +392,29 @@ def parse_llm_patterns(response_text: str, valid_features: set[str], max_pattern
     return patterns
 
 
-def fallback_patterns_from_counts(feature_counts: Counter, max_pattern_size: int, limit: int) -> list[tuple[str, ...]]:
+def fallback_patterns_from_counts(feature_counts: Counter, min_pattern_size: int, max_pattern_size: int, limit: int) -> list[tuple[str, ...]]:
     patterns = [
         pattern
         for pattern, _ in feature_counts.most_common()
-        if pattern and len(pattern) <= max_pattern_size
+        if min_pattern_size <= len(pattern) <= max_pattern_size
     ]
-    return patterns[:limit]
+    if patterns:
+        return patterns[:limit]
+    top_features = [pattern[0] for pattern, _ in feature_counts.most_common() if len(pattern) == 1]
+    fallback = []
+    for size in range(min_pattern_size, max_pattern_size + 1):
+        for pattern in combinations(top_features, size):
+            fallback.append(tuple(sorted(pattern)))
+            if len(fallback) >= limit:
+                return fallback
+    return fallback
+
+
+def estimate_positive_support(pattern: tuple[str, ...], single_counts: Counter, pair_counts: Counter) -> int:
+    if pattern in pair_counts:
+        return int(pair_counts[pattern])
+    supports = [int(single_counts.get((feature,), 0)) for feature in pattern]
+    return min(supports) if supports else 0
 
 
 def load_or_generate_llm_patterns(
@@ -418,7 +443,7 @@ def load_or_generate_llm_patterns(
             response_text = file.read()
     else:
         response_text = call_deepseek_chat(prompt, config)
-    patterns = parse_llm_patterns(response_text, valid_features, config.max_pattern_size)
+    patterns = parse_llm_patterns(response_text, valid_features, config.min_pattern_size, config.max_pattern_size)
     if not patterns:
         raise RuntimeError("LLM did not return any valid patterns using known feature tokens")
     print(f"llm candidate patterns={len(patterns)}", flush=True)
@@ -449,9 +474,9 @@ def load_or_generate_raw_kline_patterns(
             response_text = file.read()
     else:
         response_text = call_deepseek_chat(prompt, config)
-    patterns = parse_llm_patterns(response_text, valid_features, config.max_pattern_size)
+    patterns = parse_llm_patterns(response_text, valid_features, config.min_pattern_size, config.max_pattern_size)
     if not patterns:
-        patterns = fallback_patterns_from_counts(feature_counts, config.max_pattern_size, config.candidate_count)
+        patterns = fallback_patterns_from_counts(feature_counts, config.min_pattern_size, config.max_pattern_size, config.candidate_count)
         if not patterns:
             raise RuntimeError("LLM did not return any valid raw-kline patterns using known feature tokens")
         print(f"LLM returned no valid raw-kline patterns; using {len(patterns)} high-support fallback patterns", flush=True)
@@ -535,7 +560,7 @@ def run_llm_pattern_mining(config: LlmPatternConfig) -> pd.DataFrame:
             )
         positive_support = Counter()
         for pattern in llm_patterns:
-            positive_support[pattern] = single_counts.get(pattern, pair_counts.get(pattern, 0))
+            positive_support[pattern] = estimate_positive_support(pattern, single_counts, pair_counts)
         patterns = evaluate_patterns(
             conn,
             test_positives,
@@ -570,7 +595,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--success-rates", type=parse_success_rates, default=DEFAULT_SUCCESS_RATES)
     parser.add_argument("--min-sample-count", type=int, default=20)
     parser.add_argument("--min-positive-support", type=int, default=5)
-    parser.add_argument("--max-pattern-size", type=int, default=2)
+    parser.add_argument("--min-pattern-size", type=int, default=DEFAULT_MIN_PATTERN_SIZE, help="Minimum number of feature clauses in each LLM pattern")
+    parser.add_argument("--max-pattern-size", type=int, default=DEFAULT_MAX_PATTERN_SIZE, help="Maximum number of feature clauses in each LLM pattern")
     parser.add_argument("--training-mode", choices=(TRAINING_MODE_SUMMARY, TRAINING_MODE_RAW_KLINE), default=TRAINING_MODE_SUMMARY, help="summary keeps the old feature-summary mode; raw-kline sends raw 55 daily/weekly bars to DeepSeek")
     parser.add_argument("--daily-window", type=int)
     parser.add_argument("--weekly-window", type=int)
@@ -603,7 +629,8 @@ def main(argv: Iterable[str] | None = None) -> None:
             success_rates=args.success_rates,
             min_sample_count=max(1, args.min_sample_count),
             min_positive_support=max(1, args.min_positive_support),
-            max_pattern_size=max(1, args.max_pattern_size),
+            min_pattern_size=max(1, args.min_pattern_size),
+            max_pattern_size=max(max(1, args.min_pattern_size), args.max_pattern_size),
             daily_window=max(2, daily_window),
             weekly_window=max(2, weekly_window),
             batch_size=max(1, args.batch_size),
