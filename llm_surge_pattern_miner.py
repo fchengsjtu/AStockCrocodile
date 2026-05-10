@@ -36,9 +36,11 @@ DEFAULT_TEST_START_DATE = "20260101"
 DEFAULT_TEST_END_DATE = "20260430"
 DEFAULT_TRAIN_START_DATE = "20100101"
 DEFAULT_SUCCESS_RATES = (0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "deepseek-chat"
 DEFAULT_CANDIDATE_COUNT = 80
 DEFAULT_BATCH_SIZE = 40
+DEFAULT_API_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_API_KEY_ENV = "DEEPSEEK_API_KEY"
 
 
 @dataclass(frozen=True)
@@ -177,7 +179,7 @@ def build_llm_prompt(
     )
 
 
-def call_openai_compatible_chat(prompt: str, config: LlmPatternConfig) -> str:
+def call_deepseek_chat(prompt: str, config: LlmPatternConfig) -> str:
     load_env_file()
     api_key = os.environ.get(config.api_key_env)
     if not api_key:
@@ -264,7 +266,7 @@ def load_or_generate_llm_patterns(
         with open(config.llm_response_file, "r", encoding="utf-8-sig") as file:
             response_text = file.read()
     else:
-        response_text = call_openai_compatible_chat(prompt, config)
+        response_text = call_deepseek_chat(prompt, config)
     patterns = parse_llm_patterns(response_text, valid_features, config.max_pattern_size)
     if not patterns:
         raise RuntimeError("LLM did not return any valid patterns using known feature tokens")
@@ -348,7 +350,7 @@ def run_llm_pattern_mining(config: LlmPatternConfig) -> pd.DataFrame:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Use an LLM to propose surge setup patterns, then validate them on historical K-lines")
+    parser = argparse.ArgumentParser(description="Use DeepSeek to propose surge setup patterns, then validate them on historical K-lines")
     parser.add_argument("--test-start-date", default=DEFAULT_TEST_START_DATE, help="Test selection date start")
     parser.add_argument("--test-end-date", default=DEFAULT_TEST_END_DATE, help="Test selection date end")
     parser.add_argument("--train-start-date", default=DEFAULT_TRAIN_START_DATE, help="Training selection date start")
@@ -361,12 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--daily-window", type=int, default=DEFAULT_DAILY_WINDOW)
     parser.add_argument("--weekly-window", type=int, default=DEFAULT_WEEKLY_WINDOW)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--model", default=os.environ.get("OPENAI_MODEL", DEFAULT_MODEL))
+    parser.add_argument("--model", default=os.environ.get("DEEPSEEK_MODEL", DEFAULT_MODEL))
     parser.add_argument("--candidate-count", type=int, default=DEFAULT_CANDIDATE_COUNT)
     parser.add_argument("--top-features", type=int, default=80)
     parser.add_argument("--top-pairs", type=int, default=120)
-    parser.add_argument("--api-base-url", default=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"))
-    parser.add_argument("--api-key-env", default="OPENAI_API_KEY")
+    parser.add_argument("--api-base-url", default=os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_API_BASE_URL))
+    parser.add_argument("--api-key-env", default=DEFAULT_API_KEY_ENV)
     parser.add_argument("--llm-response-file", help="Use a saved JSON response instead of calling the LLM API")
     parser.add_argument("--output", help="Optional CSV path for retained patterns")
     parser.add_argument("--no-save-db", action="store_true")

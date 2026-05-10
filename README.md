@@ -471,20 +471,20 @@ Useful options:
 - `--batch-size 40`: reduce this on small servers.
 - `--output data\surge_patterns.csv`: also write retained patterns to CSV.
 
-Mine LLM-proposed surge setup patterns and validate them on the same test set:
+Mine DeepSeek-proposed surge setup patterns and validate them on the same test set:
 
 ```powershell
 python .\llm_surge_pattern_miner.py --test-start-date 20260101 --test-end-date 20260430
 ```
 
-`llm_surge_pattern_miner.py` first summarizes the positive-sample feature distribution before `20260101`, asks an OpenAI-compatible chat model to propose diverse candidate patterns using exact feature tokens, then validates those patterns on all test-set candidate dates from `20260101` through `20260430`. Retained patterns for success-rate thresholds `25%`, `30%`, `35%`, `40%`, `45%`, and `50%` are written to `surgepatterns`.
+`llm_surge_pattern_miner.py` first summarizes the positive-sample feature distribution before `20260101`, asks DeepSeek to propose diverse candidate patterns using exact feature tokens, then validates those patterns on all test-set candidate dates from `20260101` through `20260430`. Retained patterns for success-rate thresholds `25%`, `30%`, `35%`, `40%`, `45%`, and `50%` are written to `surgepatterns`.
 
-Set `OPENAI_API_KEY` in the environment or in `env.txt`. Useful options:
+Set `DEEPSEEK_API_KEY` in the environment or in `env.txt`. Useful options:
 
-- `--model gpt-4.1-mini`: choose the LLM model.
+- `--model deepseek-chat`: choose the DeepSeek model.
 - `--candidate-count 80`: number of LLM candidate patterns to validate.
 - `--llm-response-file data\llm_patterns.json`: validate a saved LLM JSON response without calling the API.
-- `--api-base-url https://api.openai.com/v1`: use an OpenAI-compatible endpoint.
+- `--api-base-url https://api.deepseek.com/v1`: override the DeepSeek-compatible endpoint.
 
 ## News Crawler
 
