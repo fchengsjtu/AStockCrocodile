@@ -414,6 +414,8 @@ The default statistic type is `short_term_surge_3d_20pct`: the close price on th
 
 Long-range statistics use a low-memory path: symbols are loaded in batches, each batch is queried, computed, and written before the next batch starts. The default batch size is `80`; use `--batch-size` on small servers.
 
+After candidate rows are generated, the script scans the `news` table for internet news around `StartRiseDate`. If news within the window mentions the stock and contains message-driven keywords such as announcements, restructuring, contracts, orders, earnings, approvals, or policy catalysts, that candidate is excluded before it is written to `klinestatistics`. The default news window is 3 days before and after `StartRiseDate`.
+
 Stored fields include:
 
 - `SCode`
@@ -433,6 +435,12 @@ Run with a smaller batch size:
 
 ```powershell
 python .\kline_statistics.py --start-date 20200101 --end-date 20251231 --batch-size 50
+```
+
+Run without message-driven news exclusion:
+
+```powershell
+python .\kline_statistics.py --start-date 20200101 --end-date 20251231 --no-news-filter
 ```
 
 Run without saving to MySQL:

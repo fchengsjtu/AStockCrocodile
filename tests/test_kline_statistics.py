@@ -79,6 +79,68 @@ class KlineStatisticsTests(unittest.TestCase):
 
         self.assertTrue(result.empty)
 
+    def test_message_driven_news_requires_stock_mention_and_keyword(self):
+        self.assertTrue(
+            kline_statistics.has_message_driven_news(
+                "000001",
+                "平安银行",
+                "平安银行公告业绩预增",
+                "",
+            )
+        )
+        self.assertFalse(
+            kline_statistics.has_message_driven_news(
+                "000001",
+                "平安银行",
+                "银行板块上涨",
+                "没有个股消息",
+            )
+        )
+        self.assertFalse(
+            kline_statistics.has_message_driven_news(
+                "000001",
+                "平安银行",
+                "某公司公告重大重组",
+                "",
+            )
+        )
+
+    def test_filter_message_driven_surges_excludes_matching_news(self):
+        stats = pd.DataFrame(
+            [
+                {
+                    "SCode": "000001",
+                    "SName": "平安银行",
+                    "StartRiseDate": date(2026, 1, 5),
+                    "PrevTradeDate": date(2026, 1, 4),
+                    "GainRate": 0.25,
+                    "StatType": kline_statistics.SHORT_TERM_SURGE_TYPE,
+                },
+                {
+                    "SCode": "000002",
+                    "SName": "万科A",
+                    "StartRiseDate": date(2026, 1, 5),
+                    "PrevTradeDate": date(2026, 1, 4),
+                    "GainRate": 0.22,
+                    "StatType": kline_statistics.SHORT_TERM_SURGE_TYPE,
+                },
+            ]
+        )
+        news = pd.DataFrame(
+            [
+                {
+                    "PublishDate": date(2026, 1, 6),
+                    "Title": "平安银行公告重大合同",
+                    "Summary": "",
+                }
+            ]
+        )
+
+        filtered, excluded = kline_statistics.filter_message_driven_surges(stats, news, 3)
+
+        self.assertEqual(excluded, 1)
+        self.assertEqual(filtered["SCode"].tolist(), ["000002"])
+
 
 if __name__ == "__main__":
     unittest.main()

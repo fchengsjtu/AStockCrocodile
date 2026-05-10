@@ -14,6 +14,35 @@ from stock_selector import parse_date
 KLINE_STATISTICS_TABLE = "klinestatistics"
 SHORT_TERM_SURGE_TYPE = "short_term_surge_3d_20pct"
 DEFAULT_SYMBOL_BATCH_SIZE = 80
+DEFAULT_NEWS_WINDOW_DAYS = 3
+MESSAGE_DRIVEN_KEYWORDS = (
+    "公告",
+    "利好",
+    "重大",
+    "重组",
+    "并购",
+    "收购",
+    "借壳",
+    "中标",
+    "合同",
+    "订单",
+    "业绩",
+    "预增",
+    "扭亏",
+    "涨价",
+    "政策",
+    "获批",
+    "批复",
+    "新药",
+    "临床",
+    "复牌",
+    "停牌",
+    "回购",
+    "增持",
+    "股权",
+    "实控人",
+    "注入",
+)
 
 
 @dataclass(frozen=True)
@@ -27,6 +56,8 @@ class KlineStatisticsConfig:
     output: str | None
     save_db: bool
     batch_size: int
+    news_filter: bool
+    news_window_days: int
 
 
 def ensure_kline_statistics_table(conn: pymysql.connections.Connection) -> None:
@@ -169,6 +200,76 @@ def find_short_term_surges(
     return pd.DataFrame(rows, columns=columns)
 
 
+def news_table_exists(conn: pymysql.connections.Connection) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SHOW TABLES LIKE 'news'")
+        return cur.fetchone() is not None
+
+
+def has_message_driven_news(stock_code: str, stock_name: str | None, title: str | None, summary: str | None) -> bool:
+    text = f"{title or ''} {summary or ''}"
+    compact_code = str(stock_code).strip()
+    name = str(stock_name or "").strip()
+    if not text:
+        return False
+    mentioned = (name and name in text) or (compact_code and compact_code in text)
+    if not mentioned:
+        return False
+    return any(keyword in text for keyword in MESSAGE_DRIVEN_KEYWORDS)
+
+
+def load_news_for_stats(conn: pymysql.connections.Connection, stats: pd.DataFrame, window_days: int) -> pd.DataFrame:
+    columns = ["PublishDate", "Title", "Summary"]
+    if stats.empty:
+        return pd.DataFrame(columns=columns)
+    if not news_table_exists(conn):
+        return pd.DataFrame(columns=columns)
+    min_date = min(stats["StartRiseDate"]) - timedelta(days=window_days)
+    max_date = max(stats["StartRiseDate"]) + timedelta(days=window_days)
+    sql = """
+        SELECT DATE(PublishTime) AS PublishDate, Title, Summary
+        FROM news
+        WHERE PublishTime >= %s AND PublishTime < %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (min_date, max_date + timedelta(days=1)))
+        rows = cur.fetchall()
+    df = pd.DataFrame(rows, columns=columns)
+    if df.empty:
+        return df
+    df["PublishDate"] = pd.to_datetime(df["PublishDate"]).dt.date
+    return df
+
+
+def filter_message_driven_surges(
+    stats: pd.DataFrame,
+    news_df: pd.DataFrame,
+    window_days: int,
+) -> tuple[pd.DataFrame, int]:
+    if stats.empty or news_df.empty:
+        return stats, 0
+    keep_rows = []
+    excluded = 0
+    for row in stats.itertuples(index=False):
+        start_date = row.StartRiseDate
+        nearby = news_df[
+            (news_df["PublishDate"] >= start_date - timedelta(days=window_days))
+            & (news_df["PublishDate"] <= start_date + timedelta(days=window_days))
+        ]
+        message_driven = False
+        for news in nearby.itertuples(index=False):
+            if has_message_driven_news(row.SCode, row.SName, news.Title, news.Summary):
+                message_driven = True
+                break
+        if message_driven:
+            excluded += 1
+        else:
+            keep_rows.append(row._asdict())
+    if not keep_rows:
+        return pd.DataFrame(columns=stats.columns), excluded
+    return pd.DataFrame(keep_rows, columns=stats.columns), excluded
+
+
 def save_kline_statistics(conn: pymysql.connections.Connection, stats: pd.DataFrame) -> int:
     ensure_kline_statistics_table(conn)
     if stats.empty:
@@ -213,13 +314,21 @@ def run_statistics(config: KlineStatisticsConfig) -> pd.DataFrame:
 
     frames = []
     matched = 0
+    excluded_news = 0
     saved = 0
     wrote_header = False
     with mysql_connect() as conn:
         if config.save_db:
             ensure_kline_statistics_table(conn)
         symbols = load_symbols(conn, start_date, end_date, config.ktype)
-        for batch in iter_batches(symbols, config.batch_size):
+        batches = list(iter_batches(symbols, config.batch_size))
+        print(
+            f"start kline statistics stat_type={config.stat_type} "
+            f"symbols={len(symbols)} batches={len(batches)} batch_size={config.batch_size} "
+            f"news_filter={config.news_filter} news_window_days={config.news_window_days}",
+            flush=True,
+        )
+        for batch_index, batch in enumerate(batches, start=1):
             daily_df = load_daily_kline_for_symbols(conn, batch, start_date, end_date, config.ktype, config.forward_days)
             stats = find_short_term_surges(
                 daily_df=daily_df,
@@ -229,7 +338,13 @@ def run_statistics(config: KlineStatisticsConfig) -> pd.DataFrame:
                 threshold=config.threshold,
                 stat_type=config.stat_type,
             )
-            matched += len(stats)
+            batch_matched = len(stats)
+            batch_excluded = 0
+            matched += batch_matched
+            if config.news_filter and not stats.empty:
+                news_df = load_news_for_stats(conn, stats, config.news_window_days)
+                stats, batch_excluded = filter_message_driven_surges(stats, news_df, config.news_window_days)
+                excluded_news += batch_excluded
             if config.output and not stats.empty:
                 stats.to_csv(
                     config.output,
@@ -243,6 +358,13 @@ def run_statistics(config: KlineStatisticsConfig) -> pd.DataFrame:
                 saved += save_kline_statistics(conn, stats)
             if not stats.empty:
                 frames.append(stats)
+            print(
+                f"batch {batch_index}/{len(batches)} symbols={len(batch)} "
+                f"rows={len(daily_df)} matched={batch_matched} "
+                f"excluded_news={batch_excluded} kept={len(stats)} "
+                f"total_matched={matched} total_excluded_news={excluded_news} total_saved={saved}",
+                flush=True,
+            )
     if config.output and not wrote_header:
         pd.DataFrame(columns=["SCode", "SName", "StartRiseDate", "PrevTradeDate", "GainRate", "StatType"]).to_csv(
             config.output,
@@ -250,7 +372,7 @@ def run_statistics(config: KlineStatisticsConfig) -> pd.DataFrame:
             encoding="utf-8-sig",
         )
     stats = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["SCode", "SName", "StartRiseDate", "PrevTradeDate", "GainRate", "StatType"])
-    print(f"stat_type={config.stat_type} matched={len(stats)} saved={saved}")
+    print(f"stat_type={config.stat_type} matched={matched} excluded_news={excluded_news} kept={len(stats)} saved={saved}")
     return stats
 
 
@@ -264,6 +386,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=0.20, help="Minimum gain rate, 0.20 means 20 percent")
     parser.add_argument("--output", help="Optional CSV path for matched rows")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_SYMBOL_BATCH_SIZE, help="Number of stock symbols loaded per batch")
+    parser.add_argument("--news-window-days", type=int, default=DEFAULT_NEWS_WINDOW_DAYS, help="Days before and after StartRiseDate to scan news")
+    parser.add_argument("--no-news-filter", action="store_true", help="Do not exclude message-driven surges using the news table")
     parser.add_argument("--no-save-db", action="store_true", help="Do not save statistics to MySQL")
     return parser
 
@@ -281,6 +405,8 @@ def main(argv: Iterable[str] | None = None) -> None:
             output=args.output,
             save_db=not args.no_save_db,
             batch_size=max(1, args.batch_size),
+            news_filter=not args.no_news_filter,
+            news_window_days=max(0, args.news_window_days),
         )
     )
 
