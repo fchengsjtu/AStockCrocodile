@@ -495,6 +495,19 @@ Run the new raw K-line training mode:
 python .\llm_surge_pattern_miner.py --training-mode raw-kline --test-start-date 20260101 --test-end-date 20260430
 ```
 
+How raw K-line training is used for future selection:
+
+1. In `raw-kline` mode, DeepSeek sees raw historical windows: the selection date plus the previous 54 daily bars, and the latest weekly bar on or before the selection date plus the previous 54 weekly bars.
+2. DeepSeek proposes candidate setup patterns from those raw K-line samples.
+3. The program converts the candidates into executable feature-token rules, validates them on the `20260101` to `20260430` test set, and writes only retained patterns to `surgepatterns`.
+4. Future stock selection does not call DeepSeek again. It only reads the saved rules from `surgepatterns`, computes the same daily/weekly features for the target date, and matches stocks against those rules.
+
+So raw training changes how candidate patterns are discovered, but future selection still uses deterministic saved rules such as:
+
+```text
+D_CLOSE_GT_MA5 && W_MA5_GT_MA13
+```
+
 Use saved LLM/DeepSeek patterns for future stock selection:
 
 ```powershell
