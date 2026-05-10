@@ -21,6 +21,19 @@ from surge_pattern_miner import (
 
 STRATEGY_LLM_SURGE_PATTERN = "llm_surge_pattern_v1"
 DEFAULT_BATCH_SIZE = 40
+SELECTION_COLUMNS = [
+    "TradeDate",
+    "SCode",
+    "SName",
+    "Close",
+    "Score",
+    "Reason",
+    "StrategyName",
+    "PatternCount",
+    "BestPattern",
+    "BestPatternSuccessRate",
+    "BestPatternFailureRate",
+]
 
 
 @dataclass(frozen=True)
@@ -49,6 +62,19 @@ def normalize_rate(value: float) -> float:
 
 def parse_pattern_text(value: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in str(value or "").split("&&") if part.strip())
+
+
+def failure_rate(success_rate: float) -> float:
+    return max(0.0, min(1.0, 1.0 - float(success_rate)))
+
+
+def build_selection_reason(pattern_count: int, pattern_text: str, success_rate: float, sample_count: int) -> str:
+    fail_rate = failure_rate(success_rate)
+    reason = (
+        f"patterns={pattern_count} best={pattern_text} "
+        f"success={success_rate:.2%} failure={fail_rate:.2%} sample={sample_count}"
+    )
+    return reason[:255]
 
 
 def load_surge_patterns(
@@ -144,7 +170,7 @@ def select_by_llm_patterns_for_date(conn, trade_date: date, config: LlmPatternSe
     )
     if patterns.empty:
         print("no surgepatterns matched the filters", flush=True)
-        return pd.DataFrame(columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName", "PatternCount", "BestPattern"])
+        return pd.DataFrame(columns=SELECTION_COLUMNS)
 
     symbols = load_symbols(conn, trade_date, trade_date, DEFAULT_KTYPE)
     lookback_start = trade_date - timedelta(days=max(500, config.weekly_window * 10, config.daily_window * 3))
@@ -181,18 +207,22 @@ def select_by_llm_patterns_for_date(conn, trade_date: date, config: LlmPatternSe
                 continue
             best = matched.iloc[0]
             current = daily_frame.iloc[daily_pos]
-            reason = f"patterns={len(matched)} best={best.PatternText} rate={float(best.SuccessRate):.2%} sample={int(best.SampleCount)}"
+            success_rate = float(best.SuccessRate)
+            fail_rate = failure_rate(success_rate)
+            reason = build_selection_reason(len(matched), best.PatternText, success_rate, int(best.SampleCount))
             selected_rows.append(
                 {
                     "TradeDate": trade_date,
                     "SCode": symbol,
                     "SName": current["SName"],
                     "Close": current["Close"],
-                    "Score": float(best.SuccessRate),
-                    "Reason": reason[:255],
+                    "Score": success_rate,
+                    "Reason": reason,
                     "StrategyName": STRATEGY_LLM_SURGE_PATTERN,
                     "PatternCount": len(matched),
                     "BestPattern": best.PatternText,
+                    "BestPatternSuccessRate": success_rate,
+                    "BestPatternFailureRate": fail_rate,
                 }
             )
         if selected_rows:
@@ -200,7 +230,7 @@ def select_by_llm_patterns_for_date(conn, trade_date: date, config: LlmPatternSe
         print(f"batch {batch_index}/{len(batches)} symbols={len(batch)} selected={len(selected_rows)}", flush=True)
 
     if not frames:
-        return pd.DataFrame(columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName", "PatternCount", "BestPattern"])
+        return pd.DataFrame(columns=SELECTION_COLUMNS)
     selected = pd.concat(frames, ignore_index=True)
     selected = selected.sort_values(["Score", "PatternCount", "Close"], ascending=[False, False, False])
     if config.limit is not None and config.limit > 0:

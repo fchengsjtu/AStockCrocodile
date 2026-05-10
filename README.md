@@ -514,7 +514,7 @@ Use saved LLM/DeepSeek patterns for future stock selection:
 python .\llm_pattern_selector.py --date 20260508
 ```
 
-The selector reads validated rows from `surgepatterns`, extracts the same daily/weekly features for the target date, and saves matched stocks to `stockselection` with strategy name `llm_surge_pattern_v1`.
+The selector reads validated rows from `surgepatterns`, extracts the same daily/weekly features for the target date, and saves matched stocks to `stockselection` with strategy name `llm_surge_pattern_v1`. Terminal and CSV output include the matched best pattern, its success rate, and its failure rate. The database `Reason` field also includes those values, for example `success=40.00% failure=60.00%`.
 
 Useful filters:
 

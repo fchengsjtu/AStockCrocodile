@@ -27,6 +27,13 @@ class LlmPatternSelectorTests(unittest.TestCase):
         self.assertEqual(llm_pattern_selector.normalize_rate(35), 0.35)
         self.assertEqual(llm_pattern_selector.normalize_rate(0.35), 0.35)
 
+    def test_build_selection_reason_includes_success_and_failure(self):
+        reason = llm_pattern_selector.build_selection_reason(2, "A && B", 0.4, 30)
+
+        self.assertIn("success=40.00%", reason)
+        self.assertIn("failure=60.00%", reason)
+        self.assertIn("best=A && B", reason)
+
 
 if __name__ == "__main__":
     unittest.main()
