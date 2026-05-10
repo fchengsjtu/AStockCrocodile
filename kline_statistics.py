@@ -15,6 +15,7 @@ KLINE_STATISTICS_TABLE = "klinestatistics"
 SHORT_TERM_SURGE_TYPE = "short_term_surge_3d_20pct"
 DEFAULT_SYMBOL_BATCH_SIZE = 80
 DEFAULT_NEWS_WINDOW_DAYS = 3
+STAT_COLUMNS = ["SCode", "SName", "StartRiseDate", "PrevTradeDate", "SelectionDate", "GainRate", "StatType"]
 MESSAGE_DRIVEN_KEYWORDS = (
     "公告",
     "利好",
@@ -68,6 +69,7 @@ def ensure_kline_statistics_table(conn: pymysql.connections.Connection) -> None:
             SName VARCHAR(64) NULL,
             StartRiseDate DATE NOT NULL,
             PrevTradeDate DATE NOT NULL,
+            SelectionDate DATE NULL,
             GainRate DECIMAL(18,6) NOT NULL,
             StatType VARCHAR(64) NOT NULL,
             CreatedOn DATETIME NOT NULL,
@@ -78,6 +80,9 @@ def ensure_kline_statistics_table(conn: pymysql.connections.Connection) -> None:
     """
     with conn.cursor() as cur:
         cur.execute(sql)
+        cur.execute(f"SHOW COLUMNS FROM {KLINE_STATISTICS_TABLE} LIKE 'SelectionDate'")
+        if cur.fetchone() is None:
+            cur.execute(f"ALTER TABLE {KLINE_STATISTICS_TABLE} ADD COLUMN SelectionDate DATE NULL AFTER PrevTradeDate")
     conn.commit()
 
 
@@ -168,9 +173,8 @@ def find_short_term_surges(
     threshold: float = 0.20,
     stat_type: str = SHORT_TERM_SURGE_TYPE,
 ) -> pd.DataFrame:
-    columns = ["SCode", "SName", "StartRiseDate", "PrevTradeDate", "GainRate", "StatType"]
     if daily_df.empty:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=STAT_COLUMNS)
 
     rows = []
     for symbol, group in daily_df.groupby("SCode", sort=False):
@@ -179,7 +183,7 @@ def find_short_term_surges(
             trade_date = item["TradeDate"]
             if trade_date < start_date or trade_date > end_date:
                 continue
-            if pos == 0 or pos + forward_days >= len(frame):
+            if pos < 2 or pos + forward_days >= len(frame):
                 continue
             close_price = item["Close"]
             future_close = frame.iloc[pos + forward_days]["Close"]
@@ -193,11 +197,12 @@ def find_short_term_surges(
                         "SName": item["SName"],
                         "StartRiseDate": trade_date,
                         "PrevTradeDate": frame.iloc[pos - 1]["TradeDate"],
+                        "SelectionDate": frame.iloc[pos - 2]["TradeDate"],
                         "GainRate": gain_rate,
                         "StatType": stat_type,
                     }
                 )
-    return pd.DataFrame(rows, columns=columns)
+    return pd.DataFrame(rows, columns=STAT_COLUMNS)
 
 
 def news_table_exists(conn: pymysql.connections.Connection) -> bool:
@@ -224,8 +229,9 @@ def load_news_for_stats(conn: pymysql.connections.Connection, stats: pd.DataFram
         return pd.DataFrame(columns=columns)
     if not news_table_exists(conn):
         return pd.DataFrame(columns=columns)
-    min_date = min(stats["StartRiseDate"]) - timedelta(days=window_days)
-    max_date = max(stats["StartRiseDate"]) + timedelta(days=window_days)
+    date_column = "SelectionDate" if "SelectionDate" in stats.columns else "StartRiseDate"
+    min_date = min(stats[date_column]) - timedelta(days=window_days)
+    max_date = max(stats[date_column]) + timedelta(days=window_days)
     sql = """
         SELECT DATE(PublishTime) AS PublishDate, Title, Summary
         FROM news
@@ -251,10 +257,10 @@ def filter_message_driven_surges(
     keep_rows = []
     excluded = 0
     for row in stats.itertuples(index=False):
-        start_date = row.StartRiseDate
+        reference_date = getattr(row, "SelectionDate", row.StartRiseDate)
         nearby = news_df[
-            (news_df["PublishDate"] >= start_date - timedelta(days=window_days))
-            & (news_df["PublishDate"] <= start_date + timedelta(days=window_days))
+            (news_df["PublishDate"] >= reference_date - timedelta(days=window_days))
+            & (news_df["PublishDate"] <= reference_date + timedelta(days=window_days))
         ]
         message_driven = False
         for news in nearby.itertuples(index=False):
@@ -283,6 +289,7 @@ def save_kline_statistics(conn: pymysql.connections.Connection, stats: pd.DataFr
                 none_if_nan(row.SName),
                 row.StartRiseDate,
                 row.PrevTradeDate,
+                getattr(row, "SelectionDate", None),
                 none_if_nan(row.GainRate),
                 row.StatType,
                 now,
@@ -290,11 +297,12 @@ def save_kline_statistics(conn: pymysql.connections.Connection, stats: pd.DataFr
         )
     sql = f"""
         INSERT INTO {KLINE_STATISTICS_TABLE}
-            (SCode, SName, StartRiseDate, PrevTradeDate, GainRate, StatType, CreatedOn)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+            (SCode, SName, StartRiseDate, PrevTradeDate, SelectionDate, GainRate, StatType, CreatedOn)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             SName = VALUES(SName),
             PrevTradeDate = VALUES(PrevTradeDate),
+            SelectionDate = VALUES(SelectionDate),
             GainRate = VALUES(GainRate),
             CreatedOn = VALUES(CreatedOn)
     """
@@ -366,12 +374,12 @@ def run_statistics(config: KlineStatisticsConfig) -> pd.DataFrame:
                 flush=True,
             )
     if config.output and not wrote_header:
-        pd.DataFrame(columns=["SCode", "SName", "StartRiseDate", "PrevTradeDate", "GainRate", "StatType"]).to_csv(
+        pd.DataFrame(columns=STAT_COLUMNS).to_csv(
             config.output,
             index=False,
             encoding="utf-8-sig",
         )
-    stats = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["SCode", "SName", "StartRiseDate", "PrevTradeDate", "GainRate", "StatType"])
+    stats = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=STAT_COLUMNS)
     print(f"stat_type={config.stat_type} matched={matched} excluded_news={excluded_news} kept={len(stats)} saved={saved}")
     return stats
 
@@ -386,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=0.20, help="Minimum gain rate, 0.20 means 20 percent")
     parser.add_argument("--output", help="Optional CSV path for matched rows")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_SYMBOL_BATCH_SIZE, help="Number of stock symbols loaded per batch")
-    parser.add_argument("--news-window-days", type=int, default=DEFAULT_NEWS_WINDOW_DAYS, help="Days before and after StartRiseDate to scan news")
+    parser.add_argument("--news-window-days", type=int, default=DEFAULT_NEWS_WINDOW_DAYS, help="Days before and after SelectionDate to scan news")
     parser.add_argument("--no-news-filter", action="store_true", help="Do not exclude message-driven surges using the news table")
     parser.add_argument("--no-save-db", action="store_true", help="Do not save statistics to MySQL")
     return parser

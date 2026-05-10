@@ -414,16 +414,17 @@ The default statistic type is `short_term_surge_3d_20pct`: the close price on th
 
 Long-range statistics use a low-memory path: symbols are loaded in batches, each batch is queried, computed, and written before the next batch starts. The default batch size is `80`; use `--batch-size` on small servers.
 
-After candidate rows are generated, the script scans the `news` table for internet news around `StartRiseDate`. If news within the window mentions the stock and contains message-driven keywords such as announcements, restructuring, contracts, orders, earnings, approvals, or policy catalysts, that candidate is excluded before it is written to `klinestatistics`. The default news window is 3 days before and after `StartRiseDate`.
+After candidate rows are generated, the script scans the `news` table for internet news around `SelectionDate`. If news within the window mentions the stock and contains message-driven keywords such as announcements, restructuring, contracts, orders, earnings, approvals, or policy catalysts, that candidate is excluded before it is written to `klinestatistics`. The default news window is 3 days before and after `SelectionDate`.
 
 Stored fields include:
 
 - `SCode`
 - `SName`
-- `StartRiseDate`: 起涨点日期
-- `PrevTradeDate`: 起涨点前一个交易日
-- `GainRate`: 起涨点之后第 3 个交易日相对起涨点日期收盘价的涨幅
-- `StatType`: 统计类型
+- `StartRiseDate`: start-rise date used to measure the surge window
+- `PrevTradeDate`: trade date immediately before `StartRiseDate`; this is treated as the statistic trade date
+- `SelectionDate`: selection date, the trading day immediately before `PrevTradeDate`
+- `GainRate`: gain from `StartRiseDate` close to the close after `--forward-days`
+- `StatType`
 
 Run K-line statistics:
 
@@ -449,6 +450,23 @@ Run without saving to MySQL:
 python .\kline_statistics.py --start-date 20240101 --end-date 20241231 --no-save-db
 ```
 
+Mine reusable patterns before `short_term_surge_3d_20pct` events:
+
+```powershell
+python .\surge_pattern_miner.py --start-date 20200101 --end-date 20251231
+```
+
+`surge_pattern_miner.py` reads positive samples from `klinestatistics`, using `SelectionDate` as the selected date. For each positive sample it extracts features from `SelectionDate` plus the previous 55 daily bars and `SelectionDate` plus the previous 55 weekly bars. It then scans historical candidate dates in small stock batches and keeps patterns whose success rate is at least `--min-success-rate` (default `0.50`). Results are saved to MySQL table `surgepatterns` unless `--no-save-db` is used.
+
+Useful options:
+
+- `--min-sample-count 20`: require at least this many historical occurrences.
+- `--min-positive-support 5`: require at least this many positive occurrences before a pattern is evaluated.
+- `--max-pattern-size 2`: combine up to this many feature clauses into one pattern.
+- `--daily-window 56 --weekly-window 56`: adjust lookback windows.
+- `--batch-size 40`: reduce this on small servers.
+- `--output data\surge_patterns.csv`: also write retained patterns to CSV.
+
 ## News Crawler
 
 `news_crawler.py` crawls stock-market news from AkShare-backed public sources and writes rows to MySQL table `news`.
@@ -458,19 +476,19 @@ Default sources:
 - `eastmoney`
 - `ths`
 - `caixin`
-- `yicai`: 第一财经
-- `eeo`: 经济观察网
-- `21jingji`: 21世纪经济报道
-- `caijing`: 财经网
-- `ce`: 中国经济网
-- `jwview`: 中新经纬
-- `stcn`: 证券时报网
-- `cnstock`: 中国证券网
-- `sina`: 新浪财经
-- `xueqiu`: 雪球
-- `jiemian`: 界面新闻
-- `hexun`: 和讯网
-- `stockstar`: 证券之星
+- `yicai`: Yicai
+- `eeo`: Economic Observer
+- `21jingji`: 21st Century Business Herald
+- `caijing`: Caijing
+- `ce`: China Economic Net
+- `jwview`: JWView
+- `stcn`: Securities Times
+- `cnstock`: China Securities Journal
+- `sina`: Sina Finance
+- `xueqiu`: Xueqiu
+- `jiemian`: Jiemian News
+- `hexun`: Hexun
+- `stockstar`: Stockstar
 
 The program creates `news` automatically. Rows are de-duplicated by `NewsLink`.
 

@@ -10,7 +10,7 @@ class KlineStatisticsTests(unittest.TestCase):
     def test_find_short_term_surges_uses_third_future_trading_day(self):
         base = date(2026, 1, 1)
         rows = []
-        closes = [9.8, 10.0, 10.5, 11.0, 12.1, 12.0]
+        closes = [9.8, 10.0, 10.5, 11.0, 12.1, 12.8]
         for i, close in enumerate(closes):
             rows.append(
                 {
@@ -24,8 +24,8 @@ class KlineStatisticsTests(unittest.TestCase):
 
         result = kline_statistics.find_short_term_surges(
             daily_df=df,
-            start_date=base + timedelta(days=1),
-            end_date=base + timedelta(days=1),
+            start_date=base + timedelta(days=2),
+            end_date=base + timedelta(days=2),
             forward_days=3,
             threshold=0.20,
         )
@@ -33,9 +33,10 @@ class KlineStatisticsTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         row = result.iloc[0]
         self.assertEqual(row["SCode"], "000001")
-        self.assertEqual(row["StartRiseDate"], base + timedelta(days=1))
-        self.assertEqual(row["PrevTradeDate"], base)
-        self.assertAlmostEqual(row["GainRate"], 0.21)
+        self.assertEqual(row["StartRiseDate"], base + timedelta(days=2))
+        self.assertEqual(row["PrevTradeDate"], base + timedelta(days=1))
+        self.assertEqual(row["SelectionDate"], base)
+        self.assertAlmostEqual(row["GainRate"], 12.8 / 10.5 - 1)
         self.assertEqual(row["StatType"], kline_statistics.SHORT_TERM_SURGE_TYPE)
 
     def test_find_short_term_surges_skips_without_previous_or_forward_day(self):
@@ -113,6 +114,7 @@ class KlineStatisticsTests(unittest.TestCase):
                     "SName": "平安银行",
                     "StartRiseDate": date(2026, 1, 5),
                     "PrevTradeDate": date(2026, 1, 4),
+                    "SelectionDate": date(2026, 1, 3),
                     "GainRate": 0.25,
                     "StatType": kline_statistics.SHORT_TERM_SURGE_TYPE,
                 },
@@ -121,6 +123,7 @@ class KlineStatisticsTests(unittest.TestCase):
                     "SName": "万科A",
                     "StartRiseDate": date(2026, 1, 5),
                     "PrevTradeDate": date(2026, 1, 4),
+                    "SelectionDate": date(2026, 1, 3),
                     "GainRate": 0.22,
                     "StatType": kline_statistics.SHORT_TERM_SURGE_TYPE,
                 },
@@ -129,7 +132,7 @@ class KlineStatisticsTests(unittest.TestCase):
         news = pd.DataFrame(
             [
                 {
-                    "PublishDate": date(2026, 1, 6),
+                    "PublishDate": date(2026, 1, 3),
                     "Title": "平安银行公告重大合同",
                     "Summary": "",
                 }
