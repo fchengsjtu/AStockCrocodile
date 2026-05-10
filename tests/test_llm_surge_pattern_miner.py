@@ -12,6 +12,8 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
             {
                 "patterns": [
                     {"name": "ok", "features": ["D_CLOSE_GT_MA5", "W_MA5_GT_MA13"]},
+                    {"name": "joined", "features": ["D_CLOSE_GT_MA5 && W_MA5_GT_MA13"]},
+                    {"name": "text", "pattern": "D_CLOSE_GT_MA5 && W_MA5_GT_MA13"},
                     {"name": "unknown", "features": ["D_CLOSE_GT_MA5", "NOT_A_FEATURE"]},
                     {"name": "too_big", "features": ["A", "B", "C"]},
                 ]
@@ -25,6 +27,15 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
         )
 
         self.assertEqual(patterns, [("D_CLOSE_GT_MA5", "W_MA5_GT_MA13")])
+
+    def test_fallback_patterns_from_counts_uses_high_support(self):
+        patterns = llm_surge_pattern_miner.fallback_patterns_from_counts(
+            Counter({("A", "B"): 5, ("C",): 3, ("A", "B", "C"): 10}),
+            max_pattern_size=2,
+            limit=2,
+        )
+
+        self.assertEqual(patterns, [("A", "B"), ("C",)])
 
     def test_build_llm_prompt_contains_feature_summary(self):
         config = llm_surge_pattern_miner.LlmPatternConfig(

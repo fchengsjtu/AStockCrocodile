@@ -362,16 +362,34 @@ def parse_llm_patterns(response_text: str, valid_features: set[str], max_pattern
     seen = set()
     for item in payload.get("patterns", []):
         raw_features = item.get("features", [])
-        features = tuple(feature for feature in raw_features if isinstance(feature, str) and feature in valid_features)
+        if not raw_features and isinstance(item.get("pattern"), str):
+            raw_features = [item["pattern"]]
+        if not raw_features and isinstance(item.get("PatternText"), str):
+            raw_features = [item["PatternText"]]
+        expanded_features = []
+        for feature in raw_features:
+            if not isinstance(feature, str):
+                continue
+            expanded_features.extend(part.strip() for part in feature.split("&&") if part.strip())
+        features = tuple(feature for feature in expanded_features if feature in valid_features)
         if not features or len(features) > max_pattern_size:
             continue
         features = tuple(sorted(set(features)))
-        if len(features) != len(raw_features):
+        if len(features) != len(expanded_features):
             continue
         if features not in seen:
             patterns.append(features)
             seen.add(features)
     return patterns
+
+
+def fallback_patterns_from_counts(feature_counts: Counter, max_pattern_size: int, limit: int) -> list[tuple[str, ...]]:
+    patterns = [
+        pattern
+        for pattern, _ in feature_counts.most_common()
+        if pattern and len(pattern) <= max_pattern_size
+    ]
+    return patterns[:limit]
 
 
 def load_or_generate_llm_patterns(
@@ -433,7 +451,10 @@ def load_or_generate_raw_kline_patterns(
         response_text = call_deepseek_chat(prompt, config)
     patterns = parse_llm_patterns(response_text, valid_features, config.max_pattern_size)
     if not patterns:
-        raise RuntimeError("LLM did not return any valid raw-kline patterns using known feature tokens")
+        patterns = fallback_patterns_from_counts(feature_counts, config.max_pattern_size, config.candidate_count)
+        if not patterns:
+            raise RuntimeError("LLM did not return any valid raw-kline patterns using known feature tokens")
+        print(f"LLM returned no valid raw-kline patterns; using {len(patterns)} high-support fallback patterns", flush=True)
     print(f"llm raw-kline candidate patterns={len(patterns)}", flush=True)
     return patterns[: config.candidate_count]
 
@@ -469,6 +490,12 @@ def run_llm_pattern_mining(config: LlmPatternConfig) -> pd.DataFrame:
             f"train_rows={len(train_positives)} test_rows={len(test_positives)}",
             flush=True,
         )
+        if test_positives.empty:
+            print(
+                "WARNING test positives are empty. Generate test samples first, for example: "
+                "python ./kline_statistics.py --start-date 20260101 --end-date 20260430",
+                flush=True,
+            )
         if config.training_mode == TRAINING_MODE_RAW_KLINE:
             samples, feature_counts, feature_rows = collect_positive_kline_samples(
                 conn,
