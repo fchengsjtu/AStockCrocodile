@@ -453,19 +453,38 @@ python .\kline_statistics.py --start-date 20240101 --end-date 20241231 --no-save
 Mine reusable patterns before `short_term_surge_3d_20pct` events:
 
 ```powershell
-python .\surge_pattern_miner.py --start-date 20200101 --end-date 20251231
+python .\surge_pattern_miner.py --test-start-date 20260101 --test-end-date 20260430
 ```
 
-`surge_pattern_miner.py` reads positive samples from `klinestatistics`, using `SelectionDate` as the selected date. For each positive sample it extracts features from `SelectionDate` plus the previous 55 daily bars and `SelectionDate` plus the previous 55 weekly bars. It then scans historical candidate dates in small stock batches and keeps patterns whose success rate is at least `--min-success-rate` (default `0.50`). Results are saved to MySQL table `surgepatterns` unless `--no-save-db` is used.
+`surge_pattern_miner.py` reads positive samples from `klinestatistics`, using `SelectionDate` as the selected date. Training defaults to `20100101` through the day before `--test-start-date`; the test set is controlled by `--test-start-date` and `--test-end-date`. For each positive sample it extracts features from `SelectionDate` plus the previous 55 daily bars and `SelectionDate` plus the previous 55 weekly bars. It then scans historical candidate dates in small stock batches and writes retained patterns to MySQL table `surgepatterns` unless `--no-save-db` is used.
+
+By default the script saves separate threshold groups for success rates `25%`, `30%`, `35%`, `40%`, `45%`, and `50%`.
 
 Useful options:
 
-- `--min-sample-count 20`: require at least this many historical occurrences.
+- `--train-start-date 20100101 --train-end-date 20251231`: override the training range.
+- `--success-rates 0.25,0.30,0.35,0.40,0.45,0.50`: choose retained success-rate thresholds.
+- `--min-sample-count 20`: require at least this many test-set occurrences.
 - `--min-positive-support 5`: require at least this many positive occurrences before a pattern is evaluated.
 - `--max-pattern-size 2`: combine up to this many feature clauses into one pattern.
 - `--daily-window 56 --weekly-window 56`: adjust lookback windows.
 - `--batch-size 40`: reduce this on small servers.
 - `--output data\surge_patterns.csv`: also write retained patterns to CSV.
+
+Mine LLM-proposed surge setup patterns and validate them on the same test set:
+
+```powershell
+python .\llm_surge_pattern_miner.py --test-start-date 20260101 --test-end-date 20260430
+```
+
+`llm_surge_pattern_miner.py` first summarizes the positive-sample feature distribution before `20260101`, asks an OpenAI-compatible chat model to propose diverse candidate patterns using exact feature tokens, then validates those patterns on all test-set candidate dates from `20260101` through `20260430`. Retained patterns for success-rate thresholds `25%`, `30%`, `35%`, `40%`, `45%`, and `50%` are written to `surgepatterns`.
+
+Set `OPENAI_API_KEY` in the environment or in `env.txt`. Useful options:
+
+- `--model gpt-4.1-mini`: choose the LLM model.
+- `--candidate-count 80`: number of LLM candidate patterns to validate.
+- `--llm-response-file data\llm_patterns.json`: validate a saved LLM JSON response without calling the API.
+- `--api-base-url https://api.openai.com/v1`: use an OpenAI-compatible endpoint.
 
 ## News Crawler
 

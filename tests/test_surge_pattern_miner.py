@@ -85,6 +85,11 @@ class SurgePatternMinerTests(unittest.TestCase):
         self.assertIn(("B", "C"), patterns)
         self.assertNotIn(("A", "B", "C"), patterns)
 
+    def test_parse_success_rates_accepts_decimal_and_percent(self):
+        rates = surge_pattern_miner.parse_success_rates("0.25,30,0.5,25")
+
+        self.assertEqual(rates, (0.25, 0.3, 0.5))
+
 
 if __name__ == "__main__":
     unittest.main()

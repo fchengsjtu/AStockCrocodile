@@ -22,6 +22,7 @@ DEFAULT_DAILY_WINDOW = 56
 DEFAULT_WEEKLY_WINDOW = 56
 
 PATTERN_COLUMNS = [
+    "MinSuccessRate",
     "Pattern",
     "FeatureCount",
     "SampleCount",
@@ -33,10 +34,12 @@ PATTERN_COLUMNS = [
 
 @dataclass(frozen=True)
 class SurgePatternConfig:
-    start_date: str
-    end_date: str
+    test_start_date: str
+    test_end_date: str
+    train_start_date: str
+    train_end_date: str | None
     stat_type: str
-    min_success_rate: float
+    min_success_rates: tuple[float, ...]
     min_sample_count: int
     min_positive_support: int
     max_pattern_size: int
@@ -59,8 +62,11 @@ def ensure_surge_pattern_table(conn: pymysql.connections.Connection) -> None:
             PatternHash CHAR(64) NOT NULL,
             PatternText TEXT NOT NULL,
             StatType VARCHAR(64) NOT NULL,
+            TrainStartDate DATE NULL,
+            TrainEndDate DATE NULL,
             StartDate DATE NOT NULL,
             EndDate DATE NOT NULL,
+            MinSuccessRate DECIMAL(18,6) NOT NULL DEFAULT 0.500000,
             FeatureCount INT NOT NULL,
             SampleCount INT NOT NULL,
             SuccessCount INT NOT NULL,
@@ -74,14 +80,77 @@ def ensure_surge_pattern_table(conn: pymysql.connections.Connection) -> None:
     """
     with conn.cursor() as cur:
         cur.execute(sql)
+        for column_name, ddl in [
+            ("TrainStartDate", f"ALTER TABLE {SURGE_PATTERN_TABLE} ADD COLUMN TrainStartDate DATE NULL AFTER StatType"),
+            ("TrainEndDate", f"ALTER TABLE {SURGE_PATTERN_TABLE} ADD COLUMN TrainEndDate DATE NULL AFTER TrainStartDate"),
+            ("MinSuccessRate", f"ALTER TABLE {SURGE_PATTERN_TABLE} ADD COLUMN MinSuccessRate DECIMAL(18,6) NOT NULL DEFAULT 0.500000 AFTER EndDate"),
+        ]:
+            cur.execute(f"SHOW COLUMNS FROM {SURGE_PATTERN_TABLE} LIKE %s", (column_name,))
+            if cur.fetchone() is None:
+                cur.execute(ddl)
+        cur.execute(f"SHOW INDEX FROM {SURGE_PATTERN_TABLE} WHERE Key_name = 'ux_surgepatterns_range_hash'")
+        if cur.fetchone() is not None:
+            cur.execute(f"ALTER TABLE {SURGE_PATTERN_TABLE} DROP INDEX ux_surgepatterns_range_hash")
+        cur.execute(f"SHOW INDEX FROM {SURGE_PATTERN_TABLE} WHERE Key_name = 'ux_surgepatterns_scope_hash'")
+        if cur.fetchone() is None:
+            cur.execute(
+                f"ALTER TABLE {SURGE_PATTERN_TABLE} "
+                "ADD UNIQUE KEY ux_surgepatterns_scope_hash "
+                "(StatType, TrainStartDate, TrainEndDate, StartDate, EndDate, MinSuccessRate, PatternHash)"
+            )
     conn.commit()
+
+
+def backfill_kline_stat_selection_dates(
+    conn: pymysql.connections.Connection,
+    stat_type: str = SHORT_TERM_SURGE_TYPE,
+    batch_id_span: int = 20000,
+) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT MIN(Id), MAX(Id)
+            FROM klinestatistics
+            WHERE StatType = %s AND SelectionDate IS NULL
+            """,
+            (stat_type,),
+        )
+        bounds = cur.fetchone()
+    if not bounds or bounds[0] is None or bounds[1] is None:
+        return 0
+
+    min_id, max_id = int(bounds[0]), int(bounds[1])
+    updated = 0
+    for start_id in range(min_id, max_id + 1, batch_id_span):
+        end_id = start_id + batch_id_span - 1
+        sql = """
+            UPDATE klinestatistics ks
+            JOIN (
+                SELECT ks2.Id, MAX(DATE(dk.KTime)) AS SelectionDate
+                FROM klinestatistics ks2
+                JOIN dkandles dk
+                  ON dk.SCode = ks2.SCode
+                 AND dk.KType = 'D'
+                 AND dk.KTime < ks2.PrevTradeDate
+                WHERE ks2.StatType = %s
+                  AND ks2.SelectionDate IS NULL
+                  AND ks2.Id BETWEEN %s AND %s
+                GROUP BY ks2.Id
+            ) resolved ON resolved.Id = ks.Id
+            SET ks.SelectionDate = resolved.SelectionDate
+            WHERE ks.SelectionDate IS NULL
+        """
+        with conn.cursor() as cur:
+            cur.execute(sql, (stat_type, start_id, end_id))
+            updated += cur.rowcount
+        conn.commit()
+        print(f"backfill SelectionDate ids={start_id}-{end_id} updated={updated}", flush=True)
+    return updated
 
 
 def load_positive_events(conn: pymysql.connections.Connection, stat_type: str, start_date: date, end_date: date) -> pd.DataFrame:
     sql = """
-        SELECT SCode, SName, StartRiseDate, PrevTradeDate,
-               COALESCE(SelectionDate, PrevTradeDate) AS SelectionDate,
-               GainRate
+        SELECT SCode, SName, StartRiseDate, PrevTradeDate, COALESCE(SelectionDate, PrevTradeDate) AS SelectionDate, GainRate
         FROM klinestatistics
         WHERE StatType = %s
           AND COALESCE(SelectionDate, PrevTradeDate) >= %s
@@ -273,6 +342,23 @@ def pattern_hash(pattern: tuple[str, ...]) -> str:
     return hashlib.sha256(pattern_to_text(pattern).encode("utf-8")).hexdigest()
 
 
+def parse_success_rates(value: str) -> tuple[float, ...]:
+    rates = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        rate = float(item)
+        if rate > 1:
+            rate = rate / 100
+        if rate < 0 or rate > 1:
+            raise argparse.ArgumentTypeError("success rates must be between 0 and 1, or percentage values between 0 and 100")
+        rates.append(rate)
+    if not rates:
+        raise argparse.ArgumentTypeError("at least one success rate is required")
+    return tuple(sorted(set(rates)))
+
+
 def make_frame_map(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
     frames = {}
     if df.empty:
@@ -420,30 +506,42 @@ def evaluate_patterns(
         )
 
     rows = []
+    min_rate = min(config.min_success_rates)
     for pattern, (sample_count, success_count) in counts.items():
         if sample_count < config.min_sample_count:
             continue
         success_rate = success_count / sample_count if sample_count else 0.0
-        if success_rate < config.min_success_rate:
+        if success_rate < min_rate:
             continue
-        rows.append(
-            {
-                "Pattern": pattern_to_text(pattern),
-                "FeatureCount": len(pattern),
-                "SampleCount": sample_count,
-                "SuccessCount": success_count,
-                "SuccessRate": success_rate,
-                "PositiveSupport": positive_support.get(pattern, 0),
-            }
-        )
+        for threshold in config.min_success_rates:
+            if success_rate >= threshold:
+                rows.append(
+                    {
+                        "MinSuccessRate": threshold,
+                        "Pattern": pattern_to_text(pattern),
+                        "FeatureCount": len(pattern),
+                        "SampleCount": sample_count,
+                        "SuccessCount": success_count,
+                        "SuccessRate": success_rate,
+                        "PositiveSupport": positive_support.get(pattern, 0),
+                    }
+                )
     if not rows:
         return pd.DataFrame(columns=PATTERN_COLUMNS)
     return pd.DataFrame(rows, columns=PATTERN_COLUMNS).sort_values(
-        ["SuccessRate", "SuccessCount", "SampleCount"], ascending=[False, False, False]
+        ["MinSuccessRate", "SuccessRate", "SuccessCount", "SampleCount"], ascending=[True, False, False, False]
     )
 
 
-def save_patterns(conn: pymysql.connections.Connection, patterns: pd.DataFrame, config: SurgePatternConfig, start_date: date, end_date: date) -> int:
+def save_patterns(
+    conn: pymysql.connections.Connection,
+    patterns: pd.DataFrame,
+    config: SurgePatternConfig,
+    train_start_date: date,
+    train_end_date: date,
+    test_start_date: date,
+    test_end_date: date,
+) -> int:
     ensure_surge_pattern_table(conn)
     if patterns.empty:
         return 0
@@ -456,8 +554,11 @@ def save_patterns(conn: pymysql.connections.Connection, patterns: pd.DataFrame, 
                 pattern_hash(pattern_tuple),
                 row.Pattern,
                 config.stat_type,
-                start_date,
-                end_date,
+                train_start_date,
+                train_end_date,
+                test_start_date,
+                test_end_date,
+                none_if_nan(row.MinSuccessRate),
                 int(row.FeatureCount),
                 int(row.SampleCount),
                 int(row.SuccessCount),
@@ -468,11 +569,12 @@ def save_patterns(conn: pymysql.connections.Connection, patterns: pd.DataFrame, 
         )
     sql = f"""
         INSERT INTO {SURGE_PATTERN_TABLE}
-            (PatternHash, PatternText, StatType, StartDate, EndDate, FeatureCount,
+            (PatternHash, PatternText, StatType, TrainStartDate, TrainEndDate, StartDate, EndDate, MinSuccessRate, FeatureCount,
              SampleCount, SuccessCount, SuccessRate, PositiveSupport, CreatedOn)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             PatternText = VALUES(PatternText),
+            MinSuccessRate = VALUES(MinSuccessRate),
             FeatureCount = VALUES(FeatureCount),
             SampleCount = VALUES(SampleCount),
             SuccessCount = VALUES(SuccessCount),
@@ -487,18 +589,33 @@ def save_patterns(conn: pymysql.connections.Connection, patterns: pd.DataFrame, 
 
 
 def run_pattern_mining(config: SurgePatternConfig) -> pd.DataFrame:
-    start_date = parse_date(config.start_date)
-    end_date = parse_date(config.end_date)
-    if start_date is None or end_date is None:
-        raise ValueError("start-date and end-date are required")
-    if start_date > end_date:
-        raise ValueError("start-date must be <= end-date")
+    test_start_date = parse_date(config.test_start_date)
+    test_end_date = parse_date(config.test_end_date)
+    train_start_date = parse_date(config.train_start_date)
+    train_end_date = parse_date(config.train_end_date) if config.train_end_date else None
+    if test_start_date is None or test_end_date is None or train_start_date is None:
+        raise ValueError("test-start-date, test-end-date, and train-start-date are required")
+    if test_start_date > test_end_date:
+        raise ValueError("test-start-date must be <= test-end-date")
+    if train_end_date is None:
+        train_end_date = test_start_date - timedelta(days=1)
+    if train_start_date > train_end_date:
+        raise ValueError("train-start-date must be <= train-end-date")
     with mysql_connect() as conn:
         if config.save_db:
             ensure_surge_pattern_table(conn)
-        positives = load_positive_events(conn, config.stat_type, start_date, end_date)
-        print(f"loaded positives stat_type={config.stat_type} rows={len(positives)}", flush=True)
-        positive_support = mine_positive_patterns(conn, positives, config, start_date, end_date)
+        backfilled = backfill_kline_stat_selection_dates(conn, config.stat_type)
+        if backfilled:
+            print(f"backfilled SelectionDate rows={backfilled}", flush=True)
+        train_positives = load_positive_events(conn, config.stat_type, train_start_date, train_end_date)
+        test_positives = load_positive_events(conn, config.stat_type, test_start_date, test_end_date)
+        print(
+            f"loaded positives stat_type={config.stat_type} "
+            f"train_rows={len(train_positives)} test_rows={len(test_positives)} "
+            f"train={train_start_date}..{train_end_date} test={test_start_date}..{test_end_date}",
+            flush=True,
+        )
+        positive_support = mine_positive_patterns(conn, train_positives, config, train_start_date, train_end_date)
         target_patterns = {
             pattern for pattern, support in positive_support.items() if support >= config.min_positive_support
         }
@@ -507,20 +624,33 @@ def run_pattern_mining(config: SurgePatternConfig) -> pd.DataFrame:
             f"target_patterns={len(target_patterns)} min_positive_support={config.min_positive_support}",
             flush=True,
         )
-        patterns = evaluate_patterns(conn, positives, target_patterns, positive_support, config, start_date, end_date)
+        patterns = evaluate_patterns(conn, test_positives, target_patterns, positive_support, config, test_start_date, test_end_date)
         if config.output:
             patterns.to_csv(config.output, index=False, encoding="utf-8-sig")
-        saved = save_patterns(conn, patterns, config, start_date, end_date) if config.save_db else 0
-    print(f"surge patterns kept={len(patterns)} saved={saved} min_success_rate={config.min_success_rate:.2%}", flush=True)
+        saved = (
+            save_patterns(conn, patterns, config, train_start_date, train_end_date, test_start_date, test_end_date)
+            if config.save_db
+            else 0
+        )
+    print(
+        f"surge patterns kept={len(patterns)} saved={saved} "
+        f"min_success_rates={','.join(f'{rate:.2%}' for rate in config.min_success_rates)}",
+        flush=True,
+    )
     return patterns
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Mine reusable patterns before short-term surge events")
-    parser.add_argument("--start-date", required=True, help="Selection date start, YYYYMMDD or YYYY-MM-DD")
-    parser.add_argument("--end-date", required=True, help="Selection date end, YYYYMMDD or YYYY-MM-DD")
+    parser.add_argument("--start-date", dest="test_start_date", help="Alias of --test-start-date")
+    parser.add_argument("--end-date", dest="test_end_date", help="Alias of --test-end-date")
+    parser.add_argument("--test-start-date", dest="test_start_date", help="Test selection date start, YYYYMMDD or YYYY-MM-DD")
+    parser.add_argument("--test-end-date", dest="test_end_date", help="Test selection date end, YYYYMMDD or YYYY-MM-DD")
+    parser.add_argument("--train-start-date", default="20100101", help="Training selection date start, YYYYMMDD or YYYY-MM-DD")
+    parser.add_argument("--train-end-date", help="Training selection date end; default is the day before test-start-date")
     parser.add_argument("--stat-type", default=SHORT_TERM_SURGE_TYPE, help="K-line statistic type from klinestatistics")
-    parser.add_argument("--min-success-rate", type=float, default=0.50, help="Minimum pattern success rate")
+    parser.add_argument("--success-rates", type=parse_success_rates, default=parse_success_rates("0.25,0.30,0.35,0.40,0.45,0.50"), help="Comma-separated retained success-rate thresholds, e.g. 0.25,0.30,50")
+    parser.add_argument("--min-success-rate", type=float, help="Backward-compatible single success-rate threshold")
     parser.add_argument("--min-sample-count", type=int, default=20, help="Minimum total occurrences for a pattern")
     parser.add_argument("--min-positive-support", type=int, default=5, help="Minimum positive occurrences before evaluation")
     parser.add_argument("--max-pattern-size", type=int, default=2, help="Maximum number of feature clauses in one pattern")
@@ -534,12 +664,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if not args.test_start_date or not args.test_end_date:
+        raise SystemExit("--test-start-date/--test-end-date are required; --start-date/--end-date are accepted as aliases")
+    success_rates = args.success_rates
+    if args.min_success_rate is not None:
+        single_rate = args.min_success_rate / 100 if args.min_success_rate > 1 else args.min_success_rate
+        success_rates = tuple(sorted(set([single_rate])))
     run_pattern_mining(
         SurgePatternConfig(
-            start_date=args.start_date,
-            end_date=args.end_date,
+            test_start_date=args.test_start_date,
+            test_end_date=args.test_end_date,
+            train_start_date=args.train_start_date,
+            train_end_date=args.train_end_date,
             stat_type=args.stat_type,
-            min_success_rate=args.min_success_rate,
+            min_success_rates=success_rates,
             min_sample_count=max(1, args.min_sample_count),
             min_positive_support=max(1, args.min_positive_support),
             max_pattern_size=max(1, args.max_pattern_size),
