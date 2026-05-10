@@ -412,6 +412,8 @@ The output summary includes total selections, success rate, failure rate, and ex
 
 The default statistic type is `short_term_surge_3d_20pct`: the close price on the 3rd trading day after the start-rise date is at least 20% above the start-rise date close.
 
+Long-range statistics use a low-memory path: symbols are loaded in batches, each batch is queried, computed, and written before the next batch starts. The default batch size is `80`; use `--batch-size` on small servers.
+
 Stored fields include:
 
 - `SCode`
@@ -425,6 +427,12 @@ Run K-line statistics:
 
 ```powershell
 python .\kline_statistics.py --start-date 20240101 --end-date 20241231
+```
+
+Run with a smaller batch size:
+
+```powershell
+python .\kline_statistics.py --start-date 20200101 --end-date 20251231 --batch-size 50
 ```
 
 Run without saving to MySQL:

@@ -57,6 +57,28 @@ class KlineStatisticsTests(unittest.TestCase):
 
         self.assertTrue(result.empty)
 
+    def test_iter_batches_uses_small_chunks(self):
+        batches = list(kline_statistics.iter_batches(["000001", "000002", "000003"], 2))
+
+        self.assertEqual(batches, [["000001", "000002"], ["000003"]])
+        self.assertLessEqual(kline_statistics.DEFAULT_SYMBOL_BATCH_SIZE, 100)
+
+    def test_load_daily_kline_for_symbols_skips_query_without_symbols(self):
+        class FailingConnection:
+            def cursor(self):
+                raise AssertionError("database should not be queried without symbols")
+
+        result = kline_statistics.load_daily_kline_for_symbols(
+            FailingConnection(),
+            [],
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            "D",
+            3,
+        )
+
+        self.assertTrue(result.empty)
+
 
 if __name__ == "__main__":
     unittest.main()
