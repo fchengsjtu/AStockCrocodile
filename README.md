@@ -486,6 +486,23 @@ Set `DEEPSEEK_API_KEY` in the environment or in `env.txt`. Useful options:
 - `--llm-response-file data\llm_patterns.json`: validate a saved LLM JSON response without calling the API.
 - `--api-base-url https://api.deepseek.com/v1`: override the DeepSeek-compatible endpoint.
 
+Use saved LLM/DeepSeek patterns for future stock selection:
+
+```powershell
+python .\llm_pattern_selector.py --date 20260508
+```
+
+The selector reads validated rows from `surgepatterns`, extracts the same daily/weekly features for the target date, and saves matched stocks to `stockselection` with strategy name `llm_surge_pattern_v1`.
+
+Useful filters:
+
+- `--min-success-rate 0.35`: require at least this actual test-set success rate.
+- `--min-sample-count 20`: require enough test-set occurrences.
+- `--min-positive-support 5`: require enough training positive support.
+- `--test-start-date 20260101 --test-end-date 20260430`: use patterns validated on a specific test range.
+- `--limit 20`: keep only the top-ranked matches.
+- `--output data\llm_pattern_selection.csv`: also write results to CSV.
+
 ## News Crawler
 
 `news_crawler.py` crawls stock-market news from AkShare-backed public sources and writes rows to MySQL table `news`.
