@@ -41,6 +41,10 @@ DEFAULT_CANDIDATE_COUNT = 80
 DEFAULT_BATCH_SIZE = 40
 DEFAULT_API_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_API_KEY_ENV = "DEEPSEEK_API_KEY"
+TRAINING_MODE_SUMMARY = "summary"
+TRAINING_MODE_RAW_KLINE = "raw-kline"
+DEFAULT_RAW_KLINE_WINDOW = 55
+DEFAULT_RAW_SAMPLE_SIZE = 30
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,8 @@ class LlmPatternConfig:
     candidate_count: int
     top_features: int
     top_pairs: int
+    training_mode: str
+    raw_sample_size: int
     api_base_url: str
     api_key_env: str
     llm_response_file: str | None
@@ -143,6 +149,98 @@ def _format_counter(counter: Counter, total: int, limit: int) -> list[dict]:
     return rows
 
 
+def _round_value(value) -> float | None:
+    if pd.isna(value):
+        return None
+    return round(float(value), 4)
+
+
+def _frame_window_to_records(frame: pd.DataFrame) -> list[dict]:
+    records = []
+    columns = ["TradeDate", "Open", "Close", "High", "Low", "Volume", "Amount", "MA5", "MA13", "MA34", "MA55"]
+    for item in frame[columns].itertuples(index=False):
+        records.append(
+            {
+                "date": str(item.TradeDate),
+                "open": _round_value(item.Open),
+                "close": _round_value(item.Close),
+                "high": _round_value(item.High),
+                "low": _round_value(item.Low),
+                "volume": _round_value(item.Volume),
+                "amount": _round_value(item.Amount),
+                "ma5": _round_value(item.MA5),
+                "ma13": _round_value(item.MA13),
+                "ma34": _round_value(item.MA34),
+                "ma55": _round_value(item.MA55),
+            }
+        )
+    return records
+
+
+def _select_evenly_spaced_events(positives: pd.DataFrame, limit: int) -> pd.DataFrame:
+    if positives.empty or len(positives) <= limit:
+        return positives.copy()
+    ordered = positives.sort_values(["SelectionDate", "SCode"]).reset_index(drop=True)
+    indexes = sorted({round(index * (len(ordered) - 1) / (limit - 1)) for index in range(limit)})
+    return ordered.iloc[indexes].reset_index(drop=True)
+
+
+def collect_positive_kline_samples(conn, positives: pd.DataFrame, config: LlmPatternConfig, start_date: date, end_date: date) -> tuple[list[dict], Counter, int]:
+    samples = []
+    feature_counts: Counter[tuple[str, ...]] = Counter()
+    target_events = _select_evenly_spaced_events(positives, config.raw_sample_size)
+    symbols = sorted(target_events["SCode"].dropna().unique().tolist())
+    if not symbols:
+        return samples, feature_counts, 0
+    lookback_start = start_date - timedelta(days=max(500, config.weekly_window * 10, config.daily_window * 3))
+    for batch_index, batch in enumerate(iter_batches(symbols, config.batch_size), start=1):
+        daily_df = load_kline_for_symbols(conn, "dkandles", DEFAULT_KTYPE, batch, lookback_start, end_date)
+        weekly_df = load_kline_for_symbols(conn, "wkandles", "W", batch, lookback_start, end_date)
+        daily_frames = make_frame_map(daily_df)
+        weekly_frames = make_frame_map(weekly_df)
+        batch_events = target_events[target_events["SCode"].isin(batch)]
+        batch_samples = 0
+        for event in batch_events.itertuples(index=False):
+            daily_frame = daily_frames.get(event.SCode)
+            weekly_frame = weekly_frames.get(event.SCode)
+            if daily_frame is None or weekly_frame is None:
+                continue
+            daily_matches = daily_frame.index[daily_frame["TradeDate"] == event.SelectionDate].tolist()
+            if not daily_matches:
+                continue
+            daily_pos = daily_matches[0]
+            weekly_positions = weekly_frame.index[weekly_frame["TradeDate"] <= event.SelectionDate].tolist()
+            if not weekly_positions:
+                continue
+            weekly_pos = weekly_positions[-1]
+            if daily_pos + 1 < config.daily_window or weekly_pos + 1 < config.weekly_window:
+                continue
+            daily_window = daily_frame.iloc[daily_pos + 1 - config.daily_window : daily_pos + 1]
+            weekly_window = weekly_frame.iloc[weekly_pos + 1 - config.weekly_window : weekly_pos + 1]
+            features = extract_features_for_date(daily_frame, weekly_frame, event.SelectionDate, config.daily_window, config.weekly_window)
+            if not features:
+                continue
+            for pattern in iter_pattern_keys(features, config.max_pattern_size):
+                feature_counts[pattern] += 1
+            samples.append(
+                {
+                    "scode": event.SCode,
+                    "sname": event.SName,
+                    "selection_date": str(event.SelectionDate),
+                    "start_rise_date": str(event.StartRiseDate),
+                    "gain_rate": _round_value(event.GainRate),
+                    "daily_bars": _frame_window_to_records(daily_window),
+                    "weekly_bars": _frame_window_to_records(weekly_window),
+                }
+            )
+            batch_samples += 1
+        print(
+            f"llm raw-kline batch {batch_index} symbols={len(batch)} events={len(batch_events)} samples={batch_samples}",
+            flush=True,
+        )
+    return samples, feature_counts, len(samples)
+
+
 def build_llm_prompt(
     single_counts: Counter,
     pair_counts: Counter,
@@ -174,6 +272,41 @@ def build_llm_prompt(
         "Prefer robust combinations that could generalize, not merely the highest-support pairs. "
         "Return strict JSON only, with this schema: "
         '{"patterns":[{"name":"short_name","features":["TOKEN_A","TOKEN_B"],"rationale":"brief reason"}]}. '
+        "Do not include markdown or extra commentary.\n\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+
+
+def build_raw_kline_llm_prompt(
+    samples: list[dict],
+    feature_counts: Counter,
+    config: LlmPatternConfig,
+    train_start_date: date,
+    train_end_date: date,
+    test_start_date: date,
+    test_end_date: date,
+) -> str:
+    valid_features = sorted(feature[0] for feature in feature_counts if len(feature) == 1)
+    payload = {
+        "task": "Generate candidate technical setup patterns from raw K-line positive samples.",
+        "positive_label": config.stat_type,
+        "train_range": [str(train_start_date), str(train_end_date)],
+        "test_range_for_validation": [str(test_start_date), str(test_end_date)],
+        "input_mode": "raw-kline",
+        "windows": {
+            "daily": f"{config.daily_window} daily bars ending at SelectionDate, SelectionDate included",
+            "weekly": f"{config.weekly_window} weekly bars ending at SelectionDate, latest weekly bar on or before SelectionDate included",
+        },
+        "candidate_count": config.candidate_count,
+        "allowed_feature_tokens": valid_features,
+        "positive_samples": samples,
+    }
+    return (
+        "You are a quantitative trading research assistant. "
+        "Study ONLY the raw daily_bars and weekly_bars in the positive samples, then propose diverse setup patterns. "
+        "For validation compatibility, every returned feature must be chosen exactly from allowed_feature_tokens. "
+        "Return strict JSON only, with this schema: "
+        '{"patterns":[{"name":"short_name","features":["TOKEN_A","TOKEN_B"],"rationale":"brief reason from raw K-line windows"}]}. '
         "Do not include markdown or extra commentary.\n\n"
         + json.dumps(payload, ensure_ascii=False)
     )
@@ -274,6 +407,37 @@ def load_or_generate_llm_patterns(
     return patterns[: config.candidate_count]
 
 
+def load_or_generate_raw_kline_patterns(
+    samples: list[dict],
+    feature_counts: Counter,
+    config: LlmPatternConfig,
+    train_start_date: date,
+    train_end_date: date,
+    test_start_date: date,
+    test_end_date: date,
+) -> list[tuple[str, ...]]:
+    valid_features = {feature[0] for feature in feature_counts if len(feature) == 1}
+    prompt = build_raw_kline_llm_prompt(
+        samples,
+        feature_counts,
+        config,
+        train_start_date,
+        train_end_date,
+        test_start_date,
+        test_end_date,
+    )
+    if config.llm_response_file:
+        with open(config.llm_response_file, "r", encoding="utf-8-sig") as file:
+            response_text = file.read()
+    else:
+        response_text = call_deepseek_chat(prompt, config)
+    patterns = parse_llm_patterns(response_text, valid_features, config.max_pattern_size)
+    if not patterns:
+        raise RuntimeError("LLM did not return any valid raw-kline patterns using known feature tokens")
+    print(f"llm raw-kline candidate patterns={len(patterns)}", flush=True)
+    return patterns[: config.candidate_count]
+
+
 def run_llm_pattern_mining(config: LlmPatternConfig) -> pd.DataFrame:
     test_start_date = parse_date(config.test_start_date)
     test_end_date = parse_date(config.test_end_date)
@@ -305,23 +469,43 @@ def run_llm_pattern_mining(config: LlmPatternConfig) -> pd.DataFrame:
             f"train_rows={len(train_positives)} test_rows={len(test_positives)}",
             flush=True,
         )
-        single_counts, pair_counts, feature_rows = collect_positive_feature_summary(
-            conn,
-            train_positives,
-            config,
-            train_start_date,
-            train_end_date,
-        )
-        llm_patterns = load_or_generate_llm_patterns(
-            single_counts,
-            pair_counts,
-            feature_rows,
-            config,
-            train_start_date,
-            train_end_date,
-            test_start_date,
-            test_end_date,
-        )
+        if config.training_mode == TRAINING_MODE_RAW_KLINE:
+            samples, feature_counts, feature_rows = collect_positive_kline_samples(
+                conn,
+                train_positives,
+                config,
+                train_start_date,
+                train_end_date,
+            )
+            llm_patterns = load_or_generate_raw_kline_patterns(
+                samples,
+                feature_counts,
+                config,
+                train_start_date,
+                train_end_date,
+                test_start_date,
+                test_end_date,
+            )
+            single_counts = feature_counts
+            pair_counts = Counter()
+        else:
+            single_counts, pair_counts, feature_rows = collect_positive_feature_summary(
+                conn,
+                train_positives,
+                config,
+                train_start_date,
+                train_end_date,
+            )
+            llm_patterns = load_or_generate_llm_patterns(
+                single_counts,
+                pair_counts,
+                feature_rows,
+                config,
+                train_start_date,
+                train_end_date,
+                test_start_date,
+                test_end_date,
+            )
         positive_support = Counter()
         for pattern in llm_patterns:
             positive_support[pattern] = single_counts.get(pattern, pair_counts.get(pattern, 0))
@@ -360,8 +544,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-sample-count", type=int, default=20)
     parser.add_argument("--min-positive-support", type=int, default=5)
     parser.add_argument("--max-pattern-size", type=int, default=2)
-    parser.add_argument("--daily-window", type=int, default=DEFAULT_DAILY_WINDOW)
-    parser.add_argument("--weekly-window", type=int, default=DEFAULT_WEEKLY_WINDOW)
+    parser.add_argument("--training-mode", choices=(TRAINING_MODE_SUMMARY, TRAINING_MODE_RAW_KLINE), default=TRAINING_MODE_SUMMARY, help="summary keeps the old feature-summary mode; raw-kline sends raw 55 daily/weekly bars to DeepSeek")
+    parser.add_argument("--daily-window", type=int)
+    parser.add_argument("--weekly-window", type=int)
+    parser.add_argument("--raw-sample-size", type=int, default=DEFAULT_RAW_SAMPLE_SIZE, help="Number of positive raw K-line samples sent to DeepSeek in raw-kline mode")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--model", default=os.environ.get("DEEPSEEK_MODEL", DEFAULT_MODEL))
     parser.add_argument("--candidate-count", type=int, default=DEFAULT_CANDIDATE_COUNT)
@@ -377,6 +563,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    default_window = DEFAULT_RAW_KLINE_WINDOW if args.training_mode == TRAINING_MODE_RAW_KLINE else DEFAULT_DAILY_WINDOW
+    daily_window = args.daily_window or default_window
+    weekly_window = args.weekly_window or default_window
     run_llm_pattern_mining(
         LlmPatternConfig(
             test_start_date=args.test_start_date,
@@ -388,13 +577,15 @@ def main(argv: Iterable[str] | None = None) -> None:
             min_sample_count=max(1, args.min_sample_count),
             min_positive_support=max(1, args.min_positive_support),
             max_pattern_size=max(1, args.max_pattern_size),
-            daily_window=max(2, args.daily_window),
-            weekly_window=max(2, args.weekly_window),
+            daily_window=max(2, daily_window),
+            weekly_window=max(2, weekly_window),
             batch_size=max(1, args.batch_size),
             model=args.model,
             candidate_count=max(1, args.candidate_count),
             top_features=max(1, args.top_features),
             top_pairs=max(1, args.top_pairs),
+            training_mode=args.training_mode,
+            raw_sample_size=max(1, args.raw_sample_size),
             api_base_url=args.api_base_url,
             api_key_env=args.api_key_env,
             llm_response_file=args.llm_response_file,

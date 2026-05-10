@@ -482,9 +482,18 @@ python .\llm_surge_pattern_miner.py --test-start-date 20260101 --test-end-date 2
 Set `DEEPSEEK_API_KEY` in the environment or in `env.txt`. Useful options:
 
 - `--model deepseek-chat`: choose the DeepSeek model.
+- `--training-mode summary`: keep the previous feature-summary training mode.
+- `--training-mode raw-kline`: use the new raw K-line mode; DeepSeek receives selected positive samples containing only 55 daily bars and 55 weekly bars ending at `SelectionDate`.
+- `--raw-sample-size 30`: number of positive raw K-line samples sent to DeepSeek in raw mode.
 - `--candidate-count 80`: number of LLM candidate patterns to validate.
 - `--llm-response-file data\llm_patterns.json`: validate a saved LLM JSON response without calling the API.
 - `--api-base-url https://api.deepseek.com/v1`: override the DeepSeek-compatible endpoint.
+
+Run the new raw K-line training mode:
+
+```powershell
+python .\llm_surge_pattern_miner.py --training-mode raw-kline --test-start-date 20260101 --test-end-date 20260430
+```
 
 Use saved LLM/DeepSeek patterns for future stock selection:
 

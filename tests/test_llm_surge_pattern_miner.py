@@ -44,6 +44,8 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
             candidate_count=20,
             top_features=10,
             top_pairs=10,
+            training_mode=llm_surge_pattern_miner.TRAINING_MODE_SUMMARY,
+            raw_sample_size=30,
             api_base_url="https://api.deepseek.com/v1",
             api_key_env="DEEPSEEK_API_KEY",
             llm_response_file=None,
@@ -65,6 +67,55 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
         self.assertIn("D_CLOSE_GT_MA5", prompt)
         self.assertIn("2026-04-30", prompt)
         self.assertIn('"candidate_count": 20', prompt)
+
+    def test_build_raw_kline_prompt_contains_bars_and_allowed_features(self):
+        config = llm_surge_pattern_miner.LlmPatternConfig(
+            test_start_date="20260101",
+            test_end_date="20260430",
+            train_start_date="20100101",
+            train_end_date="20251231",
+            stat_type="short_term_surge_3d_20pct",
+            success_rates=(0.25, 0.5),
+            min_sample_count=20,
+            min_positive_support=5,
+            max_pattern_size=2,
+            daily_window=55,
+            weekly_window=55,
+            batch_size=40,
+            model="deepseek-chat",
+            candidate_count=20,
+            top_features=10,
+            top_pairs=10,
+            training_mode=llm_surge_pattern_miner.TRAINING_MODE_RAW_KLINE,
+            raw_sample_size=3,
+            api_base_url="https://api.deepseek.com/v1",
+            api_key_env="DEEPSEEK_API_KEY",
+            llm_response_file=None,
+            output=None,
+            save_db=False,
+        )
+        samples = [
+            {
+                "scode": "000001",
+                "selection_date": "2025-12-31",
+                "daily_bars": [{"date": "2025-12-31", "close": 10.0}],
+                "weekly_bars": [{"date": "2025-12-26", "close": 9.5}],
+            }
+        ]
+
+        prompt = llm_surge_pattern_miner.build_raw_kline_llm_prompt(
+            samples,
+            Counter({("D_CLOSE_GT_MA5",): 3, ("D_CLOSE_GT_MA5", "W_MA5_GT_MA13"): 2}),
+            config,
+            date(2010, 1, 1),
+            date(2025, 12, 31),
+            date(2026, 1, 1),
+            date(2026, 4, 30),
+        )
+
+        self.assertIn('"input_mode": "raw-kline"', prompt)
+        self.assertIn('"daily_bars"', prompt)
+        self.assertIn("D_CLOSE_GT_MA5", prompt)
 
 
 if __name__ == "__main__":
