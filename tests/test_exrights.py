@@ -208,6 +208,8 @@ class ExRightsTests(unittest.TestCase):
         stockinfo_sql = "\n".join(conn.cursor_obj.sql)
         self.assertIn("INSERT INTO stockinfo", stockinfo_sql)
         self.assertNotIn("ContentHash = VALUES(ContentHash)", stockinfo_sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS stockinfo", stockinfo_sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS dkandles", stockinfo_sql)
 
     def test_stockinfo_contenthash_default_is_fixed_when_column_exists(self):
         class FakeCursor:
@@ -244,7 +246,40 @@ class ExRightsTests(unittest.TestCase):
         sql = "\n".join(conn.cursor_obj.sql)
         self.assertIn("UPDATE stockinfo SET ContentHash = ''", sql)
         self.assertIn("ALTER TABLE stockinfo MODIFY COLUMN ContentHash CHAR(64) NOT NULL DEFAULT ''", sql)
-        self.assertEqual(conn.commits, 1)
+        self.assertEqual(conn.commits, 2)
+
+    def test_ensure_kline_table_creates_required_columns(self):
+        class FakeCursor:
+            def __init__(self):
+                self.sql = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, sql, params=None):
+                self.sql.append(sql)
+
+        class FakeConn:
+            def __init__(self):
+                self.cursor_obj = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_obj
+
+            def commit(self):
+                pass
+
+        conn = FakeConn()
+
+        crawler.ensure_kline_table(conn, "dkandles")
+
+        sql = "\n".join(conn.cursor_obj.sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS dkandles", sql)
+        self.assertIn("UpdatedOn DATETIME", sql)
+        self.assertIn("UNIQUE KEY ux_kline_code_type_time", sql)
 
     def test_run_parser_defaults_to_qfq_only(self):
         args = crawler.build_parser().parse_args(["run"])

@@ -233,7 +233,69 @@ def next_yyyymmdd(value: date | datetime | str | None) -> str | None:
     return (datetime.strptime(current, "%Y%m%d") + timedelta(days=1)).strftime("%Y%m%d")
 
 
+def ensure_stockinfo_table(conn: pymysql.connections.Connection) -> None:
+    sql = """
+        CREATE TABLE IF NOT EXISTS stockinfo (
+            Id BIGINT NOT NULL AUTO_INCREMENT,
+            SCode VARCHAR(10) NOT NULL,
+            SName VARCHAR(64) NULL,
+            IsIndex TINYINT NULL DEFAULT 0,
+            LatestUpdateKandle DATETIME NULL,
+            ContentHash CHAR(64) NOT NULL DEFAULT '',
+            CreatedOn DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UpdatedOn DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (Id),
+            UNIQUE KEY ux_stockinfo_code (SCode),
+            KEY idx_stockinfo_latest_kandle (LatestUpdateKandle)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql)
+    conn.commit()
+
+
+def ensure_kline_table(conn: pymysql.connections.Connection, table: str) -> None:
+    if table not in {"dkandles", "wkandles", "mkandles"}:
+        raise ValueError(f"unsupported K-line table: {table}")
+    sql = f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            Id BIGINT NOT NULL AUTO_INCREMENT,
+            SCode VARCHAR(10) NOT NULL,
+            KType CHAR(1) NOT NULL,
+            KTime DATETIME NOT NULL,
+            Amount DECIMAL(24,6) NULL,
+            Volume DECIMAL(24,6) NULL,
+            MA5 DECIMAL(18,6) NULL,
+            MA13 DECIMAL(18,6) NULL,
+            MA8 DECIMAL(18,6) NULL,
+            Open DECIMAL(18,6) NULL,
+            Close DECIMAL(18,6) NULL,
+            High DECIMAL(18,6) NULL,
+            Low DECIMAL(18,6) NULL,
+            MA55 DECIMAL(18,6) NULL,
+            MA34 DECIMAL(18,6) NULL,
+            CreatedOn DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UpdatedOn DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (Id),
+            UNIQUE KEY ux_kline_code_type_time (SCode, KType, KTime),
+            KEY idx_kline_type_time (KType, KTime),
+            KEY idx_kline_code_time (SCode, KTime)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql)
+    conn.commit()
+
+
+def ensure_core_tables(conn: pymysql.connections.Connection) -> None:
+    ensure_stockinfo_table(conn)
+    ensure_kline_table(conn, "dkandles")
+    ensure_kline_table(conn, "wkandles")
+    ensure_kline_table(conn, "mkandles")
+
+
 def ensure_stockinfo_contenthash_default(conn: pymysql.connections.Connection) -> None:
+    ensure_stockinfo_table(conn)
     with conn.cursor() as cur:
         cur.execute("SHOW COLUMNS FROM stockinfo LIKE 'ContentHash'")
         if cur.fetchone() is None:
@@ -244,6 +306,7 @@ def ensure_stockinfo_contenthash_default(conn: pymysql.connections.Connection) -
 
 
 def upsert_stock_info(conn: pymysql.connections.Connection, stocks: pd.DataFrame) -> None:
+    ensure_core_tables(conn)
     ensure_stockinfo_contenthash_default(conn)
     sql = """
         INSERT INTO stockinfo (SCode, SName, IsIndex)
@@ -480,6 +543,7 @@ def iter_batches(items: list[tuple], size: int):
 def insert_rows(conn: pymysql.connections.Connection, rows: list[tuple]) -> int:
     if not rows:
         return 0
+    ensure_kline_table(conn, "dkandles")
     insert_sql = """
         INSERT INTO dkandles
             (SCode, KType, KTime, Amount, Volume, MA5, MA13, MA8, Open, Close, High, Low, MA55, MA34)
@@ -1085,6 +1149,7 @@ def insert_derived_rows(conn: pymysql.connections.Connection, table: str, rows: 
         return 0
     if table not in {"wkandles", "mkandles"}:
         raise ValueError(f"unsupported derived K-line table: {table}")
+    ensure_kline_table(conn, table)
     insert_sql = f"""
         INSERT INTO {table}
             (SCode, KType, KTime, Amount, Volume, MA5, MA8, MA13, Open, Close, High, Low, CreatedOn, UpdatedOn, MA55, MA34)
