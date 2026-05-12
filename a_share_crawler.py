@@ -1164,10 +1164,16 @@ def insert_derived_rows(conn: pymysql.connections.Connection, table: str, rows: 
     return inserted
 
 
-def aggregate_daily_to_period(daily_df: pd.DataFrame, period: str) -> pd.DataFrame:
+def aggregate_daily_to_period(
+    daily_df: pd.DataFrame,
+    period: str,
+    today: date | None = None,
+    include_current_period: bool = False,
+) -> pd.DataFrame:
     cfg = DERIVED_KLINE_CONFIG[period]
     if daily_df.empty:
         return pd.DataFrame()
+    today = today or date.today()
     source = daily_df.copy()
     source["KTime"] = pd.to_datetime(source["KTime"], errors="coerce")
     for column in ("Amount", "Volume", "Open", "Close", "High", "Low"):
@@ -1194,6 +1200,19 @@ def aggregate_daily_to_period(daily_df: pd.DataFrame, period: str) -> pd.DataFra
         LastDailyTime=("KTime", "max"),
     ).reset_index()
     aggregated = aggregated.dropna(subset=["SCode", "Open", "Close", "High", "Low"], how="any")
+    if aggregated.empty:
+        return pd.DataFrame()
+
+    if period == "weekly":
+        period_end_dates = aggregated["GroupKey"].dt.end_time.dt.date
+        aggregated = aggregated[period_end_dates <= today].copy()
+    else:
+        period_starts = aggregated["GroupKey"].dt.start_time.dt.date
+        current_month_start = today.replace(day=1)
+        completed_mask = period_starts < current_month_start
+        if include_current_period:
+            completed_mask = completed_mask | (period_starts == current_month_start)
+        aggregated = aggregated[completed_mask].copy()
     if aggregated.empty:
         return pd.DataFrame()
 
@@ -1244,6 +1263,7 @@ def generate_derived_kline(period: str, symbols: Iterable[str] | None = None) ->
         for item in periods:
             cfg = DERIVED_KLINE_CONFIG[item]
             table = cfg["table"]
+            include_current_period = item == "monthly" and is_last_trade_day()
             total_rows = 0
             success_count = 0
             fail_count = 0
@@ -1258,7 +1278,11 @@ def generate_derived_kline(period: str, symbols: Iterable[str] | None = None) ->
             for symbol in tqdm(target_symbols, total=len(target_symbols), desc=f"generate {item}"):
                 try:
                     daily_df = load_daily_for_symbol(conn, symbol)
-                    derived_df = aggregate_daily_to_period(daily_df, item)
+                    derived_df = aggregate_daily_to_period(
+                        daily_df,
+                        item,
+                        include_current_period=include_current_period,
+                    )
                     inserted = insert_derived_rows(conn, table, rows_for_derived_insert(derived_df))
                     conn.commit()
                     total_rows += inserted

@@ -34,6 +34,31 @@ class ExRightsTests(unittest.TestCase):
         self.assertEqual(row["Amount"], 90573.78)
         self.assertEqual(row["KTime"].hour, 15)
 
+    def test_weekly_aggregation_skips_unfinished_current_week(self):
+        df = pd.DataFrame(
+            [
+                {"SCode": "000001", "KTime": datetime(2026, 5, 11, 15), "Amount": 1, "Volume": 1, "Open": 10, "Close": 11, "High": 12, "Low": 9},
+                {"SCode": "000001", "KTime": datetime(2026, 5, 12, 15), "Amount": 1, "Volume": 1, "Open": 11, "Close": 12, "High": 13, "Low": 10},
+            ]
+        )
+
+        result = crawler.aggregate_daily_to_period(df, "weekly", today=date(2026, 5, 12))
+
+        self.assertTrue(result.empty)
+
+    def test_monthly_aggregation_skips_unfinished_current_month(self):
+        df = pd.DataFrame(
+            [
+                {"SCode": "000001", "KTime": datetime(2026, 4, 30, 15), "Amount": 1, "Volume": 1, "Open": 10, "Close": 11, "High": 12, "Low": 9},
+                {"SCode": "000001", "KTime": datetime(2026, 5, 11, 15), "Amount": 1, "Volume": 1, "Open": 11, "Close": 12, "High": 13, "Low": 10},
+            ]
+        )
+
+        result = crawler.aggregate_daily_to_period(df, "monthly", today=date(2026, 5, 12))
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.iloc[0]["KTime"], pd.Timestamp("2026-04-30 18:00:00"))
+
     def test_parse_tencent_exrights_content(self):
         bonus, transfer, cash = crawler.parse_tencent_exrights_content("10\u90016\u80a1, 10\u8f6c2\u80a1, 10\u6d3e1.7\u5143")
 
