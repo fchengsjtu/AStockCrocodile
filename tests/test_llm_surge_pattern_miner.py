@@ -64,14 +64,14 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
             daily_window=56,
             weekly_window=56,
             batch_size=40,
-            model="deepseek-chat",
+            model="deepseek-r1-distill-qwen-14b",
             candidate_count=20,
             top_features=10,
             top_pairs=10,
             training_mode=llm_surge_pattern_miner.TRAINING_MODE_SUMMARY,
             raw_sample_size=30,
-            api_base_url="https://api.deepseek.com/v1",
-            api_key_env="DEEPSEEK_API_KEY",
+            api_base_url="http://127.0.0.1:1234/v1",
+            api_key_env="LOCAL_LLM_API_KEY",
             llm_response_file=None,
             output=None,
             save_db=False,
@@ -107,14 +107,14 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
             daily_window=55,
             weekly_window=55,
             batch_size=40,
-            model="deepseek-chat",
+            model="deepseek-r1-distill-qwen-14b",
             candidate_count=20,
             top_features=10,
             top_pairs=10,
             training_mode=llm_surge_pattern_miner.TRAINING_MODE_RAW_KLINE,
             raw_sample_size=3,
-            api_base_url="https://api.deepseek.com/v1",
-            api_key_env="DEEPSEEK_API_KEY",
+            api_base_url="http://127.0.0.1:1234/v1",
+            api_key_env="LOCAL_LLM_API_KEY",
             llm_response_file=None,
             output=None,
             save_db=False,
@@ -150,6 +150,14 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
         )
 
         self.assertEqual(support, 5)
+
+    def test_parser_defaults_to_local_llm_endpoint(self):
+        parser = llm_surge_pattern_miner.build_parser()
+        args = parser.parse_args([])
+
+        self.assertEqual(args.model, "deepseek-r1-distill-qwen-14b")
+        self.assertEqual(args.api_base_url, "http://127.0.0.1:1234/v1")
+        self.assertEqual(args.api_key_env, "LOCAL_LLM_API_KEY")
 
 
 if __name__ == "__main__":

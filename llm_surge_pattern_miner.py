@@ -36,11 +36,12 @@ DEFAULT_TEST_START_DATE = "20260101"
 DEFAULT_TEST_END_DATE = "20260430"
 DEFAULT_TRAIN_START_DATE = "20100101"
 DEFAULT_SUCCESS_RATES = (0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
-DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_MODEL = "deepseek-r1-distill-qwen-14b"
 DEFAULT_CANDIDATE_COUNT = 80
 DEFAULT_BATCH_SIZE = 40
-DEFAULT_API_BASE_URL = "https://api.deepseek.com/v1"
-DEFAULT_API_KEY_ENV = "DEEPSEEK_API_KEY"
+DEFAULT_API_BASE_URL = "http://127.0.0.1:1234/v1"
+DEFAULT_API_KEY_ENV = "LOCAL_LLM_API_KEY"
+DEFAULT_LOCAL_API_KEY = "local"
 DEFAULT_MIN_PATTERN_SIZE = 3
 DEFAULT_MAX_PATTERN_SIZE = 8
 TRAINING_MODE_SUMMARY = "summary"
@@ -321,11 +322,9 @@ def build_raw_kline_llm_prompt(
     )
 
 
-def call_deepseek_chat(prompt: str, config: LlmPatternConfig) -> str:
+def call_llm_chat(prompt: str, config: LlmPatternConfig) -> str:
     load_env_file()
-    api_key = os.environ.get(config.api_key_env)
-    if not api_key:
-        raise RuntimeError(f"Missing {config.api_key_env}; set it in env.txt or the process environment")
+    api_key = os.environ.get(config.api_key_env) or DEFAULT_LOCAL_API_KEY
     url = config.api_base_url.rstrip("/") + "/chat/completions"
     body = {
         "model": config.model,
@@ -339,20 +338,22 @@ def call_deepseek_chat(prompt: str, config: LlmPatternConfig) -> str:
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
     }
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
     try:
+        request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
         with urllib.request.urlopen(request, timeout=120) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        if exc.code in {400, 404, 422} and "response_format" in body:
+            body.pop("response_format", None)
+            request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
+            with urllib.request.urlopen(request, timeout=120) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            return payload["choices"][0]["message"]["content"]
         raise RuntimeError(f"LLM request failed: HTTP {exc.code}: {detail}") from exc
     return payload["choices"][0]["message"]["content"]
 
@@ -442,7 +443,7 @@ def load_or_generate_llm_patterns(
         with open(config.llm_response_file, "r", encoding="utf-8-sig") as file:
             response_text = file.read()
     else:
-        response_text = call_deepseek_chat(prompt, config)
+            response_text = call_llm_chat(prompt, config)
     patterns = parse_llm_patterns(response_text, valid_features, config.min_pattern_size, config.max_pattern_size)
     if not patterns:
         raise RuntimeError("LLM did not return any valid patterns using known feature tokens")
@@ -473,7 +474,7 @@ def load_or_generate_raw_kline_patterns(
         with open(config.llm_response_file, "r", encoding="utf-8-sig") as file:
             response_text = file.read()
     else:
-        response_text = call_deepseek_chat(prompt, config)
+        response_text = call_llm_chat(prompt, config)
     patterns = parse_llm_patterns(response_text, valid_features, config.min_pattern_size, config.max_pattern_size)
     if not patterns:
         patterns = fallback_patterns_from_counts(feature_counts, config.min_pattern_size, config.max_pattern_size, config.candidate_count)
@@ -586,7 +587,8 @@ def run_llm_pattern_mining(config: LlmPatternConfig) -> pd.DataFrame:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Use DeepSeek to propose surge setup patterns, then validate them on historical K-lines")
+    load_env_file()
+    parser = argparse.ArgumentParser(description="Use a local OpenAI-compatible LLM to propose surge setup patterns, then validate them on historical K-lines")
     parser.add_argument("--test-start-date", default=DEFAULT_TEST_START_DATE, help="Test selection date start")
     parser.add_argument("--test-end-date", default=DEFAULT_TEST_END_DATE, help="Test selection date end")
     parser.add_argument("--train-start-date", default=DEFAULT_TRAIN_START_DATE, help="Training selection date start")
@@ -597,16 +599,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-positive-support", type=int, default=5)
     parser.add_argument("--min-pattern-size", type=int, default=DEFAULT_MIN_PATTERN_SIZE, help="Minimum number of feature clauses in each LLM pattern")
     parser.add_argument("--max-pattern-size", type=int, default=DEFAULT_MAX_PATTERN_SIZE, help="Maximum number of feature clauses in each LLM pattern")
-    parser.add_argument("--training-mode", choices=(TRAINING_MODE_SUMMARY, TRAINING_MODE_RAW_KLINE), default=TRAINING_MODE_SUMMARY, help="summary keeps the old feature-summary mode; raw-kline sends raw 55 daily/weekly bars to DeepSeek")
+    parser.add_argument("--training-mode", choices=(TRAINING_MODE_SUMMARY, TRAINING_MODE_RAW_KLINE), default=TRAINING_MODE_SUMMARY, help="summary keeps the old feature-summary mode; raw-kline sends raw 55 daily/weekly bars to the local LLM")
     parser.add_argument("--daily-window", type=int)
     parser.add_argument("--weekly-window", type=int)
-    parser.add_argument("--raw-sample-size", type=int, default=DEFAULT_RAW_SAMPLE_SIZE, help="Number of positive raw K-line samples sent to DeepSeek in raw-kline mode")
+    parser.add_argument("--raw-sample-size", type=int, default=DEFAULT_RAW_SAMPLE_SIZE, help="Number of positive raw K-line samples sent to the local LLM in raw-kline mode")
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
-    parser.add_argument("--model", default=os.environ.get("DEEPSEEK_MODEL", DEFAULT_MODEL))
+    parser.add_argument("--model", default=os.environ.get("LOCAL_LLM_MODEL") or os.environ.get("DEEPSEEK_MODEL", DEFAULT_MODEL))
     parser.add_argument("--candidate-count", type=int, default=DEFAULT_CANDIDATE_COUNT)
     parser.add_argument("--top-features", type=int, default=80)
     parser.add_argument("--top-pairs", type=int, default=120)
-    parser.add_argument("--api-base-url", default=os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_API_BASE_URL))
+    parser.add_argument("--api-base-url", default=os.environ.get("LOCAL_LLM_BASE_URL") or os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_API_BASE_URL))
     parser.add_argument("--api-key-env", default=DEFAULT_API_KEY_ENV)
     parser.add_argument("--llm-response-file", help="Use a saved JSON response instead of calling the LLM API")
     parser.add_argument("--output", help="Optional CSV path for retained patterns")

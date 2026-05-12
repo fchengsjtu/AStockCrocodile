@@ -9,10 +9,11 @@ It no longer writes CSV files during crawling, and only `daily` K-line import is
 Create `env.txt` in the project root. The program reads this file automatically before connecting to MySQL.
 
 ```powershell
-$env:MYSQL_HOST='your-mysql-host'
+$env:MYSQL_HOST='127.0.0.1'
+$env:MYSQL_PORT='3306'
 $env:MYSQL_USER='your-mysql-user'
 $env:MYSQL_PASSWORD='your-mysql-password'
-$env:MYSQL_DATABASE='your-database'
+$env:MYSQL_DATABASE='emstocks'
 ```
 
 Optional values:
@@ -20,6 +21,9 @@ Optional values:
 ```powershell
 $env:MYSQL_PORT='3306'
 $env:DKANDLES_KTYPE='D'
+$env:LOCAL_LLM_BASE_URL='http://127.0.0.1:1234/v1'
+$env:LOCAL_LLM_MODEL='deepseek-r1-distill-qwen-14b'
+$env:LOCAL_LLM_API_KEY='local'
 ```
 
 `env.txt` is ignored by git because it contains credentials.
@@ -471,24 +475,32 @@ Useful options:
 - `--batch-size 40`: reduce this on small servers.
 - `--output data\surge_patterns.csv`: also write retained patterns to CSV.
 
-Mine DeepSeek-proposed surge setup patterns and validate them on the same test set:
+Mine local DeepSeek-proposed surge setup patterns and validate them on the same test set:
 
 ```powershell
 python .\llm_surge_pattern_miner.py --test-start-date 20260101 --test-end-date 20260430
 ```
 
-`llm_surge_pattern_miner.py` first summarizes the positive-sample feature distribution before `20260101`, asks DeepSeek to propose diverse candidate patterns using exact feature tokens, then validates those patterns on all test-set candidate dates from `20260101` through `20260430`. Retained patterns for success-rate thresholds `25%`, `30%`, `35%`, `40%`, `45%`, and `50%` are written to `surgepatterns`.
+`llm_surge_pattern_miner.py` first summarizes the positive-sample feature distribution before `20260101`, asks the local OpenAI-compatible model to propose diverse candidate patterns using exact feature tokens, then validates those patterns on all test-set candidate dates from `20260101` through `20260430`. Retained patterns for success-rate thresholds `25%`, `30%`, `35%`, `40%`, `45%`, and `50%` are written to `surgepatterns`.
 
-Set `DEEPSEEK_API_KEY` in the environment or in `env.txt`. Useful options:
+For the local model server, set these values in the environment or in `env.txt`:
 
-- `--model deepseek-chat`: choose the DeepSeek model.
+```powershell
+$env:LOCAL_LLM_BASE_URL='http://127.0.0.1:1234/v1'
+$env:LOCAL_LLM_MODEL='deepseek-r1-distill-qwen-14b'
+$env:LOCAL_LLM_API_KEY='local'
+```
+
+Useful options:
+
+- `--model deepseek-r1-distill-qwen-14b`: choose the local model.
 - `--training-mode summary`: keep the previous feature-summary training mode.
 - `--training-mode raw-kline`: use the new raw K-line mode; DeepSeek receives selected positive samples containing only 55 daily bars and 55 weekly bars ending at `SelectionDate`.
 - `--raw-sample-size 30`: number of positive raw K-line samples sent to DeepSeek in raw mode.
 - `--min-pattern-size 3 --max-pattern-size 8`: require each LLM pattern to contain at least 3 and at most 8 feature clauses.
 - `--candidate-count 80`: number of LLM candidate patterns to validate.
 - `--llm-response-file data\llm_patterns.json`: validate a saved LLM JSON response without calling the API.
-- `--api-base-url https://api.deepseek.com/v1`: override the DeepSeek-compatible endpoint.
+- `--api-base-url http://127.0.0.1:1234/v1`: override the local OpenAI-compatible endpoint.
 
 Run the new raw K-line training mode:
 
