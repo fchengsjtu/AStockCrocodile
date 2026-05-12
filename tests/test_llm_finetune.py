@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from llm_finetune import build_dataset
+from llm_finetune import evaluate_model
 from llm_finetune.common import KlineWindowSample, build_response, choose_target_features, to_messages_jsonl, write_jsonl
 
 
@@ -80,6 +81,9 @@ class LlmFineTuneTests(unittest.TestCase):
         self.assertEqual(len(train_a), 8)
         self.assertEqual(len(valid_a), 2)
         self.assertEqual([row.scode for row in valid_a], [row.scode for row in valid_b])
+
+    def test_evaluate_default_min_success_rate_is_40_percent(self):
+        self.assertEqual(evaluate_model.DEFAULT_MIN_SUCCESS_RATE, 0.40)
 
 
 if __name__ == "__main__":

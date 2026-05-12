@@ -516,12 +516,12 @@ python .\llm_blackbox_pattern_trainer.py
 
 `llm_blackbox_pattern_trainer.py` reads positive samples from `klinestatistics`, uses `PrevTradeDate` as the input anchor, and sends each training sample's 55 daily bars ending at `PrevTradeDate` plus 55 weekly bars ending on or before `PrevTradeDate` to the local OpenAI-compatible model in small batches. To fit local models with 4096-token contexts, each OHLCV bar is sent in a compact numeric matrix: price fields are basis points versus the window's last close, and volume is percent of the window's average volume. The split is deterministic: 80% training samples and 20% held-out test samples by default.
 
-The local model is used as a black-box rule generator, not as a weight fine-tuning endpoint. It proposes executable feature-token patterns; the program then validates those patterns on the held-out date range and writes only patterns with actual success rate at least `20%` to `surgepatterns`.
+The local model is used as a black-box rule generator, not as a weight fine-tuning endpoint. It proposes executable feature-token patterns; the program then validates those patterns on the held-out date range and writes only patterns with actual success rate at least `40%` to `surgepatterns`.
 
 Useful options:
 
 - `--train-ratio 0.8`: change the sample split ratio.
-- `--min-success-rate 0.20`: require at least this validated success rate before saving.
+- `--min-success-rate 0.40`: require at least this validated success rate before saving.
 - `--daily-window 55 --weekly-window 55`: keep the required input windows.
 - `--prompt-batch-size 3`: number of samples sent in one LLM request; reduce this to `1` if the local model reports context/request errors.
 - `--candidate-count 12`: number of patterns requested from each LLM training batch.
@@ -535,10 +535,14 @@ $env:LOCAL_LLM_TIMEOUT='600'
 $env:LOCAL_LLM_MAX_TOKENS='2048'
 ```
 
-Run a true LoRA/QLoRA fine-tuning pipeline for `DeepSeek-R1-Distill-Qwen-7B`:
+Run a true LoRA/QLoRA fine-tuning pipeline for `DeepSeek-R1-Distill-Qwen-7B`.
+
+Core commands:
 
 ```powershell
 python .\llm_finetune\build_dataset.py --positive-limit 2000 --negative-ratio 1.0
+python .\llm_finetune\train_lora.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --data-dir llm_finetune\data --output-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora --max-seq-length 4096 --batch-size 1 --gradient-accumulation-steps 8 --epochs 1
+python .\llm_finetune\evaluate_model.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --adapter-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora\adapter --data-dir llm_finetune\data --min-success-rate 0.40
 ```
 
 This creates:
@@ -561,16 +565,87 @@ Install the optional fine-tuning dependencies in a GPU environment:
 pip install -r requirements-finetune.txt
 ```
 
-For RTX 3060, QLoRA training is strongly recommended. Windows native `bitsandbytes` support can be fragile, so WSL2/Linux is usually the smoother path. Then run:
+For RTX 3060, QLoRA training is strongly recommended. Windows native `bitsandbytes` support can be fragile, so WSL2/Linux is usually the smoother path.
+
+Recommended RTX 3060 + WSL2 steps:
+
+1. Install or update the NVIDIA Windows driver. Use a recent Game Ready or Studio driver with WSL CUDA support.
+
+2. Enable WSL2 and install Ubuntu from an elevated PowerShell:
 
 ```powershell
-python .\llm_finetune\train_lora.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --data-dir llm_finetune\data --output-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora --max-seq-length 4096 --batch-size 1 --gradient-accumulation-steps 8 --epochs 1
+wsl --install -d Ubuntu-22.04
+wsl --set-default-version 2
+wsl --shutdown
 ```
 
-After training, evaluate the LoRA adapter and save only validated rules with actual success rate at least `20%` to `surgepatterns`:
+3. Open Ubuntu and verify the GPU is visible:
+
+```bash
+nvidia-smi
+```
+
+4. Clone the project or enter the mounted Windows project path. Mounted Windows paths work, but training is usually faster inside the Linux filesystem.
+
+```bash
+cd ~
+git clone https://github.com/fchengsjtu/AStockCrocodile.git
+cd AStockCrocodile
+```
+
+5. Create the WSL Python environment:
+
+```bash
+sudo apt update
+sudo apt install -y python3.10-venv python3-pip git
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+```
+
+6. Install PyTorch with CUDA, then project dependencies:
+
+```bash
+python -m pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
+python -m pip install -r requirements.txt
+python -m pip install -r requirements-finetune.txt
+```
+
+7. Copy or create `env.txt` in the WSL project root so the scripts can read MySQL. If MySQL runs on Windows, set `MYSQL_HOST` to the Windows host IP reachable from WSL, not always `127.0.0.1`.
+
+8. Verify CUDA from Python:
+
+```bash
+python - <<'PY'
+import torch
+print(torch.__version__)
+print(torch.cuda.is_available())
+print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no cuda")
+PY
+```
+
+9. Build the fine-tuning dataset:
+
+```bash
+python ./llm_finetune/build_dataset.py --positive-limit 2000 --negative-ratio 1.0
+```
+
+10. Train the LoRA adapter:
+
+```bash
+python ./llm_finetune/train_lora.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --data-dir llm_finetune/data --output-dir llm_finetune/runs/deepseek-r1-distill-qwen-7b-lora --max-seq-length 4096 --batch-size 1 --gradient-accumulation-steps 8 --epochs 1
+```
+
+11. Evaluate and save only validated rules with actual success rate at least `40%` to `surgepatterns`:
+
+```bash
+python ./llm_finetune/evaluate_model.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --adapter-dir llm_finetune/runs/deepseek-r1-distill-qwen-7b-lora/adapter --data-dir llm_finetune/data --min-success-rate 0.40
+```
+
+Windows equivalent evaluation command:
 
 ```powershell
-python .\llm_finetune\evaluate_model.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --adapter-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora\adapter --data-dir llm_finetune\data --min-success-rate 0.20
+python .\llm_finetune\evaluate_model.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --adapter-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora\adapter --data-dir llm_finetune\data --min-success-rate 0.40
 ```
 
 The fine-tuning pipeline is:
