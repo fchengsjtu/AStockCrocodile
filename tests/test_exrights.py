@@ -273,6 +273,107 @@ class ExRightsTests(unittest.TestCase):
         self.assertIn("ALTER TABLE stockinfo MODIFY COLUMN ContentHash CHAR(64) NOT NULL DEFAULT ''", sql)
         self.assertEqual(conn.commits, 2)
 
+    def test_stockinfo_contenthash_default_skips_alter_when_already_valid(self):
+        class FakeCursor:
+            def __init__(self):
+                self.sql = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, sql, params=None):
+                self.sql.append(sql)
+
+            def fetchone(self):
+                return ("ContentHash", "char(64)", "NO", "", "", "")
+
+        class FakeConn:
+            def __init__(self):
+                self.cursor_obj = FakeCursor()
+                self.commits = 0
+
+            def cursor(self):
+                return self.cursor_obj
+
+            def commit(self):
+                self.commits += 1
+
+        conn = FakeConn()
+
+        crawler.ensure_stockinfo_contenthash_default(conn)
+
+        sql = "\n".join(conn.cursor_obj.sql)
+        self.assertNotIn("ALTER TABLE stockinfo MODIFY COLUMN ContentHash", sql)
+        self.assertEqual(conn.commits, 1)
+
+    def test_filter_tasks_when_end_date_unavailable_skips_only_one_day_tasks(self):
+        tasks = [("000001", "20260512"), ("000002", "20260510"), ("000003", "20260513")]
+
+        filtered, skipped = crawler.filter_tasks_when_end_date_unavailable(
+            tasks,
+            end_date="20260512",
+            end_date_available=False,
+        )
+
+        self.assertEqual(filtered, [("000002", "20260510")])
+        self.assertEqual(skipped, 2)
+
+    def test_filter_tasks_when_end_date_available_keeps_tasks(self):
+        tasks = [("000001", "20260512")]
+
+        filtered, skipped = crawler.filter_tasks_when_end_date_unavailable(
+            tasks,
+            end_date="20260512",
+            end_date_available=True,
+        )
+
+        self.assertEqual(filtered, tasks)
+        self.assertEqual(skipped, 0)
+
+    def test_insert_rows_upserts_duplicate_daily_rows(self):
+        class FakeCursor:
+            def __init__(self):
+                self.sql = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, sql, params=None):
+                self.sql.append(sql)
+
+            def executemany(self, sql, rows):
+                self.sql.append(sql)
+                return len(rows)
+
+            def fetchone(self):
+                return ("idx",)
+
+        class FakeConn:
+            def __init__(self):
+                self.cursor_obj = FakeCursor()
+
+            def cursor(self):
+                return self.cursor_obj
+
+            def commit(self):
+                pass
+
+        conn = FakeConn()
+        rows = [("000001", "D", datetime(2026, 5, 12, 15), 1, 2, None, None, None, 1, 2, 3, 1, None, None)]
+
+        affected = crawler.insert_rows(conn, rows)
+
+        sql = "\n".join(conn.cursor_obj.sql)
+        self.assertEqual(affected, 1)
+        self.assertIn("ON DUPLICATE KEY UPDATE", sql)
+        self.assertIn("UpdatedOn = CURRENT_TIMESTAMP", sql)
+
     def test_ensure_kline_table_creates_required_columns(self):
         class FakeCursor:
             def __init__(self):

@@ -36,6 +36,7 @@ BATCH_SIZE = 5000
 EXRIGHTS_TABLE = "exrights"
 MA_WINDOWS = (5, 8, 13, 34, 55)
 ENSURED_KLINE_TABLE_KEYS: set[tuple[int, str]] = set()
+END_DATE_PROBE_SYMBOLS = ("000001", "600000", "000002")
 PROJECT_ROOT = Path(__file__).resolve().parent
 LOG_DIR = PROJECT_ROOT / "logs"
 ENV_FILE = PROJECT_ROOT / "env.txt"
@@ -322,7 +323,14 @@ def ensure_stockinfo_contenthash_default(conn: pymysql.connections.Connection) -
     ensure_stockinfo_table(conn)
     with conn.cursor() as cur:
         cur.execute("SHOW COLUMNS FROM stockinfo LIKE 'ContentHash'")
-        if cur.fetchone() is None:
+        column = cur.fetchone()
+        if column is None:
+            return
+        column_type = str(column[1]).lower() if len(column) > 1 else ""
+        nullable = str(column[2]).upper() if len(column) > 2 else ""
+        default_value = column[4] if len(column) > 4 else None
+        needs_alter = column_type != "char(64)" or nullable != "NO" or default_value != ""
+        if not needs_alter:
             return
         cur.execute("UPDATE stockinfo SET ContentHash = '' WHERE ContentHash IS NULL")
         cur.execute("ALTER TABLE stockinfo MODIFY COLUMN ContentHash CHAR(64) NOT NULL DEFAULT ''")
@@ -405,6 +413,37 @@ def update_stock_latest(conn: pymysql.connections.Connection, symbol: str, lates
             (latest, symbol),
         )
     conn.commit()
+
+
+def tencent_has_daily_data_for_date(end_date: str, adjust: str, retries: int, ktype: str) -> bool:
+    for symbol in END_DATE_PROBE_SYMBOLS:
+        cfg = CrawlConfig(
+            start_date=end_date,
+            end_date=end_date,
+            adjust=adjust,
+            sleep_seconds=0,
+            retries=max(1, retries),
+            ktype=ktype,
+        )
+        try:
+            df = fetch_daily_from_tencent(symbol, cfg)
+        except Exception:
+            logging.exception("daily availability probe failed for %s %s", symbol, end_date)
+            continue
+        if not df.empty:
+            return True
+    return False
+
+
+def filter_tasks_when_end_date_unavailable(
+    fetch_tasks: list[tuple[str, str]],
+    end_date: str,
+    end_date_available: bool,
+) -> tuple[list[tuple[str, str]], int]:
+    if end_date_available:
+        return fetch_tasks, 0
+    filtered = [(symbol, start) for symbol, start in fetch_tasks if start < end_date]
+    return filtered, len(fetch_tasks) - len(filtered)
 
 
 def normalize_tencent_kline_rows(rows: list, symbol: str, ktype: str) -> pd.DataFrame:
@@ -573,13 +612,25 @@ def insert_rows(conn: pymysql.connections.Connection, rows: list[tuple]) -> int:
             (SCode, KType, KTime, Amount, Volume, MA5, MA13, MA8, Open, Close, High, Low, MA55, MA34)
         VALUES
             (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            Amount = VALUES(Amount),
+            Volume = VALUES(Volume),
+            MA5 = VALUES(MA5),
+            MA13 = VALUES(MA13),
+            MA8 = VALUES(MA8),
+            Open = VALUES(Open),
+            Close = VALUES(Close),
+            High = VALUES(High),
+            Low = VALUES(Low),
+            MA55 = VALUES(MA55),
+            MA34 = VALUES(MA34),
+            UpdatedOn = CURRENT_TIMESTAMP
     """
-    inserted = 0
+    affected = 0
     with conn.cursor() as cur:
         for batch in iter_batches(rows, BATCH_SIZE):
-            cur.executemany(insert_sql, batch)
-            inserted += len(batch)
-    return inserted
+            affected += cur.executemany(insert_sql, batch)
+    return affected
 
 
 
@@ -1077,6 +1128,21 @@ def crawl_daily_to_mysql(
 
             fetch_tasks.append((symbol, symbol_start))
 
+        if fetch_tasks:
+            one_day_tasks = sum(1 for _, symbol_start in fetch_tasks if symbol_start >= end_date)
+            if one_day_tasks:
+                logging.info("Checking Tencent daily availability for %s before fetching %s one-day tasks", end_date, one_day_tasks)
+                end_date_available = tencent_has_daily_data_for_date(end_date, adjust, retries, ktype)
+                logging.info("Tencent daily availability for %s: %s", end_date, end_date_available)
+                fetch_tasks, unavailable_skips = filter_tasks_when_end_date_unavailable(fetch_tasks, end_date, end_date_available)
+                if unavailable_skips:
+                    skip_count += unavailable_skips
+                    logging.warning(
+                        "Tencent daily data for %s is not available yet; skipped %s stocks that only need that date",
+                        end_date,
+                        unavailable_skips,
+                    )
+
         logging.info("Prepared %s fetch tasks; skipped already up-to-date stocks=%s; workers=%s", len(fetch_tasks), skip_count, workers)
 
         def fetch_task(symbol: str, symbol_start: str) -> tuple[str, str, pd.DataFrame]:
@@ -1099,7 +1165,9 @@ def crawl_daily_to_mysql(
                 executor.submit(fetch_task, symbol, symbol_start): symbol
                 for symbol, symbol_start in fetch_tasks
             }
+            processed_count = 0
             for future in tqdm(as_completed(future_to_symbol), total=len(future_to_symbol), desc=f"{mode} daily -> mysql"):
+                processed_count += 1
                 symbol = future_to_symbol[future]
                 try:
                     symbol, symbol_start, df = future.result()
@@ -1125,6 +1193,17 @@ def crawl_daily_to_mysql(
                     conn.rollback()
                     fail_count += 1
                     logging.exception("daily %s database write failed", symbol)
+                if processed_count % 100 == 0 or processed_count == len(future_to_symbol):
+                    logging.info(
+                        "%s daily progress %s/%s success=%s skipped=%s failed=%s rows=%s",
+                        mode,
+                        processed_count,
+                        len(future_to_symbol),
+                        success_count,
+                        skip_count,
+                        fail_count,
+                        total_rows,
+                    )
 
     logging.info(
         "Finished %s MySQL import: success=%s skipped=%s failed=%s rows=%s",
