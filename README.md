@@ -508,6 +508,25 @@ Run the new raw K-line training mode:
 python .\llm_surge_pattern_miner.py --training-mode raw-kline --test-start-date 20260101 --test-end-date 20260430
 ```
 
+Run black-box local LLM training with an automatic 80/20 split from `klinestatistics`:
+
+```powershell
+python .\llm_blackbox_pattern_trainer.py
+```
+
+`llm_blackbox_pattern_trainer.py` reads positive samples from `klinestatistics`, uses `PrevTradeDate` as the input anchor, and sends each training sample's 55 daily bars ending at `PrevTradeDate` plus 55 weekly bars ending on or before `PrevTradeDate` to the local OpenAI-compatible model in small batches. The split is deterministic: 80% training samples and 20% held-out test samples by default.
+
+The local model is used as a black-box rule generator, not as a weight fine-tuning endpoint. It proposes executable feature-token patterns; the program then validates those patterns on the held-out date range and writes only patterns with actual success rate at least `20%` to `surgepatterns`.
+
+Useful options:
+
+- `--train-ratio 0.8`: change the sample split ratio.
+- `--min-success-rate 0.20`: require at least this validated success rate before saving.
+- `--daily-window 55 --weekly-window 55`: keep the required input windows.
+- `--prompt-batch-size 20`: reduce this if the local model context is too small.
+- `--max-training-batches 10`: limit LLM calls for a trial run; `0` means use all training batches.
+- `--output data\blackbox_patterns.csv`: also write retained patterns to CSV.
+
 How raw K-line training is used for future selection:
 
 1. In `raw-kline` mode, DeepSeek sees raw historical windows: the selection date plus the previous 54 daily bars, and the latest weekly bar on or before the selection date plus the previous 54 weekly bars.
