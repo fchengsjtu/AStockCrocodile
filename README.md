@@ -514,7 +514,7 @@ Run black-box local LLM training with an automatic 80/20 split from `klinestatis
 python .\llm_blackbox_pattern_trainer.py
 ```
 
-`llm_blackbox_pattern_trainer.py` reads positive samples from `klinestatistics`, uses `PrevTradeDate` as the input anchor, and sends each training sample's 55 daily bars ending at `PrevTradeDate` plus 55 weekly bars ending on or before `PrevTradeDate` to the local OpenAI-compatible model in small batches. The split is deterministic: 80% training samples and 20% held-out test samples by default.
+`llm_blackbox_pattern_trainer.py` reads positive samples from `klinestatistics`, uses `PrevTradeDate` as the input anchor, and sends each training sample's 55 daily bars ending at `PrevTradeDate` plus 55 weekly bars ending on or before `PrevTradeDate` to the local OpenAI-compatible model in small batches. To fit local models with 4096-token contexts, each OHLCV bar is sent in a compact numeric matrix: price fields are basis points versus the window's last close, and volume is percent of the window's average volume. The split is deterministic: 80% training samples and 20% held-out test samples by default.
 
 The local model is used as a black-box rule generator, not as a weight fine-tuning endpoint. It proposes executable feature-token patterns; the program then validates those patterns on the held-out date range and writes only patterns with actual success rate at least `20%` to `surgepatterns`.
 
@@ -523,9 +523,17 @@ Useful options:
 - `--train-ratio 0.8`: change the sample split ratio.
 - `--min-success-rate 0.20`: require at least this validated success rate before saving.
 - `--daily-window 55 --weekly-window 55`: keep the required input windows.
-- `--prompt-batch-size 20`: reduce this if the local model context is too small.
+- `--prompt-batch-size 3`: number of samples sent in one LLM request; reduce this to `1` if the local model reports context/request errors.
+- `--candidate-count 12`: number of patterns requested from each LLM training batch.
 - `--max-training-batches 10`: limit LLM calls for a trial run; `0` means use all training batches.
 - `--output data\blackbox_patterns.csv`: also write retained patterns to CSV.
+
+For slow local models, set these optional values in `env.txt`:
+
+```powershell
+$env:LOCAL_LLM_TIMEOUT='600'
+$env:LOCAL_LLM_MAX_TOKENS='2048'
+```
 
 How raw K-line training is used for future selection:
 

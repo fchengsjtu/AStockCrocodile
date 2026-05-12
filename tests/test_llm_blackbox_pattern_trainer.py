@@ -61,8 +61,8 @@ class LlmBlackboxPatternTrainerTests(unittest.TestCase):
                 {
                     "scode": "000001",
                     "anchor_date": "2026-05-11",
-                    "daily_bars": [{"date": "2026-05-11", "close": 10.0}],
-                    "weekly_bars": [{"date": "2026-05-08", "close": 9.0}],
+                    "daily_55": {"rows": [[0, 100, -100, 0, 120]]},
+                    "weekly_55": {"rows": [[0, 100, -100, 0, 90]]},
                 }
             ],
             Counter({("D_CLOSE_GT_MA5",): 3, ("W_MA5_GT_MA13",): 2, ("D_RET_5_GE_5",): 2}),
@@ -74,6 +74,28 @@ class LlmBlackboxPatternTrainerTests(unittest.TestCase):
         self.assertIn('"anchor_date": "2026-05-11"', prompt)
         self.assertIn("D_CLOSE_GT_MA5", prompt)
         self.assertIn('"minimum_required_validated_success_rate": 0.2', prompt)
+
+    def test_compact_window_keeps_ohlcv_rows_small(self):
+        base = date(2026, 1, 1)
+        frame = pd.DataFrame(
+            [
+                {
+                    "TradeDate": base + timedelta(days=index),
+                    "Open": 10 + index,
+                    "High": 11 + index,
+                    "Low": 9 + index,
+                    "Close": 10 + index,
+                    "Volume": 1000 + index,
+                }
+                for index in range(55)
+            ]
+        )
+
+        compact = trainer._compact_window_to_matrix(frame)
+
+        self.assertEqual(len(compact["rows"]), 55)
+        self.assertEqual(compact["columns"], ["open_bp", "high_bp", "low_bp", "close_bp", "volume_pct_avg"])
+        self.assertLess(len(str(compact)), 3000)
 
     def test_events_as_anchor_labels_uses_prev_trade_date(self):
         events = pd.DataFrame(

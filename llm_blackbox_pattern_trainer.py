@@ -16,10 +16,8 @@ from kline_statistics import SHORT_TERM_SURGE_TYPE, ensure_kline_statistics_tabl
 from llm_surge_pattern_miner import (
     DEFAULT_API_BASE_URL,
     DEFAULT_API_KEY_ENV,
-    DEFAULT_CANDIDATE_COUNT,
     DEFAULT_LOCAL_API_KEY,
     DEFAULT_MODEL,
-    _frame_window_to_records,
     call_llm_chat,
     fallback_patterns_from_counts,
     parse_llm_patterns,
@@ -43,8 +41,9 @@ DEFAULT_WINDOW = 55
 DEFAULT_SPLIT_SEED = 20260512
 DEFAULT_TRAIN_RATIO = 0.8
 DEFAULT_MIN_SUCCESS_RATE = 0.20
-DEFAULT_PROMPT_BATCH_SIZE = 20
+DEFAULT_PROMPT_BATCH_SIZE = 3
 DEFAULT_MAX_TRAINING_BATCHES = 0
+DEFAULT_BLACKBOX_CANDIDATE_COUNT = 12
 
 
 @dataclass(frozen=True)
@@ -117,6 +116,40 @@ def _round_float(value) -> float | None:
     return round(float(value), 6)
 
 
+def _compact_window_to_matrix(frame: pd.DataFrame) -> dict:
+    ordered = frame.sort_values("TradeDate").reset_index(drop=True)
+    if ordered.empty:
+        return {"start": None, "end": None, "columns": ["o", "h", "l", "c", "v"], "scale": {}, "rows": []}
+    anchor_close = float(ordered.iloc[-1]["Close"])
+    avg_volume = float(ordered["Volume"].mean(skipna=True) or 0)
+    rows = []
+    for item in ordered.itertuples(index=False):
+        open_value = float(item.Open)
+        high_value = float(item.High)
+        low_value = float(item.Low)
+        close_value = float(item.Close)
+        volume = float(item.Volume)
+        rows.append(
+            [
+                round((open_value / anchor_close - 1) * 10000) if anchor_close > 0 else None,
+                round((high_value / anchor_close - 1) * 10000) if anchor_close > 0 else None,
+                round((low_value / anchor_close - 1) * 10000) if anchor_close > 0 else None,
+                round((close_value / anchor_close - 1) * 10000) if anchor_close > 0 else None,
+                round(volume / avg_volume * 100) if avg_volume > 0 else None,
+            ]
+        )
+    return {
+        "start": str(ordered.iloc[0]["TradeDate"]),
+        "end": str(ordered.iloc[-1]["TradeDate"]),
+        "columns": ["open_bp", "high_bp", "low_bp", "close_bp", "volume_pct_avg"],
+        "scale": {
+            "price_bp": "basis points versus last close in this window",
+            "volume_pct_avg": "volume divided by this window's average volume, percent",
+        },
+        "rows": rows,
+    }
+
+
 def collect_raw_samples_for_events(conn, events: pd.DataFrame, config: BlackboxTrainingConfig) -> tuple[list[dict], Counter]:
     samples: list[dict] = []
     feature_counts: Counter[tuple[str, ...]] = Counter()
@@ -166,13 +199,11 @@ def collect_raw_samples_for_events(conn, events: pd.DataFrame, config: BlackboxT
             samples.append(
                 {
                     "scode": event.SCode,
-                    "sname": event.SName,
                     "anchor_date": str(event.PrevTradeDate),
-                    "selection_date": str(event.SelectionDate),
                     "start_rise_date": str(event.StartRiseDate),
                     "gain_rate": _round_float(event.GainRate),
-                    "daily_bars": _frame_window_to_records(daily_window),
-                    "weekly_bars": _frame_window_to_records(weekly_window),
+                    "daily_55": _compact_window_to_matrix(daily_window),
+                    "weekly_55": _compact_window_to_matrix(weekly_window),
                 }
             )
     return samples, feature_counts
@@ -185,7 +216,8 @@ def build_blackbox_prompt(samples: list[dict], feature_counts: Counter, config: 
         "stat_type": config.stat_type,
         "batch_no": batch_no,
         "label": "Every sample is a positive short-term surge setup.",
-        "input_anchor": "Use PrevTradeDate as anchor_date. The daily_bars end on PrevTradeDate. The weekly_bars end on the latest weekly K-line on or before PrevTradeDate.",
+        "input_anchor": "Use PrevTradeDate as anchor_date. daily_55 ends on PrevTradeDate. weekly_55 ends on the latest weekly K-line on or before PrevTradeDate.",
+        "compact_kline_format": "daily_55 and weekly_55 each contain 55 OHLCV rows. Price values are basis points versus the last close in that window. Volume is percent of the window average volume.",
         "future_use": "A saved pattern will be applied to any stock at any date using its previous 55 daily bars and previous 55 weekly bars.",
         "minimum_required_validated_success_rate": config.min_success_rate,
         "min_features_per_pattern": config.min_pattern_size,
@@ -214,14 +246,13 @@ def generate_blackbox_patterns(conn, train_events: pd.DataFrame, config: Blackbo
     if config.max_training_batches > 0:
         event_batches = event_batches[: config.max_training_batches]
 
-    for batch_no, indexes in enumerate(event_batches, start=1):
-        batch_events = train_events.loc[indexes].reset_index(drop=True)
+    def train_batch(batch_events: pd.DataFrame, batch_label: str) -> list[tuple[str, ...]]:
         samples, feature_counts = collect_raw_samples_for_events(conn, batch_events, config)
         valid_features = {feature[0] for feature in feature_counts if len(feature) == 1}
         if not samples or not valid_features:
-            print(f"blackbox train batch {batch_no}/{len(event_batches)} skipped samples={len(samples)}", flush=True)
-            continue
-        prompt = build_blackbox_prompt(samples, feature_counts, config, batch_no)
+            print(f"blackbox train batch {batch_label} skipped samples={len(samples)}", flush=True)
+            return []
+        prompt = build_blackbox_prompt(samples, feature_counts, config, int(batch_label.split(".")[0]))
         llm_config = type(
             "LlmCallConfig",
             (),
@@ -231,8 +262,25 @@ def generate_blackbox_patterns(conn, train_events: pd.DataFrame, config: Blackbo
                 "model": config.model,
             },
         )()
-        response_text = call_llm_chat(prompt, llm_config)
-        patterns = parse_llm_patterns(response_text, valid_features, config.min_pattern_size, config.max_pattern_size)
+        try:
+            response_text = call_llm_chat(prompt, llm_config)
+            patterns = parse_llm_patterns(response_text, valid_features, config.min_pattern_size, config.max_pattern_size)
+        except Exception as exc:
+            if len(batch_events) > 1:
+                midpoint = len(batch_events) // 2
+                print(
+                    f"blackbox train batch {batch_label} LLM request failed; splitting "
+                    f"{len(batch_events)} samples: {exc}",
+                    flush=True,
+                )
+                left = train_batch(batch_events.iloc[:midpoint].reset_index(drop=True), f"{batch_label}.1")
+                right = train_batch(batch_events.iloc[midpoint:].reset_index(drop=True), f"{batch_label}.2")
+                return left + right
+            print(
+                f"blackbox train batch {batch_label} single-sample LLM request failed; using fallback features: {exc}",
+                flush=True,
+            )
+            patterns = []
         if not patterns:
             patterns = fallback_patterns_from_counts(
                 feature_counts,
@@ -241,10 +289,23 @@ def generate_blackbox_patterns(conn, train_events: pd.DataFrame, config: Blackbo
                 config.candidate_count,
             )
         for pattern in patterns[: config.candidate_count]:
-            all_patterns.add(pattern)
-            positive_support[pattern] += min(feature_counts.get((feature,), 0) for feature in pattern)
+            support_values = [feature_counts.get((feature,), 0) for feature in pattern]
+            if support_values:
+                positive_support[pattern] += min(support_values)
         print(
-            f"blackbox train batch {batch_no}/{len(event_batches)} samples={len(samples)} "
+            f"blackbox train batch {batch_label} samples={len(samples)} "
+            f"patterns={len(patterns)}",
+            flush=True,
+        )
+        return patterns[: config.candidate_count]
+
+    for batch_no, indexes in enumerate(event_batches, start=1):
+        batch_events = train_events.loc[indexes].reset_index(drop=True)
+        patterns = train_batch(batch_events, str(batch_no))
+        for pattern in patterns:
+            all_patterns.add(pattern)
+        print(
+            f"blackbox train batch {batch_no}/{len(event_batches)} "
             f"patterns_total={len(all_patterns)}",
             flush=True,
         )
@@ -344,7 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-positive-support", type=int, default=5)
     parser.add_argument("--min-pattern-size", type=int, default=3)
     parser.add_argument("--max-pattern-size", type=int, default=8)
-    parser.add_argument("--candidate-count", type=int, default=DEFAULT_CANDIDATE_COUNT)
+    parser.add_argument("--candidate-count", type=int, default=DEFAULT_BLACKBOX_CANDIDATE_COUNT)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--prompt-batch-size", type=int, default=DEFAULT_PROMPT_BATCH_SIZE)
     parser.add_argument("--max-training-batches", type=int, default=DEFAULT_MAX_TRAINING_BATCHES, help="0 means use all training samples")

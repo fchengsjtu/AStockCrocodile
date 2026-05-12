@@ -325,6 +325,8 @@ def build_raw_kline_llm_prompt(
 def call_llm_chat(prompt: str, config: LlmPatternConfig) -> str:
     load_env_file()
     api_key = os.environ.get(config.api_key_env) or DEFAULT_LOCAL_API_KEY
+    timeout_seconds = int(os.environ.get("LOCAL_LLM_TIMEOUT", "600"))
+    max_tokens = int(os.environ.get("LOCAL_LLM_MAX_TOKENS", "2048"))
     url = config.api_base_url.rstrip("/") + "/chat/completions"
     body = {
         "model": config.model,
@@ -336,24 +338,30 @@ def call_llm_chat(prompt: str, config: LlmPatternConfig) -> str:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.2,
-        "response_format": {"type": "json_object"},
+        "max_tokens": max_tokens,
     }
+    if os.environ.get("LOCAL_LLM_RESPONSE_FORMAT", "0").lower() not in {"0", "false", "no", "off"}:
+        body["response_format"] = {"type": "json_object"}
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     try:
         request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         if exc.code in {400, 404, 422} and "response_format" in body:
             body.pop("response_format", None)
-            request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
-            with urllib.request.urlopen(request, timeout=120) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            return payload["choices"][0]["message"]["content"]
+            try:
+                request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
+                with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                return payload["choices"][0]["message"]["content"]
+            except urllib.error.HTTPError as retry_exc:
+                retry_detail = retry_exc.read().decode("utf-8", errors="replace")
+                raise RuntimeError(f"LLM request failed after compatibility retry: HTTP {retry_exc.code}: {retry_detail}") from retry_exc
         raise RuntimeError(f"LLM request failed: HTTP {exc.code}: {detail}") from exc
     return payload["choices"][0]["message"]["content"]
 
@@ -363,6 +371,11 @@ def extract_json_object(text: str) -> dict:
     if stripped.startswith("```"):
         stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
         stripped = re.sub(r"\s*```$", "", stripped)
+    if not stripped.startswith("{") or not stripped.endswith("}"):
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start >= 0 and end > start:
+            stripped = stripped[start : end + 1]
     return json.loads(stripped)
 
 

@@ -29,6 +29,13 @@ class LlmSurgePatternMinerTests(unittest.TestCase):
 
         self.assertEqual(patterns, [("D_CLOSE_GT_MA5", "D_RET_5_GE_5", "W_MA5_GT_MA13"), ("A", "B", "C")])
 
+    def test_extract_json_object_tolerates_extra_text(self):
+        payload = llm_surge_pattern_miner.extract_json_object(
+            '\n\n{"patterns":[{"name":"x","features":["A","B","C"]}]}.\n'
+        )
+
+        self.assertEqual(payload["patterns"][0]["name"], "x")
+
     def test_fallback_patterns_from_counts_uses_high_support(self):
         patterns = llm_surge_pattern_miner.fallback_patterns_from_counts(
             Counter({("A", "B"): 5, ("C",): 3, ("A", "B", "C"): 10}),
