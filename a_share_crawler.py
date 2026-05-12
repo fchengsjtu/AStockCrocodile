@@ -35,6 +35,7 @@ DEFAULT_KTYPE = "D"
 BATCH_SIZE = 5000
 EXRIGHTS_TABLE = "exrights"
 MA_WINDOWS = (5, 8, 13, 34, 55)
+ENSURED_KLINE_TABLE_KEYS: set[tuple[int, str]] = set()
 PROJECT_ROOT = Path(__file__).resolve().parent
 LOG_DIR = PROJECT_ROOT / "logs"
 ENV_FILE = PROJECT_ROOT / "env.txt"
@@ -257,6 +258,9 @@ def ensure_stockinfo_table(conn: pymysql.connections.Connection) -> None:
 def ensure_kline_table(conn: pymysql.connections.Connection, table: str) -> None:
     if table not in {"dkandles", "wkandles", "mkandles"}:
         raise ValueError(f"unsupported K-line table: {table}")
+    cache_key = (id(conn), table)
+    if cache_key in ENSURED_KLINE_TABLE_KEYS:
+        return
     sql = f"""
         CREATE TABLE IF NOT EXISTS {table} (
             Id BIGINT NOT NULL AUTO_INCREMENT,
@@ -279,12 +283,32 @@ def ensure_kline_table(conn: pymysql.connections.Connection, table: str) -> None
             PRIMARY KEY (Id),
             UNIQUE KEY ux_kline_code_type_time (SCode, KType, KTime),
             KEY idx_kline_type_time (KType, KTime),
-            KEY idx_kline_code_time (SCode, KTime)
+            KEY idx_kline_code_time (SCode, KTime),
+            KEY idx_kline_type_code_time (KType, SCode, KTime),
+            KEY idx_kline_type_time_code (KType, KTime, SCode)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
     with conn.cursor() as cur:
         cur.execute(sql)
+    ensure_kline_indexes(conn, table)
     conn.commit()
+    ENSURED_KLINE_TABLE_KEYS.add(cache_key)
+
+
+def ensure_table_index(conn: pymysql.connections.Connection, table: str, index_name: str, index_columns: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(f"SHOW INDEX FROM {table} WHERE Key_name = %s", (index_name,))
+        if cur.fetchone() is not None:
+            return
+        logging.info("Creating index %s on %s(%s)", index_name, table, index_columns)
+        cur.execute(f"ALTER TABLE {table} ADD INDEX {index_name} ({index_columns})")
+
+
+def ensure_kline_indexes(conn: pymysql.connections.Connection, table: str) -> None:
+    if table not in {"dkandles", "wkandles", "mkandles"}:
+        raise ValueError(f"unsupported K-line table: {table}")
+    ensure_table_index(conn, table, "idx_kline_type_code_time", "KType, SCode, KTime")
+    ensure_table_index(conn, table, "idx_kline_type_time_code", "KType, KTime, SCode")
 
 
 def ensure_core_tables(conn: pymysql.connections.Connection) -> None:

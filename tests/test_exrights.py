@@ -287,6 +287,9 @@ class ExRightsTests(unittest.TestCase):
             def execute(self, sql, params=None):
                 self.sql.append(sql)
 
+            def fetchone(self):
+                return None
+
         class FakeConn:
             def __init__(self):
                 self.cursor_obj = FakeCursor()
@@ -305,6 +308,9 @@ class ExRightsTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS dkandles", sql)
         self.assertIn("UpdatedOn DATETIME", sql)
         self.assertIn("UNIQUE KEY ux_kline_code_type_time", sql)
+        self.assertIn("KEY idx_kline_type_code_time", sql)
+        self.assertIn("KEY idx_kline_type_time_code", sql)
+        self.assertIn("ALTER TABLE dkandles ADD INDEX idx_kline_type_code_time", sql)
 
     def test_run_parser_defaults_to_qfq_only(self):
         args = crawler.build_parser().parse_args(["run"])
