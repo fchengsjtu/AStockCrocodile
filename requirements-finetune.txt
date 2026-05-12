@@ -1,0 +1,10 @@
+# Install PyTorch with the CUDA build that matches your driver first:
+# https://pytorch.org/get-started/locally/
+transformers>=4.41.0
+datasets>=2.19.0
+peft>=0.11.0
+trl>=0.9.0
+accelerate>=0.30.0
+bitsandbytes>=0.43.0; platform_system != "Windows"
+sentencepiece>=0.2.0
+safetensors>=0.4.3

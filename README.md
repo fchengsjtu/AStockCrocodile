@@ -535,6 +535,51 @@ $env:LOCAL_LLM_TIMEOUT='600'
 $env:LOCAL_LLM_MAX_TOKENS='2048'
 ```
 
+Run a true LoRA/QLoRA fine-tuning pipeline for `DeepSeek-R1-Distill-Qwen-7B`:
+
+```powershell
+python .\llm_finetune\build_dataset.py --positive-limit 2000 --negative-ratio 1.0
+```
+
+This creates:
+
+```text
+llm_finetune\data\train.jsonl
+llm_finetune\data\valid.jsonl
+llm_finetune\data\allowed_features.json
+```
+
+For a quick smoke dataset:
+
+```powershell
+python .\llm_finetune\build_dataset.py --positive-limit 50 --negative-ratio 1.0
+```
+
+Install the optional fine-tuning dependencies in a GPU environment:
+
+```powershell
+pip install -r requirements-finetune.txt
+```
+
+For RTX 3060, QLoRA training is strongly recommended. Windows native `bitsandbytes` support can be fragile, so WSL2/Linux is usually the smoother path. Then run:
+
+```powershell
+python .\llm_finetune\train_lora.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --data-dir llm_finetune\data --output-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora --max-seq-length 4096 --batch-size 1 --gradient-accumulation-steps 8 --epochs 1
+```
+
+After training, evaluate the LoRA adapter and save only validated rules with actual success rate at least `20%` to `surgepatterns`:
+
+```powershell
+python .\llm_finetune\evaluate_model.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --adapter-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora\adapter --data-dir llm_finetune\data --min-success-rate 0.20
+```
+
+The fine-tuning pipeline is:
+
+1. `build_dataset.py` creates supervised chat JSONL samples from `klinestatistics`, `dkandles`, and `wkandles`.
+2. `train_lora.py` performs QLoRA/LoRA training and writes a PEFT adapter.
+3. `evaluate_model.py` asks the fine-tuned model for feature-token patterns, backtests them with the existing K-line engine, and writes retained rules to `surgepatterns`.
+4. Future selection still uses `llm_pattern_selector.py`, so the deployed selector remains deterministic and backtest-gated.
+
 How raw K-line training is used for future selection:
 
 1. In `raw-kline` mode, DeepSeek sees raw historical windows: the selection date plus the previous 54 daily bars, and the latest weekly bar on or before the selection date plus the previous 54 weekly bars.

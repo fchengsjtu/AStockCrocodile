@@ -3,5 +3,7 @@
 __pycache__/
 *.pyc
 data/
+llm_finetune/data*/
+llm_finetune/runs/
 logs/
 env.txt
