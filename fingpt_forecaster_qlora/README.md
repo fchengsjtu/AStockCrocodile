@@ -82,6 +82,13 @@ Windows 原生只建议先生成数据集：
 .\fingpt_forecaster_qlora\scripts\one_click_deploy.ps1 smoke
 ```
 
+如果系统没有 `py.exe`，脚本会自动尝试使用项目已有的 `.\.venv\Scripts\python.exe`、`python` 或 `python3`。也可以手动指定：
+
+```powershell
+$env:PYTHON_BIN='D:\Documents\StockInfoCrawler\.venv\Scripts\python.exe'
+.\fingpt_forecaster_qlora\scripts\one_click_deploy.ps1 smoke
+```
+
 脚本最后会提示切到 WSL2/Linux 执行真正 4-bit QLoRA。
 
 ## 分步命令
