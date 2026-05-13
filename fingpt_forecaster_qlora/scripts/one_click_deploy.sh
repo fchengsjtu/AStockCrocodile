@@ -8,6 +8,29 @@ MODE="${1:-smoke}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR="${VENV_DIR:-.venv-fingpt-linux}"
 
+print_venv_help() {
+  local py_version
+  py_version="$("$PYTHON_BIN" - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+)"
+  cat <<EOF
+Python venv/ensurepip is not available for $PYTHON_BIN.
+
+On Ubuntu/WSL install the matching venv package, then rerun this script:
+
+  sudo apt update
+  sudo apt install -y python${py_version}-venv
+  rm -rf ${VENV_DIR}
+  bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh ${MODE}
+
+If apt cannot find python${py_version}-venv, install the generic package instead:
+
+  sudo apt install -y python3-venv
+EOF
+}
+
 if [[ ! -f "fingpt_forecaster_qlora/config.env" ]]; then
   cp fingpt_forecaster_qlora/config.example.env fingpt_forecaster_qlora/config.env
 fi
@@ -17,12 +40,22 @@ source fingpt_forecaster_qlora/config.env
 set +a
 
 if [[ -d "$VENV_DIR" && ! -f "$VENV_DIR/bin/activate" ]]; then
-  echo "Existing $VENV_DIR is not a Linux virtualenv. Set VENV_DIR to another path or remove it."
+  echo "Existing $VENV_DIR is not a complete Linux virtualenv; removing the broken directory."
+  rm -rf "$VENV_DIR"
+fi
+
+if ! "$PYTHON_BIN" -m ensurepip --version >/dev/null 2>&1
+then
+  print_venv_help
   exit 1
 fi
 
 if [[ ! -d "$VENV_DIR" ]]; then
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
+  if ! "$PYTHON_BIN" -m venv "$VENV_DIR"; then
+    rm -rf "$VENV_DIR"
+    print_venv_help
+    exit 1
+  fi
 fi
 
 source "$VENV_DIR/bin/activate"

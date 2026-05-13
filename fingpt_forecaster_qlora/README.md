@@ -97,6 +97,21 @@ WSL2/Linux 脚本默认使用独立虚拟环境 `.venv-fingpt-linux`，避免和
 VENV_DIR=.venv-fingpt-linux bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
 ```
 
+如果 WSL 报 `ensurepip is not available`，先安装对应版本的 venv 包，并删除失败时留下的半成品虚拟环境：
+
+```bash
+sudo apt update
+sudo apt install -y python3.12-venv
+rm -rf .venv-fingpt-linux
+bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
+```
+
+如果你的 WSL Python 不是 3.12，把命令中的 `python3.12-venv` 换成对应版本，或安装通用包：
+
+```bash
+sudo apt install -y python3-venv
+```
+
 ## 分步命令
 
 生成训练集：
