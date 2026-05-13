@@ -52,7 +52,9 @@ if (-not (Test-Path ".venv-fingpt")) {
 }
 
 & ".\.venv-fingpt\Scripts\python.exe" -m pip install --upgrade pip wheel setuptools
+if ($LASTEXITCODE -ne 0) { throw "pip bootstrap failed" }
 & ".\.venv-fingpt\Scripts\python.exe" -m pip install -r "fingpt_forecaster_qlora\requirements.txt"
+if ($LASTEXITCODE -ne 0) { throw "dependency install failed" }
 
 $dataArgs = @(
     "--output-dir", "fingpt_forecaster_qlora\data",
@@ -70,6 +72,7 @@ if ($Mode -eq "smoke") {
 }
 
 & ".\.venv-fingpt\Scripts\python.exe" -m fingpt_forecaster_qlora.build_dataset @dataArgs
+if ($LASTEXITCODE -ne 0) { throw "dataset build failed" }
 
 Write-Host ""
 Write-Host "Dataset is ready. 4-bit bitsandbytes QLoRA is recommended in WSL2/Linux, not native Windows."

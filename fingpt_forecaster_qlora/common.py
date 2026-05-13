@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -42,12 +43,22 @@ def load_key_value_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.exists():
         return values
-    for line in path.read_text(encoding="utf-8").splitlines():
-        text = line.strip()
-        if not text or text.startswith("#") or "=" not in text:
+    assignments = []
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
             continue
+        assignments.extend(part.strip() for part in line.split(";") if part.strip())
+    for text in assignments:
+        if "=" not in text:
+            continue
+        if text.lower().startswith("$env:"):
+            text = text[5:]
         key, value = text.split("=", 1)
-        values[key.strip()] = value.strip().strip("'").strip('"')
+        key = key.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            continue
+        values[key] = value.strip().strip("'").strip('"')
     return values
 
 
