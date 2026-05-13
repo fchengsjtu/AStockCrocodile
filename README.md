@@ -685,6 +685,30 @@ Useful filters:
 - `--limit 20`: keep only the top-ranked matches.
 - `--output data\llm_pattern_selection.csv`: also write results to CSV.
 
+## FinGPT-Forecaster 4-bit QLoRA 微调
+
+项目新增独立目录 `fingpt_forecaster_qlora/`，用于按“FinGPT-Forecaster + 4-bit 量化 + QLoRA 微调”路线训练 A 股短线预测 adapter。
+
+WSL2/Linux 一键 smoke 流程：
+
+```bash
+bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
+```
+
+正式训练：
+
+```bash
+bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh full
+```
+
+Windows 原生可先生成数据集，但 4-bit QLoRA 建议切到 WSL2/Linux：
+
+```powershell
+.\fingpt_forecaster_qlora\scripts\one_click_deploy.ps1 smoke
+```
+
+完整手册见 `fingpt_forecaster_qlora/README.md`。
+
 ## News Crawler
 
 `news_crawler.py` crawls stock-market news from AkShare-backed public sources and writes rows to MySQL table `news`.

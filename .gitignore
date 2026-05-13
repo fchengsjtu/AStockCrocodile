@@ -5,5 +5,8 @@ __pycache__/
 data/
 llm_finetune/data*/
 llm_finetune/runs/
+fingpt_forecaster_qlora/data/
+fingpt_forecaster_qlora/runs/
+fingpt_forecaster_qlora/config.env
 logs/
 env.txt

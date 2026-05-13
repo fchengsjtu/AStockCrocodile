@@ -1,0 +1,13 @@
+# Install a CUDA-enabled PyTorch build first:
+# https://pytorch.org/get-started/locally/
+accelerate>=0.30.0
+bitsandbytes>=0.43.1; platform_system != "Windows"
+datasets>=2.19.0
+peft>=0.11.1
+pymysql>=1.1.0
+pandas>=2.2.0
+sentencepiece>=0.2.0
+safetensors>=0.4.3
+transformers>=4.41.0
+trl>=0.9.4
+
