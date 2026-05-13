@@ -63,7 +63,7 @@ bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
 
 `smoke` 模式会：
 
-1. 创建 `.venv-fingpt`。
+1. 创建 `.venv-fingpt-linux`。
 2. 安装 PyTorch 和 QLoRA 依赖。
 3. 从 MySQL 抽取少量样本生成 JSONL。
 4. 加载 4-bit 基座模型和 FinGPT-Forecaster adapter。
@@ -90,6 +90,12 @@ $env:PYTHON_BIN='D:\Documents\StockInfoCrawler\.venv\Scripts\python.exe'
 ```
 
 脚本最后会提示切到 WSL2/Linux 执行真正 4-bit QLoRA。
+
+WSL2/Linux 脚本默认使用独立虚拟环境 `.venv-fingpt-linux`，避免和 Windows 原生脚本创建的 `.venv-fingpt` 冲突。需要自定义路径时：
+
+```bash
+VENV_DIR=.venv-fingpt-linux bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
+```
 
 ## 分步命令
 

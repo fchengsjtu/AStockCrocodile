@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 MODE="${1:-smoke}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-VENV_DIR="${VENV_DIR:-.venv-fingpt}"
+VENV_DIR="${VENV_DIR:-.venv-fingpt-linux}"
 
 if [[ ! -f "fingpt_forecaster_qlora/config.env" ]]; then
   cp fingpt_forecaster_qlora/config.example.env fingpt_forecaster_qlora/config.env
@@ -15,6 +15,11 @@ fi
 set -a
 source fingpt_forecaster_qlora/config.env
 set +a
+
+if [[ -d "$VENV_DIR" && ! -f "$VENV_DIR/bin/activate" ]]; then
+  echo "Existing $VENV_DIR is not a Linux virtualenv. Set VENV_DIR to another path or remove it."
+  exit 1
+fi
 
 if [[ ! -d "$VENV_DIR" ]]; then
   "$PYTHON_BIN" -m venv "$VENV_DIR"

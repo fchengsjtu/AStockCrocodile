@@ -1,6 +1,7 @@
 .deps/
 .venv/
 .venv-fingpt/
+.venv-fingpt-linux/
 __pycache__/
 *.pyc
 data/
