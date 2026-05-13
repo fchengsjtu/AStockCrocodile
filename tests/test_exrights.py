@@ -1,5 +1,6 @@
 import unittest
 from datetime import date, datetime
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -332,6 +333,58 @@ class ExRightsTests(unittest.TestCase):
 
         self.assertEqual(filtered, tasks)
         self.assertEqual(skipped, 0)
+
+    def test_filter_new_kline_rows_keeps_multiple_rows_after_latest(self):
+        df = pd.DataFrame(
+            [
+                {"SCode": "000001", "KType": "D", "KTime": datetime(2026, 5, 11, 15), "Close": 10},
+                {"SCode": "000001", "KType": "D", "KTime": datetime(2026, 5, 12, 15), "Close": 11},
+                {"SCode": "000001", "KType": "D", "KTime": datetime(2026, 5, 13, 15), "Close": 12},
+            ]
+        )
+
+        result = crawler.filter_new_kline_rows(df, datetime(2026, 5, 11, 15))
+
+        self.assertEqual(result["KTime"].tolist(), [pd.Timestamp("2026-05-12 15:00:00"), pd.Timestamp("2026-05-13 15:00:00")])
+
+    def test_filter_new_kline_rows_returns_empty_when_not_newer(self):
+        df = pd.DataFrame(
+            [
+                {"SCode": "000001", "KType": "D", "KTime": datetime(2026, 5, 12, 15), "Close": 11},
+            ]
+        )
+
+        result = crawler.filter_new_kline_rows(df, datetime(2026, 5, 12, 15))
+
+        self.assertTrue(result.empty)
+
+    def test_fetch_daily_from_tencent_uses_configured_kline_limit(self):
+        captured = {}
+
+        class FakeResponse:
+            text = '={"data":{"sz000001":{"qfqday":[]}}}'
+
+            def raise_for_status(self):
+                pass
+
+        def fake_get(url, params=None, timeout=None):
+            captured["param"] = params["param"]
+            return FakeResponse()
+
+        cfg = crawler.CrawlConfig(
+            start_date="20260512",
+            end_date="20260512",
+            adjust="qfq",
+            sleep_seconds=0,
+            retries=1,
+            ktype="D",
+            kline_limit=50,
+        )
+
+        with patch.object(crawler.requests, "get", side_effect=fake_get):
+            crawler.fetch_daily_from_tencent("000001", cfg)
+
+        self.assertIn(",50,qfq", captured["param"])
 
     def test_insert_rows_upserts_duplicate_daily_rows(self):
         class FakeCursor:

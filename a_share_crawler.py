@@ -35,6 +35,8 @@ DEFAULT_KTYPE = "D"
 BATCH_SIZE = 5000
 EXRIGHTS_TABLE = "exrights"
 MA_WINDOWS = (5, 8, 13, 34, 55)
+DEFAULT_FULL_KLINE_LIMIT = 640
+DEFAULT_INCREMENTAL_KLINE_LIMIT = 50
 ENSURED_KLINE_TABLE_KEYS: set[tuple[int, str]] = set()
 END_DATE_PROBE_SYMBOLS = ("000001", "600000", "000002")
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -65,6 +67,7 @@ class CrawlConfig:
     sleep_seconds: float
     retries: int
     ktype: str
+    kline_limit: int = DEFAULT_FULL_KLINE_LIMIT
 
 
 def setup_logging() -> None:
@@ -424,6 +427,7 @@ def tencent_has_daily_data_for_date(end_date: str, adjust: str, retries: int, kt
             sleep_seconds=0,
             retries=max(1, retries),
             ktype=ktype,
+            kline_limit=DEFAULT_INCREMENTAL_KLINE_LIMIT,
         )
         try:
             df = fetch_daily_from_tencent(symbol, cfg)
@@ -436,14 +440,29 @@ def tencent_has_daily_data_for_date(end_date: str, adjust: str, retries: int, kt
 
 
 def filter_tasks_when_end_date_unavailable(
-    fetch_tasks: list[tuple[str, str]],
+    fetch_tasks: list[tuple],
     end_date: str,
     end_date_available: bool,
-) -> tuple[list[tuple[str, str]], int]:
+) -> tuple[list[tuple], int]:
     if end_date_available:
         return fetch_tasks, 0
-    filtered = [(symbol, start) for symbol, start in fetch_tasks if start < end_date]
+    filtered = [task for task in fetch_tasks if task[1] < end_date]
     return filtered, len(fetch_tasks) - len(filtered)
+
+
+def filter_new_kline_rows(df: pd.DataFrame, latest_update: date | datetime | str | None) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if latest_update is None:
+        return df.sort_values("KTime").drop_duplicates(subset=["SCode", "KType", "KTime"], keep="last").copy()
+    latest_ts = pd.to_datetime(latest_update, errors="coerce")
+    if pd.isna(latest_ts):
+        return df.sort_values("KTime").drop_duplicates(subset=["SCode", "KType", "KTime"], keep="last").copy()
+    source = df.copy()
+    source["KTime"] = pd.to_datetime(source["KTime"], errors="coerce")
+    source = source.dropna(subset=["KTime"])
+    source = source[source["KTime"] > latest_ts]
+    return source.sort_values("KTime").drop_duplicates(subset=["SCode", "KType", "KTime"], keep="last").copy()
 
 
 def normalize_tencent_kline_rows(rows: list, symbol: str, ktype: str) -> pd.DataFrame:
@@ -493,9 +512,10 @@ def fetch_daily_from_tencent(symbol: str, cfg: CrawlConfig) -> pd.DataFrame:
     rows: list = []
 
     for year in range(start_year, end_year + 1):
+        kline_limit = max(1, int(cfg.kline_limit))
         params = {
             "_var": f"kline_day{cfg.adjust}{year}",
-            "param": f"{tx_code},day,{year}-01-01,{year + 1}-12-31,640,{cfg.adjust}",
+            "param": f"{tx_code},day,{year}-01-01,{year + 1}-12-31,{kline_limit},{cfg.adjust}",
             "r": "0.1",
         }
         data = None
@@ -1118,18 +1138,23 @@ def crawl_daily_to_mysql(
         for row in stocks.itertuples(index=False):
             symbol = normalize_symbol(getattr(row, "code"))
             symbol_start = full_start_date
-            next_start = next_yyyymmdd(latest_map.get(symbol))
-            if next_start is not None:
-                symbol_start = max(next_start, full_start_date)
+            latest_update = latest_map.get(symbol)
+            latest_start = yyyymmdd_from_date(latest_update)
+            if latest_start is not None:
+                if latest_start >= end_date:
+                    skip_count += 1
+                    continue
+                symbol_start = max(latest_start, full_start_date)
 
             if symbol_start > end_date:
                 skip_count += 1
                 continue
 
-            fetch_tasks.append((symbol, symbol_start))
+            kline_limit = DEFAULT_INCREMENTAL_KLINE_LIMIT if latest_update is not None and mode == "incremental" else DEFAULT_FULL_KLINE_LIMIT
+            fetch_tasks.append((symbol, symbol_start, latest_update, kline_limit))
 
         if fetch_tasks:
-            one_day_tasks = sum(1 for _, symbol_start in fetch_tasks if symbol_start >= end_date)
+            one_day_tasks = sum(1 for _, symbol_start, _, _ in fetch_tasks if symbol_start >= end_date)
             if one_day_tasks:
                 logging.info("Checking Tencent daily availability for %s before fetching %s one-day tasks", end_date, one_day_tasks)
                 end_date_available = tencent_has_daily_data_for_date(end_date, adjust, retries, ktype)
@@ -1145,7 +1170,7 @@ def crawl_daily_to_mysql(
 
         logging.info("Prepared %s fetch tasks; skipped already up-to-date stocks=%s; workers=%s", len(fetch_tasks), skip_count, workers)
 
-        def fetch_task(symbol: str, symbol_start: str) -> tuple[str, str, pd.DataFrame]:
+        def fetch_task(symbol: str, symbol_start: str, latest_update: datetime | None, kline_limit: int) -> tuple[str, str, datetime | None, pd.DataFrame]:
             cfg = CrawlConfig(
                 start_date=symbol_start,
                 end_date=end_date,
@@ -1153,34 +1178,41 @@ def crawl_daily_to_mysql(
                 sleep_seconds=sleep_seconds,
                 retries=retries,
                 ktype=ktype,
+                kline_limit=kline_limit,
             )
             df = fetch_daily_from_tencent(symbol, cfg)
             if sleep_seconds > 0:
                 time.sleep(sleep_seconds)
-            return symbol, symbol_start, df
+            return symbol, symbol_start, latest_update, df
 
         max_workers = max(1, workers)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_symbol = {
-                executor.submit(fetch_task, symbol, symbol_start): symbol
-                for symbol, symbol_start in fetch_tasks
+                executor.submit(fetch_task, symbol, symbol_start, latest_update, kline_limit): symbol
+                for symbol, symbol_start, latest_update, kline_limit in fetch_tasks
             }
             processed_count = 0
             for future in tqdm(as_completed(future_to_symbol), total=len(future_to_symbol), desc=f"{mode} daily -> mysql"):
                 processed_count += 1
                 symbol = future_to_symbol[future]
                 try:
-                    symbol, symbol_start, df = future.result()
+                    symbol, symbol_start, latest_update, df = future.result()
                 except Exception:
                     fail_count += 1
                     logging.exception("daily %s fetch task failed", symbol)
                     continue
 
                 if df.empty:
-                    fail_count += 1
+                    skip_count += 1
                     continue
 
-                warmup_df = load_ma_warmup(conn, symbol, ktype, symbol_start)
+                df = filter_new_kline_rows(df, latest_update)
+                if df.empty:
+                    skip_count += 1
+                    continue
+
+                first_new_date = yyyymmdd_from_date(df["KTime"].min()) or symbol_start
+                warmup_df = load_ma_warmup(conn, symbol, ktype, first_new_date)
                 df = add_moving_averages(df, warmup_df)
                 try:
                     inserted = insert_rows(conn, rows_for_insert(df))
