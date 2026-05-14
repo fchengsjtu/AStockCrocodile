@@ -72,14 +72,40 @@ def load_env(config_path: Path | None = None) -> dict[str, str]:
     return {**values, **os.environ}
 
 
+def is_wsl() -> bool:
+    try:
+        version = Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return False
+    return "microsoft" in version or "wsl" in version
+
+
+def detect_wsl_windows_host() -> str | None:
+    try:
+        for line in Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="ignore").splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 2 and parts[0] == "nameserver":
+                return parts[1]
+    except OSError:
+        return None
+    return None
+
+
+def resolve_mysql_host(host: str) -> str:
+    if host not in {"127.0.0.1", "localhost", "::1"} or not is_wsl():
+        return host
+    return os.environ.get("WSL_MYSQL_HOST") or detect_wsl_windows_host() or host
+
+
 def mysql_connect():
-    load_env()
+    env = load_env()
+    host = resolve_mysql_host(env.get("MYSQL_HOST", "127.0.0.1"))
     return pymysql.connect(
-        host=os.environ.get("MYSQL_HOST", "127.0.0.1"),
-        port=int(os.environ.get("MYSQL_PORT", "3306")),
-        user=os.environ.get("MYSQL_USER", "root"),
-        password=os.environ.get("MYSQL_PASSWORD", ""),
-        database=os.environ.get("MYSQL_DATABASE", "emstocks"),
+        host=host,
+        port=int(env.get("MYSQL_PORT", "3306")),
+        user=env.get("MYSQL_USER", "root"),
+        password=env.get("MYSQL_PASSWORD", ""),
+        database=env.get("MYSQL_DATABASE", "emstocks"),
         charset="utf8mb4",
         autocommit=False,
         connect_timeout=20,

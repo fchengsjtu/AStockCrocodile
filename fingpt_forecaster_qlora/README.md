@@ -114,6 +114,23 @@ sudo apt install -y python3-venv
 
 脚本也内置了兜底方案：如果标准 `python -m venv` 因 ensurepip 失败，会自动改用 `python -m venv --without-pip` 创建环境，再通过 `get-pip.py` 给该虚拟环境安装 pip。此兜底方案需要 WSL 能访问 `https://bootstrap.pypa.io/get-pip.py`。
 
+### WSL 访问 Windows MySQL
+
+如果 MySQL 安装在 Windows，本项目根目录的 `env.txt` 通常写的是：
+
+```powershell
+$env:MYSQL_HOST='127.0.0.1'
+```
+
+在 WSL 中，`127.0.0.1` 指向 WSL 自己，不一定能连到 Windows MySQL。Linux 一键脚本会自动检测 WSL，并把本地 MySQL 地址解析为 `/etc/resolv.conf` 中的 Windows host IP。也可以手动指定：
+
+```bash
+export WSL_MYSQL_HOST=172.xx.xx.1
+bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
+```
+
+如果仍然 `Connection refused`，需要确认 Windows MySQL 服务正在运行，并允许从 WSL host IP 访问；必要时将 MySQL `bind-address` 从仅监听 `127.0.0.1` 改为监听 Windows 主机 IP 或 `0.0.0.0`，同时放行 Windows 防火墙的 3306 端口。
+
 ## 分步命令
 
 生成训练集：

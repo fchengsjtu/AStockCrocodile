@@ -71,6 +71,24 @@ create_linux_venv() {
   fi
 }
 
+configure_wsl_mysql_host() {
+  local host_value
+  host_value="${MYSQL_HOST:-}"
+  if [[ "$host_value" != "127.0.0.1" && "$host_value" != "localhost" && "$host_value" != "::1" && -n "$host_value" ]]; then
+    return
+  fi
+  if ! grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
+    return
+  fi
+  local windows_host
+  windows_host="$(awk '/^nameserver / {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)"
+  if [[ -n "$windows_host" ]]; then
+    export WSL_MYSQL_HOST="$windows_host"
+    echo "WSL detected: MYSQL_HOST=${host_value:-127.0.0.1} will be resolved to Windows host ${WSL_MYSQL_HOST}."
+    echo "If MySQL still refuses the connection, set WSL_MYSQL_HOST manually or allow MySQL to listen on the Windows host IP."
+  fi
+}
+
 if [[ ! -f "fingpt_forecaster_qlora/config.env" ]]; then
   cp fingpt_forecaster_qlora/config.example.env fingpt_forecaster_qlora/config.env
 fi
@@ -78,6 +96,8 @@ fi
 set -a
 source fingpt_forecaster_qlora/config.env
 set +a
+
+configure_wsl_mysql_host
 
 if [[ -d "$VENV_DIR" && ! -f "$VENV_DIR/bin/activate" ]]; then
   echo "Existing $VENV_DIR is not a complete Linux virtualenv; removing the broken directory."
