@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import inspect
+import json
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -44,6 +46,42 @@ def model_load_error(model_ref: str, exc: Exception) -> RuntimeError:
     return error
 
 
+def load_chat_jsonl_dataset(train_path: Path, valid_path: Path):
+    from datasets import Dataset, DatasetDict
+
+    def read_rows(path: Path) -> list[dict]:
+        rows = []
+        with path.open("r", encoding="utf-8") as file:
+            for line_number, line in enumerate(file, start=1):
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    rows.append(json.loads(text))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"invalid JSONL row in {path} line {line_number}: {exc}") from exc
+        return rows
+
+    train_rows = read_rows(train_path)
+    valid_rows = read_rows(valid_path)
+    print(f"loaded chat dataset train={len(train_rows)} validation={len(valid_rows)}", flush=True)
+    return DatasetDict({"train": Dataset.from_list(train_rows), "validation": Dataset.from_list(valid_rows)})
+
+
+def normalize_training_argument_keys(kwargs: dict, parameter_names) -> dict:
+    normalized = dict(kwargs)
+    if "eval_strategy" in parameter_names and "evaluation_strategy" in normalized:
+        normalized["eval_strategy"] = normalized.pop("evaluation_strategy")
+    return normalized
+
+
+def build_training_arguments(**kwargs):
+    from transformers import TrainingArguments
+
+    params = inspect.signature(TrainingArguments.__init__).parameters
+    return TrainingArguments(**normalize_training_argument_keys(kwargs, params))
+
+
 def train_qlora(
     base_model: str,
     forecaster_adapter: str | None,
@@ -61,9 +99,8 @@ def train_qlora(
 ) -> None:
     try:
         import torch
-        from datasets import load_dataset
         from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainingArguments
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
         from trl import SFTTrainer
     except Exception as exc:
         raise missing_deps_error(exc)
@@ -120,12 +157,12 @@ def train_qlora(
         )
         model = get_peft_model(model, peft_config)
 
-    dataset = load_dataset("json", data_files={"train": str(train_path), "validation": str(valid_path)})
+    dataset = load_chat_jsonl_dataset(train_path, valid_path)
 
     def formatting_func(example):
         return tokenizer.apply_chat_template(example["messages"], tokenize=False, add_generation_prompt=False)
 
-    training_args = TrainingArguments(
+    training_args = build_training_arguments(
         output_dir=str(output_dir),
         num_train_epochs=epochs,
         per_device_train_batch_size=batch_size,

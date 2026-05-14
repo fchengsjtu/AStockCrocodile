@@ -177,18 +177,22 @@ EFFECTIVE_FORECASTER_ADAPTER="${FINGPT_FORECASTER_ADAPTER:-FinGPT/fingpt-forecas
 EFFECTIVE_NO_FORECASTER_ADAPTER="${NO_FORECASTER_ADAPTER:-0}"
 EFFECTIVE_MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-4096}"
 EFFECTIVE_EPOCHS="${EPOCHS:-1}"
+EFFECTIVE_DATA_DIR="${DATA_DIR:-fingpt_forecaster_qlora/data}"
+EFFECTIVE_OUTPUT_DIR="${OUTPUT_DIR:-fingpt_forecaster_qlora/runs/astock-fingpt-forecaster-qlora}"
 
 if [[ "$MODE" == "smoke" && "${SMOKE_USE_SMALL_MODEL:-1}" == "1" ]]; then
   EFFECTIVE_BASE_MODEL="${SMOKE_BASE_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
   EFFECTIVE_NO_FORECASTER_ADAPTER="${SMOKE_NO_FORECASTER_ADAPTER:-1}"
   EFFECTIVE_MAX_SEQ_LENGTH="${SMOKE_MAX_SEQ_LENGTH:-2048}"
   EFFECTIVE_EPOCHS="${SMOKE_EPOCHS:-0.05}"
+  EFFECTIVE_DATA_DIR="${SMOKE_DATA_DIR:-fingpt_forecaster_qlora/data/smoke}"
+  EFFECTIVE_OUTPUT_DIR="${SMOKE_OUTPUT_DIR:-fingpt_forecaster_qlora/runs/smoke-qwen-0.5b}"
   echo "Smoke mode uses small open model: ${EFFECTIVE_BASE_MODEL}"
   echo "Smoke mode skips FinGPT adapter unless SMOKE_NO_FORECASTER_ADAPTER=0 is set."
 fi
 
 DATA_ARGS=(
-  --output-dir fingpt_forecaster_qlora/data
+  --output-dir "${EFFECTIVE_DATA_DIR}"
   --start-date "${TRAIN_START_DATE:-20100101}"
   --end-date "${TRAIN_END_DATE:-20251231}"
   --negative-ratio "${NEGATIVE_RATIO:-1.0}"
@@ -201,8 +205,8 @@ DATA_ARGS=(
 TRAIN_ARGS=(
   --base-model "${EFFECTIVE_BASE_MODEL}"
   --forecaster-adapter "${EFFECTIVE_FORECASTER_ADAPTER}"
-  --data-dir "${DATA_DIR:-fingpt_forecaster_qlora/data}"
-  --output-dir "${OUTPUT_DIR:-fingpt_forecaster_qlora/runs/astock-fingpt-forecaster-qlora}"
+  --data-dir "${EFFECTIVE_DATA_DIR}"
+  --output-dir "${EFFECTIVE_OUTPUT_DIR}"
   --max-seq-length "${EFFECTIVE_MAX_SEQ_LENGTH}"
   --epochs "${EFFECTIVE_EPOCHS}"
   --learning-rate "${LEARNING_RATE:-2e-4}"
@@ -234,7 +238,7 @@ fi
 python -m fingpt_forecaster_qlora.train_qlora "${TRAIN_ARGS[@]}"
 python -m fingpt_forecaster_qlora.evaluate \
   --base-model "${EFFECTIVE_BASE_MODEL}" \
-  --adapter-dir "${OUTPUT_DIR:-fingpt_forecaster_qlora/runs/astock-fingpt-forecaster-qlora}/adapter" \
-  --data-dir "${DATA_DIR:-fingpt_forecaster_qlora/data}" \
+  --adapter-dir "${EFFECTIVE_OUTPUT_DIR}/adapter" \
+  --data-dir "${EFFECTIVE_DATA_DIR}" \
   --threshold "${MIN_SUCCESS_RATE:-0.40}" \
   --max-samples "${EVAL_MAX_SAMPLES:-100}"

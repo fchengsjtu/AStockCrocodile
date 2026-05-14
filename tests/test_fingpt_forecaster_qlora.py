@@ -76,6 +76,15 @@ class FinGptForecasterQloraTests(unittest.TestCase):
         self.assertIn("dataset-only", message)
         self.assertIn("NO_FORECASTER_ADAPTER", message)
 
+    def test_normalize_training_argument_keys_accepts_eval_strategy_rename(self):
+        kwargs = train_qlora.normalize_training_argument_keys(
+            {"evaluation_strategy": "steps", "output_dir": "tmp"},
+            {"eval_strategy", "output_dir"},
+        )
+
+        self.assertEqual(kwargs["eval_strategy"], "steps")
+        self.assertNotIn("evaluation_strategy", kwargs)
+
 
 if __name__ == "__main__":
     unittest.main()
