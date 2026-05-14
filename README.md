@@ -695,6 +695,32 @@ WSL2/Linux 一键 smoke 流程：
 bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
 ```
 
+如果只想继续使用已经生成好的数据集手动训练：
+
+```bash
+source $HOME/.venvs/astock-fingpt/bin/activate
+cd /mnt/d/Documents/StockInfoCrawler
+
+python -m fingpt_forecaster_qlora.train_qlora \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
+  --no-forecaster-adapter \
+  --data-dir fingpt_forecaster_qlora/data \
+  --output-dir fingpt_forecaster_qlora/runs/smoke-qwen-0.5b \
+  --max-seq-length 2048 \
+  --epochs 0.05
+```
+
+训练完成后评估：
+
+```bash
+python -m fingpt_forecaster_qlora.evaluate \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
+  --adapter-dir fingpt_forecaster_qlora/runs/smoke-qwen-0.5b/adapter \
+  --data-dir fingpt_forecaster_qlora/data \
+  --threshold 0.40 \
+  --max-samples 100
+```
+
 正式训练：
 
 ```bash

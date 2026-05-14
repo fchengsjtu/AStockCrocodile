@@ -180,6 +180,34 @@ python -m fingpt_forecaster_qlora.evaluate \
   --max-samples 500
 ```
 
+### 使用已有数据集手动训练
+
+如果数据集已经生成完毕，可以跳过 `build_dataset`，直接训练：
+
+```bash
+source $HOME/.venvs/astock-fingpt/bin/activate
+cd /mnt/d/Documents/StockInfoCrawler
+
+python -m fingpt_forecaster_qlora.train_qlora \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
+  --no-forecaster-adapter \
+  --data-dir fingpt_forecaster_qlora/data \
+  --output-dir fingpt_forecaster_qlora/runs/smoke-qwen-0.5b \
+  --max-seq-length 2048 \
+  --epochs 0.05
+```
+
+训练完成后评估：
+
+```bash
+python -m fingpt_forecaster_qlora.evaluate \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
+  --adapter-dir fingpt_forecaster_qlora/runs/smoke-qwen-0.5b/adapter \
+  --data-dir fingpt_forecaster_qlora/data \
+  --threshold 0.40 \
+  --max-samples 100
+```
+
 单只股票推理：
 
 ```bash
