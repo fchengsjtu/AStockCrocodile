@@ -172,6 +172,21 @@ fi
 
 python -m pip install -r fingpt_forecaster_qlora/requirements.txt
 
+EFFECTIVE_BASE_MODEL="${BASE_MODEL:-NousResearch/Llama-2-7b-chat-hf}"
+EFFECTIVE_FORECASTER_ADAPTER="${FINGPT_FORECASTER_ADAPTER:-FinGPT/fingpt-forecaster_dow30_llama2-7b_lora}"
+EFFECTIVE_NO_FORECASTER_ADAPTER="${NO_FORECASTER_ADAPTER:-0}"
+EFFECTIVE_MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-4096}"
+EFFECTIVE_EPOCHS="${EPOCHS:-1}"
+
+if [[ "$MODE" == "smoke" && "${SMOKE_USE_SMALL_MODEL:-1}" == "1" ]]; then
+  EFFECTIVE_BASE_MODEL="${SMOKE_BASE_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
+  EFFECTIVE_NO_FORECASTER_ADAPTER="${SMOKE_NO_FORECASTER_ADAPTER:-1}"
+  EFFECTIVE_MAX_SEQ_LENGTH="${SMOKE_MAX_SEQ_LENGTH:-2048}"
+  EFFECTIVE_EPOCHS="${SMOKE_EPOCHS:-0.05}"
+  echo "Smoke mode uses small open model: ${EFFECTIVE_BASE_MODEL}"
+  echo "Smoke mode skips FinGPT adapter unless SMOKE_NO_FORECASTER_ADAPTER=0 is set."
+fi
+
 DATA_ARGS=(
   --output-dir fingpt_forecaster_qlora/data
   --start-date "${TRAIN_START_DATE:-20100101}"
@@ -184,12 +199,12 @@ DATA_ARGS=(
 )
 
 TRAIN_ARGS=(
-  --base-model "${BASE_MODEL:-NousResearch/Llama-2-7b-chat-hf}"
-  --forecaster-adapter "${FINGPT_FORECASTER_ADAPTER:-FinGPT/fingpt-forecaster_dow30_llama2-7b_lora}"
+  --base-model "${EFFECTIVE_BASE_MODEL}"
+  --forecaster-adapter "${EFFECTIVE_FORECASTER_ADAPTER}"
   --data-dir "${DATA_DIR:-fingpt_forecaster_qlora/data}"
   --output-dir "${OUTPUT_DIR:-fingpt_forecaster_qlora/runs/astock-fingpt-forecaster-qlora}"
-  --max-seq-length "${MAX_SEQ_LENGTH:-4096}"
-  --epochs "${EPOCHS:-1}"
+  --max-seq-length "${EFFECTIVE_MAX_SEQ_LENGTH}"
+  --epochs "${EFFECTIVE_EPOCHS}"
   --learning-rate "${LEARNING_RATE:-2e-4}"
   --batch-size "${BATCH_SIZE:-1}"
   --gradient-accumulation-steps "${GRADIENT_ACCUMULATION_STEPS:-8}"
@@ -200,7 +215,6 @@ TRAIN_ARGS=(
 
 if [[ "$MODE" == "smoke" ]]; then
   DATA_ARGS+=(--positive-limit "${SMOKE_POSITIVE_LIMIT:-200}")
-  TRAIN_ARGS+=(--epochs "${SMOKE_EPOCHS:-0.05}")
 fi
 
 python -m fingpt_forecaster_qlora.build_dataset "${DATA_ARGS[@]}"
@@ -210,16 +224,16 @@ if [[ "$MODE" == "dataset-only" ]]; then
   exit 0
 fi
 
-check_hf_model_access "${BASE_MODEL:-NousResearch/Llama-2-7b-chat-hf}" "base model" "config.json"
-if [[ "${NO_FORECASTER_ADAPTER:-0}" == "1" ]]; then
+check_hf_model_access "${EFFECTIVE_BASE_MODEL}" "base model" "config.json"
+if [[ "${EFFECTIVE_NO_FORECASTER_ADAPTER}" == "1" ]]; then
   TRAIN_ARGS+=(--no-forecaster-adapter)
 else
-  check_hf_model_access "${FINGPT_FORECASTER_ADAPTER:-FinGPT/fingpt-forecaster_dow30_llama2-7b_lora}" "FinGPT-Forecaster adapter" "adapter_config.json"
+  check_hf_model_access "${EFFECTIVE_FORECASTER_ADAPTER}" "FinGPT-Forecaster adapter" "adapter_config.json"
 fi
 
 python -m fingpt_forecaster_qlora.train_qlora "${TRAIN_ARGS[@]}"
 python -m fingpt_forecaster_qlora.evaluate \
-  --base-model "${BASE_MODEL:-NousResearch/Llama-2-7b-chat-hf}" \
+  --base-model "${EFFECTIVE_BASE_MODEL}" \
   --adapter-dir "${OUTPUT_DIR:-fingpt_forecaster_qlora/runs/astock-fingpt-forecaster-qlora}/adapter" \
   --data-dir "${DATA_DIR:-fingpt_forecaster_qlora/data}" \
   --threshold "${MIN_SUCCESS_RATE:-0.40}" \
