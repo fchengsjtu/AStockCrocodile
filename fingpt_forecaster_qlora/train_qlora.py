@@ -46,6 +46,16 @@ def model_load_error(model_ref: str, exc: Exception) -> RuntimeError:
     return error
 
 
+def missing_dataset_error(data_dir: Path, train_path: Path, valid_path: Path) -> FileNotFoundError:
+    return FileNotFoundError(
+        f"Missing dataset files: {train_path} and/or {valid_path}\n\n"
+        "Generate the dataset first. For smoke training, run:\n\n"
+        "  bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh dataset-only\n\n"
+        "or explicitly:\n\n"
+        f"  python -m fingpt_forecaster_qlora.build_dataset --output-dir {data_dir} --positive-limit 200\n"
+    )
+
+
 def load_chat_jsonl_dataset(train_path: Path, valid_path: Path):
     from datasets import Dataset, DatasetDict
 
@@ -108,7 +118,7 @@ def train_qlora(
     train_path = data_dir / "train.jsonl"
     valid_path = data_dir / "valid.jsonl"
     if not train_path.exists() or not valid_path.exists():
-        raise FileNotFoundError(f"missing dataset files: {train_path} and {valid_path}")
+        raise missing_dataset_error(data_dir, train_path, valid_path)
 
     try:
         tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True, use_fast=True)

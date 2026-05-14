@@ -76,6 +76,20 @@ class FinGptForecasterQloraTests(unittest.TestCase):
         self.assertIn("dataset-only", message)
         self.assertIn("NO_FORECASTER_ADAPTER", message)
 
+    def test_missing_dataset_error_mentions_generation_command(self):
+        error = train_qlora.missing_dataset_error(
+            Path("fingpt_forecaster_qlora/data/smoke"),
+            Path("fingpt_forecaster_qlora/data/smoke/train.jsonl"),
+            Path("fingpt_forecaster_qlora/data/smoke/valid.jsonl"),
+        )
+        message = str(error)
+
+        self.assertIn("dataset-only", message)
+        self.assertIn("build_dataset", message)
+        self.assertIn("fingpt_forecaster_qlora", message)
+        self.assertIn("data", message)
+        self.assertIn("smoke", message)
+
     def test_normalize_training_argument_keys_accepts_eval_strategy_rename(self):
         kwargs = train_qlora.normalize_training_argument_keys(
             {"evaluation_strategy": "steps", "output_dir": "tmp"},
