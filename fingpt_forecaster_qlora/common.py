@@ -97,21 +97,53 @@ def resolve_mysql_host(host: str) -> str:
     return os.environ.get("WSL_MYSQL_HOST") or detect_wsl_windows_host() or host
 
 
+def extract_denied_mysql_client_host(error_message: str) -> str | None:
+    match = re.search(r"Host '([^']+)' is not allowed", error_message)
+    return match.group(1) if match else None
+
+
+def mysql_host_not_allowed_message(env: dict[str, str], mysql_host: str, error_message: str) -> str:
+    user = env.get("MYSQL_USER", "root")
+    database = env.get("MYSQL_DATABASE", "emstocks")
+    denied_host = extract_denied_mysql_client_host(error_message) or "<WSL_CLIENT_IP>"
+    return (
+        f"MySQL refused this WSL client host: {error_message}\n\n"
+        "The TCP connection reached MySQL, but MySQL account grants do not allow this client host.\n"
+        "Run these SQL statements in Windows MySQL as an admin user, then rerun the script:\n\n"
+        f"CREATE USER IF NOT EXISTS '{user}'@'{denied_host}' IDENTIFIED BY '<MYSQL_PASSWORD>';\n"
+        f"GRANT ALL PRIVILEGES ON {database}.* TO '{user}'@'{denied_host}';\n"
+        "FLUSH PRIVILEGES;\n\n"
+        "For a changing WSL IP, you can grant the WSL subnet instead, for example:\n\n"
+        f"CREATE USER IF NOT EXISTS '{user}'@'172.%' IDENTIFIED BY '<MYSQL_PASSWORD>';\n"
+        f"GRANT ALL PRIVILEGES ON {database}.* TO '{user}'@'172.%';\n"
+        "FLUSH PRIVILEGES;\n\n"
+        f"Current resolved MySQL server host: {mysql_host}. "
+        "The password placeholder must be replaced with the real MySQL password."
+    )
+
+
 def mysql_connect():
     env = load_env()
     host = resolve_mysql_host(env.get("MYSQL_HOST", "127.0.0.1"))
-    return pymysql.connect(
-        host=host,
-        port=int(env.get("MYSQL_PORT", "3306")),
-        user=env.get("MYSQL_USER", "root"),
-        password=env.get("MYSQL_PASSWORD", ""),
-        database=env.get("MYSQL_DATABASE", "emstocks"),
-        charset="utf8mb4",
-        autocommit=False,
-        connect_timeout=20,
-        read_timeout=120,
-        write_timeout=120,
-    )
+    try:
+        return pymysql.connect(
+            host=host,
+            port=int(env.get("MYSQL_PORT", "3306")),
+            user=env.get("MYSQL_USER", "root"),
+            password=env.get("MYSQL_PASSWORD", ""),
+            database=env.get("MYSQL_DATABASE", "emstocks"),
+            charset="utf8mb4",
+            autocommit=False,
+            connect_timeout=20,
+            read_timeout=120,
+            write_timeout=120,
+        )
+    except pymysql.err.OperationalError as exc:
+        code = exc.args[0] if exc.args else None
+        message = str(exc.args[1] if len(exc.args) > 1 else exc)
+        if code == 1130:
+            raise RuntimeError(mysql_host_not_allowed_message(env, host, message)) from exc
+        raise
 
 
 def parse_date(value: str | date | datetime | None) -> date | None:

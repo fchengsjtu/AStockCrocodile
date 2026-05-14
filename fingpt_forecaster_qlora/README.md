@@ -131,6 +131,16 @@ bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
 
 如果仍然 `Connection refused`，需要确认 Windows MySQL 服务正在运行，并允许从 WSL host IP 访问；必要时将 MySQL `bind-address` 从仅监听 `127.0.0.1` 改为监听 Windows 主机 IP 或 `0.0.0.0`，同时放行 Windows 防火墙的 3306 端口。
 
+如果报 `Host '172.xx.xx.xx' is not allowed to connect to this MySQL server`，说明已经连到 MySQL，但 MySQL 账号没有授权 WSL 客户端 IP。用 Windows MySQL 管理员账号执行：
+
+```sql
+CREATE USER IF NOT EXISTS 'fcheng'@'172.%' IDENTIFIED BY '123456';
+GRANT ALL PRIVILEGES ON emstocks.* TO 'fcheng'@'172.%';
+FLUSH PRIVILEGES;
+```
+
+如果只想授权当前这一次的 WSL IP，把 `172.%` 换成报错里的完整 IP，例如 `172.20.167.134`。
+
 ## 分步命令
 
 生成训练集：

@@ -45,6 +45,18 @@ class FinGptForecasterQloraTests(unittest.TestCase):
             common.is_wsl = original_is_wsl
             common.detect_wsl_windows_host = original_detect
 
+    def test_mysql_host_not_allowed_message_includes_grant_sql(self):
+        message = common.mysql_host_not_allowed_message(
+            {"MYSQL_USER": "fcheng", "MYSQL_DATABASE": "emstocks"},
+            "172.20.160.1",
+            "Host '172.20.167.134' is not allowed to connect to this MySQL server",
+        )
+
+        self.assertIn("'fcheng'@'172.20.167.134'", message)
+        self.assertIn("GRANT ALL PRIVILEGES ON emstocks.*", message)
+        self.assertIn("'fcheng'@'172.%'", message)
+        self.assertIn("172.20.160.1", message)
+
 
 if __name__ == "__main__":
     unittest.main()
