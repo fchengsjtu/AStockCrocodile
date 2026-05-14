@@ -26,6 +26,24 @@ def missing_deps_error(exc: Exception) -> RuntimeError:
     return error
 
 
+def model_load_error(model_ref: str, exc: Exception) -> RuntimeError:
+    message = (
+        f"Cannot load HuggingFace model or adapter: {model_ref}\n\n"
+        f"Original error: {exc}\n\n"
+        "Fix options:\n"
+        "1. If the network cannot reach huggingface.co, set a reachable mirror before running:\n"
+        "   export HF_ENDPOINT=https://hf-mirror.com\n"
+        "2. Download the model in advance and set BASE_MODEL to the local HuggingFace-format directory in "
+        "fingpt_forecaster_qlora/config.env.\n"
+        "3. To only generate training data for now, run:\n"
+        "   bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh dataset-only\n"
+        "4. If only the FinGPT adapter is unreachable, set NO_FORECASTER_ADAPTER=1 in config.env."
+    )
+    error = RuntimeError(message)
+    error.__cause__ = exc
+    return error
+
+
 def train_qlora(
     base_model: str,
     forecaster_adapter: str | None,
@@ -55,7 +73,10 @@ def train_qlora(
     if not train_path.exists() or not valid_path.exists():
         raise FileNotFoundError(f"missing dataset files: {train_path} and {valid_path}")
 
-    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True, use_fast=True)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True, use_fast=True)
+    except (OSError, RuntimeError) as exc:
+        raise model_load_error(base_model, exc)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
@@ -69,19 +90,25 @@ def train_qlora(
             bnb_4bit_compute_dtype=torch.float16,
         )
 
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        trust_remote_code=True,
-        device_map="auto",
-        torch_dtype=torch.float16,
-        quantization_config=quantization_config,
-    )
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model,
+            trust_remote_code=True,
+            device_map="auto",
+            torch_dtype=torch.float16,
+            quantization_config=quantization_config,
+        )
+    except (OSError, RuntimeError) as exc:
+        raise model_load_error(base_model, exc)
     if use_4bit:
         model = prepare_model_for_kbit_training(model)
 
     if forecaster_adapter:
         print(f"loading FinGPT-Forecaster adapter: {forecaster_adapter}", flush=True)
-        model = PeftModel.from_pretrained(model, forecaster_adapter, is_trainable=True)
+        try:
+            model = PeftModel.from_pretrained(model, forecaster_adapter, is_trainable=True)
+        except (OSError, RuntimeError) as exc:
+            raise model_load_error(forecaster_adapter, exc)
     else:
         peft_config = LoraConfig(
             r=lora_r,

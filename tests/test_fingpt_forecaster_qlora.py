@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from fingpt_forecaster_qlora import common
+from fingpt_forecaster_qlora import train_qlora
 from fingpt_forecaster_qlora.common import load_key_value_file
 
 
@@ -65,6 +66,15 @@ class FinGptForecasterQloraTests(unittest.TestCase):
         self.assertIn("cryptography", message)
         self.assertIn("python -m pip install", message)
         self.assertIn("requirements.txt", message)
+
+    def test_model_load_error_mentions_offline_options(self):
+        error = train_qlora.model_load_error("NousResearch/Llama-2-7b-chat-hf", OSError("network unreachable"))
+        message = str(error)
+
+        self.assertIn("HF_ENDPOINT", message)
+        self.assertIn("BASE_MODEL", message)
+        self.assertIn("dataset-only", message)
+        self.assertIn("NO_FORECASTER_ADAPTER", message)
 
 
 if __name__ == "__main__":

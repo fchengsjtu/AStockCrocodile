@@ -89,6 +89,46 @@ configure_wsl_mysql_host() {
   fi
 }
 
+is_local_model_dir() {
+  [[ -d "$1" && -f "$1/$2" ]]
+}
+
+check_hf_model_access() {
+  local model_id="$1"
+  local label="$2"
+  local required_file="$3"
+  if [[ -z "$model_id" || "$model_id" == "none" ]]; then
+    return
+  fi
+  if is_local_model_dir "$model_id" "$required_file"; then
+    echo "$label uses local path: $model_id"
+    return
+  fi
+  python - "$model_id" "$label" "$required_file" <<'PY'
+import os
+import sys
+from urllib.error import URLError
+from urllib.request import Request, urlopen
+
+model_id, label, required_file = sys.argv[1], sys.argv[2], sys.argv[3]
+endpoint = os.environ.get("HF_ENDPOINT", "https://huggingface.co").rstrip("/")
+url = f"{endpoint}/{model_id}/resolve/main/{required_file}"
+try:
+    request = Request(url, method="HEAD")
+    with urlopen(request, timeout=8):
+        pass
+except Exception as exc:
+    raise SystemExit(
+        f"Cannot reach {label} on HuggingFace endpoint: {url}\n"
+        f"Reason: {exc}\n\n"
+        "Fix options:\n"
+        "  1. Put the model in a local HuggingFace-format directory and set BASE_MODEL=/path/to/model in fingpt_forecaster_qlora/config.env.\n"
+        "  2. Use a reachable mirror, for example: export HF_ENDPOINT=https://hf-mirror.com\n"
+        "  3. Run only dataset generation now: bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh dataset-only\n"
+    )
+PY
+}
+
 if [[ ! -f "fingpt_forecaster_qlora/config.env" ]]; then
   cp fingpt_forecaster_qlora/config.example.env fingpt_forecaster_qlora/config.env
 fi
@@ -96,6 +136,10 @@ fi
 set -a
 source fingpt_forecaster_qlora/config.env
 set +a
+
+if [[ -n "${HF_ENDPOINT:-}" ]]; then
+  export HF_ENDPOINT
+fi
 
 configure_wsl_mysql_host
 
@@ -160,6 +204,19 @@ if [[ "$MODE" == "smoke" ]]; then
 fi
 
 python -m fingpt_forecaster_qlora.build_dataset "${DATA_ARGS[@]}"
+
+if [[ "$MODE" == "dataset-only" ]]; then
+  echo "Dataset-only mode complete. Training was skipped."
+  exit 0
+fi
+
+check_hf_model_access "${BASE_MODEL:-NousResearch/Llama-2-7b-chat-hf}" "base model" "config.json"
+if [[ "${NO_FORECASTER_ADAPTER:-0}" == "1" ]]; then
+  TRAIN_ARGS+=(--no-forecaster-adapter)
+else
+  check_hf_model_access "${FINGPT_FORECASTER_ADAPTER:-FinGPT/fingpt-forecaster_dow30_llama2-7b_lora}" "FinGPT-Forecaster adapter" "adapter_config.json"
+fi
+
 python -m fingpt_forecaster_qlora.train_qlora "${TRAIN_ARGS[@]}"
 python -m fingpt_forecaster_qlora.evaluate \
   --base-model "${BASE_MODEL:-NousResearch/Llama-2-7b-chat-hf}" \
