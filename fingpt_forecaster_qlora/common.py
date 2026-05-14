@@ -122,6 +122,16 @@ def mysql_host_not_allowed_message(env: dict[str, str], mysql_host: str, error_m
     )
 
 
+def mysql_auth_dependency_message(error_message: str) -> str:
+    return (
+        f"MySQL authentication requires an extra Python dependency: {error_message}\n\n"
+        "Install it in the active FinGPT virtual environment, then rerun:\n\n"
+        "  python -m pip install 'cryptography>=42.0.0'\n\n"
+        "The one-click script also installs this dependency from "
+        "fingpt_forecaster_qlora/requirements.txt."
+    )
+
+
 def mysql_connect():
     env = load_env()
     host = resolve_mysql_host(env.get("MYSQL_HOST", "127.0.0.1"))
@@ -143,6 +153,11 @@ def mysql_connect():
         message = str(exc.args[1] if len(exc.args) > 1 else exc)
         if code == 1130:
             raise RuntimeError(mysql_host_not_allowed_message(env, host, message)) from exc
+        raise
+    except RuntimeError as exc:
+        message = str(exc)
+        if "cryptography" in message and ("sha256_password" in message or "caching_sha2_password" in message):
+            raise RuntimeError(mysql_auth_dependency_message(message)) from exc
         raise
 
 

@@ -57,6 +57,15 @@ class FinGptForecasterQloraTests(unittest.TestCase):
         self.assertIn("'fcheng'@'172.%'", message)
         self.assertIn("172.20.160.1", message)
 
+    def test_mysql_auth_dependency_message_mentions_cryptography(self):
+        message = common.mysql_auth_dependency_message(
+            "'cryptography' package is required for sha256_password or caching_sha2_password auth methods"
+        )
+
+        self.assertIn("cryptography", message)
+        self.assertIn("python -m pip install", message)
+        self.assertIn("requirements.txt", message)
+
 
 if __name__ == "__main__":
     unittest.main()
