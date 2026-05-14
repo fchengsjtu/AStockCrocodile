@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 MODE="${1:-smoke}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-VENV_DIR="${VENV_DIR:-.venv-fingpt-linux}"
+VENV_DIR="${VENV_DIR:-$HOME/.venvs/astock-fingpt}"
 
 print_venv_help() {
   local py_version
@@ -31,6 +31,46 @@ If apt cannot find python${py_version}-venv, install the generic package instead
 EOF
 }
 
+bootstrap_pip_with_get_pip() {
+  local get_pip
+  get_pip="$(mktemp)"
+  echo "Bootstrapping pip with get-pip.py because ensurepip failed."
+  if ! "$VENV_DIR/bin/python" - <<PY
+from pathlib import Path
+from urllib.request import urlopen
+
+url = "https://bootstrap.pypa.io/get-pip.py"
+target = Path("${get_pip}")
+with urlopen(url, timeout=120) as response:
+    target.write_bytes(response.read())
+PY
+  then
+    rm -f "$get_pip"
+    return 1
+  fi
+  if ! "$VENV_DIR/bin/python" "$get_pip"; then
+    rm -f "$get_pip"
+    return 1
+  fi
+  rm -f "$get_pip"
+}
+
+create_linux_venv() {
+  mkdir -p "$(dirname "$VENV_DIR")"
+  if "$PYTHON_BIN" -m venv "$VENV_DIR"; then
+    return
+  fi
+
+  echo "Standard venv creation failed; retrying with --without-pip."
+  rm -rf "$VENV_DIR"
+  if ! "$PYTHON_BIN" -m venv --without-pip "$VENV_DIR"; then
+    return 1
+  fi
+  if ! bootstrap_pip_with_get_pip; then
+    return 1
+  fi
+}
+
 if [[ ! -f "fingpt_forecaster_qlora/config.env" ]]; then
   cp fingpt_forecaster_qlora/config.example.env fingpt_forecaster_qlora/config.env
 fi
@@ -44,14 +84,8 @@ if [[ -d "$VENV_DIR" && ! -f "$VENV_DIR/bin/activate" ]]; then
   rm -rf "$VENV_DIR"
 fi
 
-if ! "$PYTHON_BIN" -m ensurepip --version >/dev/null 2>&1
-then
-  print_venv_help
-  exit 1
-fi
-
 if [[ ! -d "$VENV_DIR" ]]; then
-  if ! "$PYTHON_BIN" -m venv "$VENV_DIR"; then
+  if ! create_linux_venv; then
     rm -rf "$VENV_DIR"
     print_venv_help
     exit 1

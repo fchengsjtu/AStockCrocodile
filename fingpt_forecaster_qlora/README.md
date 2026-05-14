@@ -63,7 +63,7 @@ bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
 
 `smoke` 模式会：
 
-1. 创建 `.venv-fingpt-linux`。
+1. 创建 `$HOME/.venvs/astock-fingpt`。
 2. 安装 PyTorch 和 QLoRA 依赖。
 3. 从 MySQL 抽取少量样本生成 JSONL。
 4. 加载 4-bit 基座模型和 FinGPT-Forecaster adapter。
@@ -91,10 +91,10 @@ $env:PYTHON_BIN='D:\Documents\StockInfoCrawler\.venv\Scripts\python.exe'
 
 脚本最后会提示切到 WSL2/Linux 执行真正 4-bit QLoRA。
 
-WSL2/Linux 脚本默认使用独立虚拟环境 `.venv-fingpt-linux`，避免和 Windows 原生脚本创建的 `.venv-fingpt` 冲突。需要自定义路径时：
+WSL2/Linux 脚本默认使用独立虚拟环境 `$HOME/.venvs/astock-fingpt`，避免在 `/mnt/d` 这种 Windows 挂载盘里创建 Linux 虚拟环境。需要自定义路径时：
 
 ```bash
-VENV_DIR=.venv-fingpt-linux bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
+VENV_DIR=$HOME/.venvs/astock-fingpt bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
 ```
 
 如果 WSL 报 `ensurepip is not available`，先安装对应版本的 venv 包，并删除失败时留下的半成品虚拟环境：
@@ -102,7 +102,7 @@ VENV_DIR=.venv-fingpt-linux bash fingpt_forecaster_qlora/scripts/one_click_deplo
 ```bash
 sudo apt update
 sudo apt install -y python3.12-venv
-rm -rf .venv-fingpt-linux
+rm -rf $HOME/.venvs/astock-fingpt
 bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
 ```
 
@@ -111,6 +111,8 @@ bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
 ```bash
 sudo apt install -y python3-venv
 ```
+
+脚本也内置了兜底方案：如果标准 `python -m venv` 因 ensurepip 失败，会自动改用 `python -m venv --without-pip` 创建环境，再通过 `get-pip.py` 给该虚拟环境安装 pip。此兜底方案需要 WSL 能访问 `https://bootstrap.pypa.io/get-pip.py`。
 
 ## 分步命令
 
