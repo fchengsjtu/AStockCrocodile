@@ -1,89 +1,73 @@
 import json
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
-import pandas as pd
-
 from llm_finetune import build_dataset
-from llm_finetune import evaluate_model
-from llm_finetune.common import KlineWindowSample, build_response, choose_target_features, to_messages_jsonl, write_jsonl
+from llm_finetune import common
+from llm_finetune import evaluate
+from llm_finetune import train
 
 
-class LlmFineTuneTests(unittest.TestCase):
-    def test_choose_target_features_prefers_returns_and_volume(self):
-        features = choose_target_features(
-            {
-                "W_MA5_GT_MA13",
-                "D_CLOSE_GT_MA5",
-                "D_RET_5_GE_5",
-                "W_VOL_RATIO_GE_1_5",
-                "D_RANGE_10_CONTRACT",
-            },
-            min_size=3,
-            max_size=4,
-        )
-
-        self.assertEqual(len(features), 4)
-        self.assertIn("D_RET_5_GE_5", features)
-        self.assertIn("W_VOL_RATIO_GE_1_5", features)
-
-    def test_build_response_uses_negative_empty_patterns(self):
-        sample = KlineWindowSample(
-            scode="000001",
-            trade_date=date(2026, 1, 2),
-            label="negative",
-            gain_rate=None,
-            features=("D_CLOSE_GT_MA5", "D_RET_5_GE_5", "W_MA5_GT_MA13"),
-            daily_55={"rows": []},
-            weekly_55={"rows": []},
-        )
-
-        payload = json.loads(build_response(sample))
-
-        self.assertEqual(payload, {"label": "negative", "patterns": []})
-
-    def test_messages_jsonl_contains_chat_messages(self):
-        sample = KlineWindowSample(
-            scode="000001",
-            trade_date=date(2026, 1, 2),
-            label="positive",
-            gain_rate=0.22,
-            features=("D_CLOSE_GT_MA5", "D_RET_5_GE_5", "W_MA5_GT_MA13"),
-            daily_55={"rows": [[0, 1, -1, 0, 100]]},
-            weekly_55={"rows": [[0, 1, -1, 0, 100]]},
-        )
-
-        row = to_messages_jsonl(sample, sample.features)
-
-        self.assertEqual([item["role"] for item in row["messages"]], ["system", "user", "assistant"])
-        self.assertEqual(row["metadata"]["label"], "positive")
-        self.assertIn("allowed_feature_tokens", row["messages"][1]["content"])
-
-    def test_write_jsonl_writes_one_json_per_line(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "train.jsonl"
-            count = write_jsonl(path, [{"a": 1}, {"b": 2}])
-
-            self.assertEqual(count, 2)
-            self.assertEqual(len(path.read_text(encoding="utf-8").splitlines()), 2)
-
-    def test_split_rows_is_stable(self):
+class LlmFinetuneTests(unittest.TestCase):
+    def test_split_80_20_is_stable(self):
         rows = [
-            KlineWindowSample(str(index), date(2026, 1, index + 1), "positive", 0.2, (), {}, {})
-            for index in range(10)
+            {"metadata": {"scode": f"{idx:06d}", "anchor_date": "2026-01-01", "label": idx % 2}}
+            for idx in range(10)
         ]
 
-        train_a, valid_a = build_dataset.split_rows(rows, 0.2, 123)
-        train_b, valid_b = build_dataset.split_rows(rows, 0.2, 123)
+        train_rows, test_rows = build_dataset.split_80_20(rows, 123)
+        train_rows_2, test_rows_2 = build_dataset.split_80_20(rows, 123)
 
-        self.assertEqual(len(train_a), 8)
-        self.assertEqual(len(valid_a), 2)
-        self.assertEqual([row.scode for row in valid_a], [row.scode for row in valid_b])
+        self.assertEqual(len(train_rows), 8)
+        self.assertEqual(len(test_rows), 2)
+        self.assertEqual(train_rows, train_rows_2)
+        self.assertEqual(test_rows, test_rows_2)
 
-    def test_evaluate_default_min_success_rate_is_40_percent(self):
-        self.assertEqual(evaluate_model.DEFAULT_MIN_SUCCESS_RATE, 0.40)
+    def test_pick_window_uses_anchor_and_exact_window(self):
+        rows = [{"date": (date(2026, 1, 1) + timedelta(days=idx)).strftime("%Y%m%d")} for idx in range(60)]
+
+        window = common.pick_window(rows, date(2026, 3, 1), 55)
+
+        self.assertEqual(len(window), 55)
+        self.assertEqual(window[-1]["date"], "20260301")
+
+    def test_messages_include_supervised_json_label(self):
+        kline = [{"date": "20260101", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10, "amount": 20}]
+
+        messages = common.build_messages("000001", date(2026, 1, 1), kline, kline, 1)
+        answer = json.loads(messages[-1]["content"])
+
+        self.assertEqual(answer["label"], "positive")
+        self.assertIn("daily_55", messages[1]["content"])
+
+    def test_extract_json(self):
+        parsed = evaluate.extract_json("prefix {\"label\":\"positive\",\"success_probability\":0.5} suffix")
+
+        self.assertEqual(parsed["label"], "positive")
+        self.assertEqual(parsed["success_probability"], 0.5)
+
+    def test_missing_adapter_error_mentions_train_command(self):
+        message = str(evaluate.missing_adapter_error(Path("llm_finetune/runs/test/adapter")))
+
+        self.assertIn("adapter_config.json", message)
+        self.assertIn("llm_finetune.train", message)
+
+    def test_normalize_training_args_supports_eval_strategy_rename(self):
+        kwargs = train.normalize_training_args({"evaluation_strategy": "epoch", "output_dir": "x"}, {"eval_strategy", "output_dir"})
+
+        self.assertEqual(kwargs["eval_strategy"], "epoch")
+        self.assertNotIn("evaluation_strategy", kwargs)
+
+    def test_write_and_read_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rows.jsonl"
+            common.write_jsonl(path, [{"a": 1}, {"b": 2}])
+
+            rows = common.read_jsonl(path)
+
+        self.assertEqual(rows, [{"a": 1}, {"b": 2}])
 
 
 if __name__ == "__main__":

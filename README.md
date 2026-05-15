@@ -1,4 +1,4 @@
-# StockInfoCrawler
+﻿# StockInfoCrawler
 
 A-share daily K-line crawler. The current version fetches forward-adjusted (`qfq`) daily K-line data from Tencent via AkShare and writes directly to the cloud MySQL database `emstocks`.
 
@@ -43,6 +43,88 @@ If PowerShell blocks activation:
 powershell -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 ```
+
+## Qwen2.5 Stock Fine-Tuning
+
+The current fine-tuning pipeline is in `llm_finetune/`. It uses `Qwen/Qwen2.5-0.5B-Instruct` as the base model. Samples come from `klinestatistics`: `PrevTradeDate` is the anchor date, and each input contains the 55 daily K-lines and 55 weekly K-lines ending at or before that date. The dataset is split into 80% training and 20% testing. Evaluation fails if model-selected positives have a success rate below `20%`.
+
+One-click deploy, train, evaluate, and run tests in WSL2/Linux:
+
+```bash
+cd /mnt/d/Documents/StockInfoCrawler
+bash llm_finetune/scripts/one_click_deploy.sh smoke
+```
+
+Formal run:
+
+```bash
+cd /mnt/d/Documents/StockInfoCrawler
+bash llm_finetune/scripts/one_click_deploy.sh full
+```
+
+Windows smoke run:
+
+```powershell
+cd D:\Documents\StockInfoCrawler
+.\llm_finetune\scripts\one_click_deploy.ps1 smoke
+```
+
+Build the 80/20 dataset manually:
+
+```bash
+python -m llm_finetune.build_dataset \
+  --output-dir llm_finetune/data \
+  --stat-type short_term_surge_3d_20pct \
+  --positive-limit 2000 \
+  --negative-ratio 1.0 \
+  --daily-window 55 \
+  --weekly-window 55 \
+  --batch-size 30
+```
+
+Train:
+
+```bash
+python -m llm_finetune.train \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
+  --data-dir llm_finetune/data \
+  --output-dir llm_finetune/runs/qwen2.5-0.5b-stock-lora \
+  --max-seq-length 2048 \
+  --epochs 1 \
+  --batch-size 1 \
+  --gradient-accumulation-steps 8 \
+  --learning-rate 2e-4
+```
+
+Evaluate and enforce at least `20%` success rate:
+
+```bash
+python -m llm_finetune.evaluate \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
+  --adapter-dir llm_finetune/runs/qwen2.5-0.5b-stock-lora/adapter \
+  --data-dir llm_finetune/data \
+  --threshold 0.40 \
+  --min-success-rate 0.20 \
+  --max-samples 500
+```
+
+Predict one stock/date:
+
+```bash
+python -m llm_finetune.predict \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
+  --adapter-dir llm_finetune/runs/qwen2.5-0.5b-stock-lora/adapter \
+  --scode 000001 \
+  --date 20260512
+```
+
+Run automated tests:
+
+```bash
+python -m unittest tests.test_llm_finetune -v
+```
+
+The old `fingpt_forecaster_qlora/` entry has been retired; its README points back to this pipeline.
 
 ## CentOS 7 Cloud Server Deployment
 
@@ -535,139 +617,6 @@ $env:LOCAL_LLM_TIMEOUT='600'
 $env:LOCAL_LLM_MAX_TOKENS='2048'
 ```
 
-Run a true LoRA/QLoRA fine-tuning pipeline for `DeepSeek-R1-Distill-Qwen-7B`.
-
-Core commands:
-
-```powershell
-python .\llm_finetune\build_dataset.py --positive-limit 2000 --negative-ratio 1.0
-python .\llm_finetune\train_lora.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --data-dir llm_finetune\data --output-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora --max-seq-length 4096 --batch-size 1 --gradient-accumulation-steps 8 --epochs 1
-python .\llm_finetune\evaluate_model.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --adapter-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora\adapter --data-dir llm_finetune\data --min-success-rate 0.40
-```
-
-This creates:
-
-```text
-llm_finetune\data\train.jsonl
-llm_finetune\data\valid.jsonl
-llm_finetune\data\allowed_features.json
-```
-
-For a quick smoke dataset:
-
-```powershell
-python .\llm_finetune\build_dataset.py --positive-limit 50 --negative-ratio 1.0
-```
-
-Install the optional fine-tuning dependencies in a GPU environment:
-
-```powershell
-pip install -r requirements-finetune.txt
-```
-
-For RTX 3060, QLoRA training is strongly recommended. Windows native `bitsandbytes` support can be fragile, so WSL2/Linux is usually the smoother path.
-
-Recommended RTX 3060 + WSL2 steps:
-
-1. Install or update the NVIDIA Windows driver. Use a recent Game Ready or Studio driver with WSL CUDA support.
-
-2. Enable WSL2 and install Ubuntu from an elevated PowerShell:
-
-```powershell
-wsl --install -d Ubuntu-22.04
-wsl --set-default-version 2
-wsl --shutdown
-```
-
-3. Open Ubuntu and verify the GPU is visible:
-
-```bash
-nvidia-smi
-```
-
-4. Clone the project or enter the mounted Windows project path. Mounted Windows paths work, but training is usually faster inside the Linux filesystem.
-
-```bash
-cd ~
-git clone https://github.com/fchengsjtu/AStockCrocodile.git
-cd AStockCrocodile
-```
-
-5. Create the WSL Python environment:
-
-```bash
-sudo apt update
-sudo apt install -y python3.10-venv python3-pip git
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-```
-
-6. Install PyTorch with CUDA, then project dependencies:
-
-```bash
-python -m pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-finetune.txt
-```
-
-7. Copy or create `env.txt` in the WSL project root so the scripts can read MySQL. If MySQL runs on Windows, set `MYSQL_HOST` to the Windows host IP reachable from WSL, not always `127.0.0.1`.
-
-8. Verify CUDA from Python:
-
-```bash
-python - <<'PY'
-import torch
-print(torch.__version__)
-print(torch.cuda.is_available())
-print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no cuda")
-PY
-```
-
-9. Build the fine-tuning dataset:
-
-```bash
-python ./llm_finetune/build_dataset.py --positive-limit 2000 --negative-ratio 1.0
-```
-
-10. Train the LoRA adapter:
-
-```bash
-python ./llm_finetune/train_lora.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --data-dir llm_finetune/data --output-dir llm_finetune/runs/deepseek-r1-distill-qwen-7b-lora --max-seq-length 4096 --batch-size 1 --gradient-accumulation-steps 8 --epochs 1
-```
-
-11. Evaluate and save only validated rules with actual success rate at least `40%` to `surgepatterns`:
-
-```bash
-python ./llm_finetune/evaluate_model.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --adapter-dir llm_finetune/runs/deepseek-r1-distill-qwen-7b-lora/adapter --data-dir llm_finetune/data --min-success-rate 0.40
-```
-
-Windows equivalent evaluation command:
-
-```powershell
-python .\llm_finetune\evaluate_model.py --base-model deepseek-ai/DeepSeek-R1-Distill-Qwen-7B --adapter-dir llm_finetune\runs\deepseek-r1-distill-qwen-7b-lora\adapter --data-dir llm_finetune\data --min-success-rate 0.40
-```
-
-The fine-tuning pipeline is:
-
-1. `build_dataset.py` creates supervised chat JSONL samples from `klinestatistics`, `dkandles`, and `wkandles`.
-2. `train_lora.py` performs QLoRA/LoRA training and writes a PEFT adapter.
-3. `evaluate_model.py` asks the fine-tuned model for feature-token patterns, backtests them with the existing K-line engine, and writes retained rules to `surgepatterns`.
-4. Future selection still uses `llm_pattern_selector.py`, so the deployed selector remains deterministic and backtest-gated.
-
-How raw K-line training is used for future selection:
-
-1. In `raw-kline` mode, DeepSeek sees raw historical windows: the selection date plus the previous 54 daily bars, and the latest weekly bar on or before the selection date plus the previous 54 weekly bars.
-2. DeepSeek proposes candidate setup patterns from those raw K-line samples.
-3. The program converts the candidates into executable feature-token rules, validates them on the `20260101` to `20260430` test set, and writes only retained patterns to `surgepatterns`.
-4. Future stock selection does not call DeepSeek again. It only reads the saved rules from `surgepatterns`, computes the same daily/weekly features for the target date, and matches stocks against those rules.
-
-So raw training changes how candidate patterns are discovered, but future selection still uses deterministic saved rules such as:
-
-```text
-D_CLOSE_GT_MA5 && W_MA5_GT_MA13
-```
-
 Use saved LLM/DeepSeek patterns for future stock selection:
 
 ```powershell
@@ -684,56 +633,6 @@ Useful filters:
 - `--test-start-date 20260101 --test-end-date 20260430`: use patterns validated on a specific test range.
 - `--limit 20`: keep only the top-ranked matches.
 - `--output data\llm_pattern_selection.csv`: also write results to CSV.
-
-## FinGPT-Forecaster 4-bit QLoRA 微调
-
-项目新增独立目录 `fingpt_forecaster_qlora/`，用于按“FinGPT-Forecaster + 4-bit 量化 + QLoRA 微调”路线训练 A 股短线预测 adapter。
-
-WSL2/Linux 一键 smoke 流程：
-
-```bash
-bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh smoke
-```
-
-如果只想继续使用已经生成好的数据集手动训练：
-
-```bash
-source $HOME/.venvs/astock-fingpt/bin/activate
-cd /mnt/d/Documents/StockInfoCrawler
-
-python -m fingpt_forecaster_qlora.train_qlora \
-  --base-model Qwen/Qwen2.5-0.5B-Instruct \
-  --no-forecaster-adapter \
-  --data-dir fingpt_forecaster_qlora/data \
-  --output-dir fingpt_forecaster_qlora/runs/smoke-qwen-0.5b \
-  --max-seq-length 2048 \
-  --epochs 0.05
-```
-
-训练完成后评估：
-
-```bash
-python -m fingpt_forecaster_qlora.evaluate \
-  --base-model Qwen/Qwen2.5-0.5B-Instruct \
-  --adapter-dir fingpt_forecaster_qlora/runs/smoke-qwen-0.5b/adapter \
-  --data-dir fingpt_forecaster_qlora/data \
-  --threshold 0.40 \
-  --max-samples 100
-```
-
-正式训练：
-
-```bash
-bash fingpt_forecaster_qlora/scripts/one_click_deploy.sh full
-```
-
-Windows 原生可先生成数据集，但 4-bit QLoRA 建议切到 WSL2/Linux：
-
-```powershell
-.\fingpt_forecaster_qlora\scripts\one_click_deploy.ps1 smoke
-```
-
-完整手册见 `fingpt_forecaster_qlora/README.md`。
 
 ## News Crawler
 

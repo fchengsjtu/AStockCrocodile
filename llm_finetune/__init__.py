@@ -1,1 +1,1 @@
-"""LoRA fine-tuning helpers for stock pattern mining."""
+"""Qwen2.5 stock-pattern fine-tuning pipeline."""

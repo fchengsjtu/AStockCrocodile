@@ -1,120 +1,164 @@
 from __future__ import annotations
 
 import json
+import os
+import re
+import socket
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
-import pandas as pd
+import pymysql
 
-from a_share_crawler import DEFAULT_KTYPE
-from llm_blackbox_pattern_trainer import _compact_window_to_matrix
-from stock_selector import parse_date
-from surge_pattern_miner import (
-    extract_features_for_date,
-    iter_batches,
-    load_kline_for_symbols,
-    make_frame_map,
-)
-
-DEFAULT_BASE_MODEL = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-DEFAULT_FINETUNE_DIR = Path("llm_finetune") / "runs" / "deepseek-r1-distill-qwen-7b-lora"
+BASE_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 DEFAULT_DATA_DIR = Path("llm_finetune") / "data"
+DEFAULT_OUTPUT_DIR = Path("llm_finetune") / "runs" / "qwen2.5-0.5b-stock-lora"
 DEFAULT_WINDOW = 55
+DEFAULT_STAT_TYPE = "short_term_surge_3d_20pct"
+DEFAULT_MIN_SUCCESS_RATE = 0.20
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 SYSTEM_PROMPT = (
-    "You are a stock pattern mining model. Given compact 55 daily and 55 weekly OHLCV windows, "
-    "return strict JSON only. Use exact feature tokens from allowed_feature_tokens. "
-    "For a tradable setup return label=positive and 3 to 8 feature tokens. Otherwise return label=negative."
+    "You are an A-share technical-pattern classifier. "
+    "Given exactly 55 daily K-lines and up to 55 weekly K-lines ending at anchor_date, "
+    "decide whether the setup matches a reusable short-term surge selection pattern. "
+    "Return strict JSON only."
 )
 
 
 @dataclass(frozen=True)
-class KlineWindowSample:
+class Event:
     scode: str
-    trade_date: date
-    label: str
-    gain_rate: float | None
-    features: tuple[str, ...]
-    daily_55: dict
-    weekly_55: dict
+    anchor_date: date
+    label: int
+    gain_rate: float | None = None
 
 
-def normalize_rate(value: float) -> float:
-    return value / 100 if value > 1 else value
+def parse_date(value: str | date | datetime) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            pass
+    raise ValueError(f"invalid date: {value!r}; expected YYYYMMDD or YYYY-MM-DD")
 
 
-def json_dumps(payload: dict) -> str:
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+def compact_date(value: date) -> str:
+    return value.strftime("%Y%m%d")
 
 
-def build_instruction(sample: KlineWindowSample, allowed_features: Iterable[str]) -> str:
-    payload = {
-        "task": "Classify whether this stock/date matches a short-term surge setup and return reusable feature-token rules.",
-        "anchor_date": str(sample.trade_date),
-        "scode": sample.scode,
-        "daily_55": sample.daily_55,
-        "weekly_55": sample.weekly_55,
-        "allowed_feature_tokens": sorted(set(allowed_features)),
-        "output_schema": {
-            "label": "positive|negative",
-            "patterns": [{"features": ["TOKEN_A", "TOKEN_B", "TOKEN_C"]}],
-        },
-    }
-    return SYSTEM_PROMPT + "\n\n" + json_dumps(payload)
+def load_key_value_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    pattern = re.compile(r"(?:\$env:)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"]?([^'\";\r\n]+)")
+    for line in path.read_text(encoding="utf-8").splitlines():
+        for key, value in pattern.findall(line):
+            values[key] = value.strip()
+    return values
 
 
-def choose_target_features(features: Iterable[str], min_size: int = 3, max_size: int = 8) -> tuple[str, ...]:
-    preferred_prefixes = (
-        "D_RET_",
-        "W_RET_",
-        "D_VOL_",
-        "W_VOL_",
-        "D_RANGE_",
-        "D_CLOSE_",
-        "W_CLOSE_",
-        "D_MA",
-        "W_MA",
-    )
-    ordered = sorted(set(features), key=lambda item: (next((idx for idx, prefix in enumerate(preferred_prefixes) if item.startswith(prefix)), 99), item))
-    if len(ordered) < min_size:
-        return tuple(ordered)
-    return tuple(ordered[:max_size])
+def load_env() -> dict[str, str]:
+    values = {}
+    values.update(load_key_value_file(PROJECT_ROOT / "env.txt"))
+    values.update(load_key_value_file(Path(__file__).resolve().parent / "config.env"))
+    for key in (
+        "MYSQL_HOST",
+        "MYSQL_PORT",
+        "MYSQL_USER",
+        "MYSQL_PASSWORD",
+        "MYSQL_DATABASE",
+        "MYSQL_CHARSET",
+        "HF_ENDPOINT",
+        "BASE_MODEL",
+    ):
+        if os.environ.get(key):
+            values[key] = os.environ[key]
+    return values
 
 
-def build_response(sample: KlineWindowSample, min_pattern_size: int = 3, max_pattern_size: int = 8) -> str:
-    if sample.label != "positive":
-        return json_dumps({"label": "negative", "patterns": []})
-    features = choose_target_features(sample.features, min_pattern_size, max_pattern_size)
-    if len(features) < min_pattern_size:
-        return json_dumps({"label": "negative", "patterns": []})
-    return json_dumps(
-        {
-            "label": "positive",
-            "patterns": [
-                {
-                    "features": list(features),
-                    "rationale": "Historical positive sample with matching compact daily and weekly setup.",
-                }
-            ],
-        }
-    )
+def is_wsl() -> bool:
+    try:
+        return "microsoft" in Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
+    except OSError:
+        return False
 
 
-def to_messages_jsonl(sample: KlineWindowSample, allowed_features: Iterable[str]) -> dict:
-    return {
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_instruction(sample, allowed_features)},
-            {"role": "assistant", "content": build_response(sample)},
-        ],
-        "metadata": {
-            "scode": sample.scode,
-            "trade_date": str(sample.trade_date),
-            "label": sample.label,
-            "gain_rate": sample.gain_rate,
-        },
-    }
+def detect_wsl_windows_host() -> str | None:
+    try:
+        for line in Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("nameserver "):
+                return line.split()[1]
+    except OSError:
+        return None
+    return None
+
+
+def resolve_mysql_host(host: str) -> str:
+    if host in {"127.0.0.1", "localhost", "::1"} and is_wsl():
+        return os.environ.get("WSL_MYSQL_HOST") or detect_wsl_windows_host() or host
+    return host
+
+
+def mysql_connect():
+    env = load_env()
+    host = resolve_mysql_host(env.get("MYSQL_HOST", "127.0.0.1"))
+    try:
+        return pymysql.connect(
+            host=host,
+            port=int(env.get("MYSQL_PORT", "3306")),
+            user=env.get("MYSQL_USER", "root"),
+            password=env.get("MYSQL_PASSWORD", ""),
+            database=env.get("MYSQL_DATABASE", "emstocks"),
+            charset=env.get("MYSQL_CHARSET", "utf8mb4"),
+            autocommit=False,
+            connect_timeout=20,
+            read_timeout=120,
+            write_timeout=120,
+        )
+    except RuntimeError as exc:
+        if "cryptography" in str(exc):
+            raise RuntimeError(
+                "MySQL uses caching_sha2_password/sha256_password; install cryptography:\n"
+                "  python -m pip install cryptography\n"
+                "or rerun the one-click script."
+            ) from exc
+        raise
+    except pymysql.err.OperationalError as exc:
+        if exc.args and exc.args[0] == 1130:
+            raise RuntimeError(
+                f"MySQL rejected host {socket.gethostname()} / {host}. Grant this client, for example:\n"
+                "  CREATE USER IF NOT EXISTS 'fcheng'@'172.%' IDENTIFIED BY '123456';\n"
+                "  GRANT ALL PRIVILEGES ON emstocks.* TO 'fcheng'@'172.%';\n"
+                "  FLUSH PRIVILEGES;"
+            ) from exc
+        raise
+
+
+def json_dumps(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def iter_batches(items: Sequence[str], batch_size: int) -> Iterable[list[str]]:
+    for start in range(0, len(items), batch_size):
+        yield list(items[start : start + batch_size])
+
+
+def read_jsonl(path: Path, limit: int | None = None) -> list[dict]:
+    rows = []
+    with path.open("r", encoding="utf-8") as file:
+        for line in file:
+            if line.strip():
+                rows.append(json.loads(line))
+            if limit and len(rows) >= limit:
+                break
+    return rows
 
 
 def write_jsonl(path: Path, rows: Iterable[dict]) -> int:
@@ -127,65 +171,100 @@ def write_jsonl(path: Path, rows: Iterable[dict]) -> int:
     return count
 
 
-def collect_window_samples(
-    conn,
-    events: pd.DataFrame,
-    label: str,
-    daily_window: int,
-    weekly_window: int,
-    batch_size: int,
-) -> tuple[list[KlineWindowSample], set[str]]:
-    if events.empty:
-        return [], set()
-    start_date = min(events["TradeDate"])
-    end_date = max(events["TradeDate"])
-    lookback_start = start_date - timedelta(days=max(500, weekly_window * 10, daily_window * 3))
-    symbols = sorted(events["SCode"].dropna().unique().tolist())
-    samples: list[KlineWindowSample] = []
-    all_features: set[str] = set()
-    for batch_index, batch in enumerate(iter_batches(symbols, batch_size), start=1):
-        daily_df = load_kline_for_symbols(conn, "dkandles", DEFAULT_KTYPE, batch, lookback_start, end_date)
-        weekly_df = load_kline_for_symbols(conn, "wkandles", "W", batch, lookback_start, end_date)
-        daily_frames = make_frame_map(daily_df)
-        weekly_frames = make_frame_map(weekly_df)
-        batch_events = events[events["SCode"].isin(batch)]
-        batch_samples = 0
-        for event in batch_events.itertuples(index=False):
-            daily_frame = daily_frames.get(event.SCode)
-            weekly_frame = weekly_frames.get(event.SCode)
-            if daily_frame is None or weekly_frame is None:
-                continue
-            daily_matches = daily_frame.index[daily_frame["TradeDate"] == event.TradeDate].tolist()
-            if not daily_matches:
-                continue
-            daily_pos = int(daily_matches[0])
-            weekly_positions = weekly_frame.index[weekly_frame["TradeDate"] <= event.TradeDate].tolist()
-            if not weekly_positions:
-                continue
-            weekly_pos = int(weekly_positions[-1])
-            if daily_pos + 1 < daily_window or weekly_pos + 1 < weekly_window:
-                continue
-            daily_slice = daily_frame.iloc[daily_pos + 1 - daily_window : daily_pos + 1]
-            weekly_slice = weekly_frame.iloc[weekly_pos + 1 - weekly_window : weekly_pos + 1]
-            features = extract_features_for_date(daily_frame, weekly_frame, event.TradeDate, daily_window, weekly_window)
-            if not features:
-                continue
-            all_features.update(features)
-            samples.append(
-                KlineWindowSample(
-                    scode=event.SCode,
-                    trade_date=event.TradeDate,
-                    label=label,
-                    gain_rate=float(event.GainRate) if hasattr(event, "GainRate") and pd.notna(event.GainRate) else None,
-                    features=tuple(sorted(features)),
-                    daily_55=_compact_window_to_matrix(daily_slice),
-                    weekly_55=_compact_window_to_matrix(weekly_slice),
-                )
-            )
-            batch_samples += 1
-        print(f"collect {label} batch {batch_index} symbols={len(batch)} events={len(batch_events)} samples={batch_samples}", flush=True)
-    return samples, all_features
+def kline_query(table: str, ktype: str, scodes: Sequence[str], start_date: date, end_date: date) -> tuple[str, list]:
+    if table not in {"dkandles", "wkandles"}:
+        raise ValueError(f"unsupported table: {table}")
+    placeholders = ",".join(["%s"] * len(scodes))
+    sql = f"""
+        SELECT SCode, DATE(KTime) AS TradeDate, Open, High, Low, Close, Volume, Amount, MA5, MA13, MA34, MA55
+        FROM {table}
+        WHERE KType = %s
+          AND SCode IN ({placeholders})
+          AND KTime >= %s
+          AND KTime < %s
+        ORDER BY SCode, KTime
+    """
+    return sql, [ktype, *scodes, start_date, end_date + timedelta(days=1)]
 
 
-def parse_date_arg(value: str | None) -> date | None:
-    return parse_date(value) if value else None
+def load_kline_map(conn, table: str, ktype: str, scodes: Sequence[str], start_date: date, end_date: date) -> dict[str, list[dict]]:
+    if not scodes:
+        return {}
+    sql, params = kline_query(table, ktype, scodes, start_date, end_date)
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    result: dict[str, list[dict]] = {}
+    for row in rows:
+        scode = str(row[0])
+        result.setdefault(scode, []).append(
+            {
+                "date": compact_date(parse_date(row[1])),
+                "open": float(row[2] or 0),
+                "high": float(row[3] or 0),
+                "low": float(row[4] or 0),
+                "close": float(row[5] or 0),
+                "volume": float(row[6] or 0),
+                "amount": float(row[7] or 0),
+                "ma5": float(row[8] or 0),
+                "ma13": float(row[9] or 0),
+                "ma34": float(row[10] or 0),
+                "ma55": float(row[11] or 0),
+            }
+        )
+    return result
+
+
+def pick_window(rows: list[dict], anchor_date: date, window: int) -> list[dict] | None:
+    anchor = compact_date(anchor_date)
+    eligible = [row for row in rows if row["date"] <= anchor]
+    if len(eligible) < window:
+        return None
+    return eligible[-window:]
+
+
+def make_prompt_payload(scode: str, anchor_date: date, daily_55: list[dict], weekly_55: list[dict]) -> dict:
+    return {
+        "task": "classify_stock_surge_setup",
+        "scode": scode,
+        "anchor_date": compact_date(anchor_date),
+        "input_definition": "daily_55 and weekly_55 end at or before anchor_date; use only these historical K-lines.",
+        "columns": ["date", "open", "high", "low", "close", "volume", "amount", "ma5", "ma13", "ma34", "ma55"],
+        "daily_55": compact_kline_rows(daily_55),
+        "weekly_55": compact_kline_rows(weekly_55),
+        "output_schema": {
+            "label": "positive or negative",
+            "success_probability": "0.0 to 1.0",
+            "reason": "short technical explanation",
+        },
+    }
+
+
+def build_messages(scode: str, anchor_date: date, daily_55: list[dict], weekly_55: list[dict], label: int | None = None) -> list[dict]:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": json_dumps(make_prompt_payload(scode, anchor_date, daily_55, weekly_55))},
+    ]
+    if label is not None:
+        response = {
+            "label": "positive" if label else "negative",
+            "success_probability": 0.8 if label else 0.1,
+            "reason": "Historical label from klinestatistics." if label else "No matching surge label in klinestatistics.",
+        }
+        messages.append({"role": "assistant", "content": json_dumps(response)})
+    return messages
+
+
+def compact_kline_rows(rows: list[dict]) -> list[list]:
+    keys = ["date", "open", "high", "low", "close", "volume", "amount", "ma5", "ma13", "ma34", "ma55"]
+    compact = []
+    for row in rows:
+        values = []
+        for key in keys:
+            value = row.get(key)
+            if isinstance(value, float):
+                values.append(round(value, 4))
+            else:
+                values.append(value)
+        compact.append(values)
+    return compact

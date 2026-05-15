@@ -2,6 +2,7 @@
 .venv/
 .venv-fingpt/
 .venv-fingpt-linux/
+.venv-qwen-finetune/
 __pycache__/
 *.pyc
 data/

@@ -2,108 +2,88 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
+import random
 import sys
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
 
-import pandas as pd
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from a_share_crawler import DEFAULT_KTYPE, mysql_connect
-from kline_statistics import SHORT_TERM_SURGE_TYPE, ensure_kline_statistics_table
 from llm_finetune.common import (
     DEFAULT_DATA_DIR,
+    DEFAULT_STAT_TYPE,
     DEFAULT_WINDOW,
-    collect_window_samples,
-    parse_date_arg,
-    to_messages_jsonl,
+    Event,
+    build_messages,
+    iter_batches,
+    load_kline_map,
+    mysql_connect,
+    parse_date,
+    pick_window,
     write_jsonl,
 )
-from surge_pattern_miner import backfill_kline_stat_selection_dates
 
-DEFAULT_VALID_RATIO = 0.2
-DEFAULT_NEGATIVE_RATIO = 1.0
-DEFAULT_BATCH_SIZE = 40
-DEFAULT_SPLIT_SEED = 20260512
+DEFAULT_SEED = 20260515
 
 
-def stable_rank(*parts: object) -> int:
-    text = "|".join(str(part) for part in parts)
+def stable_rank(seed: int, *parts: object) -> int:
+    text = "|".join(str(part) for part in (seed, *parts))
     return int(hashlib.sha256(text.encode("utf-8")).hexdigest()[:16], 16)
 
 
-def split_rows(rows: list, valid_ratio: float, seed: int) -> tuple[list, list]:
-    if not rows:
-        return [], []
-    ratio = min(max(valid_ratio, 0.01), 0.99)
-    ordered = sorted(rows, key=lambda row: stable_rank(seed, row.scode, row.trade_date, row.label))
-    valid_count = max(1, int(round(len(ordered) * ratio))) if len(ordered) > 1 else 0
-    valid = ordered[:valid_count]
-    train = ordered[valid_count:]
-    return train, valid
+def split_80_20(rows: list[dict], seed: int) -> tuple[list[dict], list[dict]]:
+    ordered = sorted(rows, key=lambda row: stable_rank(seed, row["metadata"]["scode"], row["metadata"]["anchor_date"], row["metadata"]["label"]))
+    test_count = max(1, int(round(len(ordered) * 0.2))) if len(ordered) > 1 else 0
+    return ordered[test_count:], ordered[:test_count]
 
 
-def load_positive_events(conn, stat_type: str, start_date: date | None, end_date: date | None, limit: int | None) -> pd.DataFrame:
+def load_positive_events(conn, stat_type: str, start_date: date | None, end_date: date | None, limit: int | None) -> list[Event]:
     sql = """
-        SELECT SCode, COALESCE(SelectionDate, PrevTradeDate) AS TradeDate, GainRate
+        SELECT SCode, PrevTradeDate, GainRate
         FROM klinestatistics
         WHERE StatType = %s
           AND PrevTradeDate IS NOT NULL
     """
     params: list = [stat_type]
-    if start_date is not None:
-        sql += " AND COALESCE(SelectionDate, PrevTradeDate) >= %s"
+    if start_date:
+        sql += " AND PrevTradeDate >= %s"
         params.append(start_date)
-    if end_date is not None:
-        sql += " AND COALESCE(SelectionDate, PrevTradeDate) <= %s"
+    if end_date:
+        sql += " AND PrevTradeDate <= %s"
         params.append(end_date)
-    sql += " ORDER BY SCode, TradeDate"
-    if limit is not None and limit > 0:
+    sql += " ORDER BY SCode, PrevTradeDate"
+    if limit and limit > 0:
         sql += " LIMIT %s"
         params.append(limit)
     with conn.cursor() as cur:
         cur.execute(sql, params)
         rows = cur.fetchall()
-    df = pd.DataFrame(rows, columns=["SCode", "TradeDate", "GainRate"])
-    if df.empty:
-        return df
-    df["TradeDate"] = pd.to_datetime(df["TradeDate"]).dt.date
-    df["GainRate"] = pd.to_numeric(df["GainRate"], errors="coerce")
-    return df
+    return [Event(str(row[0]), parse_date(row[1]), 1, float(row[2] or 0)) for row in rows]
 
 
-def load_negative_events(
-    conn,
-    stat_type: str,
-    start_date: date | None,
-    end_date: date | None,
-    limit: int,
-    seed: int,
-) -> pd.DataFrame:
-    date_filter = ""
-    params: list = [stat_type, DEFAULT_KTYPE]
-    if start_date is not None:
-        date_filter += " AND dk.KTime >= %s"
+def load_negative_events(conn, stat_type: str, start_date: date | None, end_date: date | None, limit: int, seed: int) -> list[Event]:
+    params: list = [stat_type, "D"]
+    filters = ""
+    if start_date:
+        filters += " AND dk.KTime >= %s"
         params.append(start_date)
-    if end_date is not None:
-        date_filter += " AND dk.KTime < %s"
+    if end_date:
+        filters += " AND dk.KTime < %s"
         params.append(end_date + timedelta(days=1))
-    scan_limit = max(1000, limit * 200)
+    scan_limit = max(5000, limit * 120)
     params.append(scan_limit)
     sql = f"""
-        SELECT dk.SCode, DATE(dk.KTime) AS TradeDate, 0.0 AS GainRate
+        SELECT dk.SCode, DATE(dk.KTime) AS AnchorDate
         FROM dkandles dk
         LEFT JOIN klinestatistics ks
           ON ks.SCode = dk.SCode
          AND ks.StatType = %s
-         AND COALESCE(ks.SelectionDate, ks.PrevTradeDate) = DATE(dk.KTime)
+         AND ks.PrevTradeDate = DATE(dk.KTime)
         WHERE dk.KType = %s
-          {date_filter}
+          {filters}
           AND ks.Id IS NULL
         ORDER BY dk.SCode, dk.KTime
         LIMIT %s
@@ -111,12 +91,43 @@ def load_negative_events(
     with conn.cursor() as cur:
         cur.execute(sql, params)
         rows = cur.fetchall()
-    df = pd.DataFrame(rows, columns=["SCode", "TradeDate", "GainRate"])
-    if df.empty:
-        return df
-    df["TradeDate"] = pd.to_datetime(df["TradeDate"]).dt.date
-    df["_Rank"] = df.apply(lambda row: stable_rank(seed, row["SCode"], row["TradeDate"], "negative"), axis=1)
-    return df.sort_values("_Rank").drop(columns=["_Rank"]).head(limit).reset_index(drop=True)
+    events = [Event(str(row[0]), parse_date(row[1]), 0, None) for row in rows]
+    random.Random(seed).shuffle(events)
+    return events[:limit]
+
+
+def materialize_events(conn, events: list[Event], daily_window: int, weekly_window: int, batch_size: int) -> list[dict]:
+    if not events:
+        return []
+    start_date = min(event.anchor_date for event in events)
+    end_date = max(event.anchor_date for event in events)
+    lookback_start = start_date - timedelta(days=max(500, weekly_window * 10, daily_window * 4))
+    samples: list[dict] = []
+    symbols = sorted({event.scode for event in events})
+    for batch_index, batch in enumerate(iter_batches(symbols, batch_size), start=1):
+        daily_map = load_kline_map(conn, "dkandles", "D", batch, lookback_start, end_date)
+        weekly_map = load_kline_map(conn, "wkandles", "W", batch, lookback_start, end_date)
+        batch_events = [event for event in events if event.scode in set(batch)]
+        batch_count = 0
+        for event in batch_events:
+            daily = pick_window(daily_map.get(event.scode, []), event.anchor_date, daily_window)
+            weekly = pick_window(weekly_map.get(event.scode, []), event.anchor_date, weekly_window)
+            if daily is None or weekly is None:
+                continue
+            samples.append(
+                {
+                    "messages": build_messages(event.scode, event.anchor_date, daily, weekly, event.label),
+                    "metadata": {
+                        "scode": event.scode,
+                        "anchor_date": event.anchor_date.isoformat(),
+                        "label": event.label,
+                        "gain_rate": event.gain_rate,
+                    },
+                }
+            )
+            batch_count += 1
+        print(f"materialized batch={batch_index} symbols={len(batch)} events={len(batch_events)} samples={batch_count}", flush=True)
+    return samples
 
 
 def build_dataset(
@@ -126,49 +137,37 @@ def build_dataset(
     end_date: date | None,
     positive_limit: int | None,
     negative_ratio: float,
-    valid_ratio: float,
     seed: int,
     daily_window: int,
     weekly_window: int,
     batch_size: int,
 ) -> tuple[int, int]:
     with mysql_connect() as conn:
-        ensure_kline_statistics_table(conn)
-        backfill_kline_stat_selection_dates(conn, stat_type)
-        positive_events = load_positive_events(conn, stat_type, start_date, end_date, positive_limit)
-        negative_limit = max(1, int(len(positive_events) * negative_ratio))
-        negative_events = load_negative_events(conn, stat_type, start_date, end_date, negative_limit, seed)
-        print(f"loaded events positives={len(positive_events)} negatives={len(negative_events)}", flush=True)
-        positive_samples, positive_features = collect_window_samples(conn, positive_events, "positive", daily_window, weekly_window, batch_size)
-        negative_samples, negative_features = collect_window_samples(conn, negative_events, "negative", daily_window, weekly_window, batch_size)
-
-    allowed_features = positive_features | negative_features
-    rows = [to_messages_jsonl(sample, allowed_features) for sample in positive_samples + negative_samples]
-    train_rows, valid_rows = split_rows([sample for sample in positive_samples + negative_samples], valid_ratio, seed)
-    train_json = [to_messages_jsonl(sample, allowed_features) for sample in train_rows]
-    valid_json = [to_messages_jsonl(sample, allowed_features) for sample in valid_rows]
+        positives = load_positive_events(conn, stat_type, start_date, end_date, positive_limit)
+        negatives = load_negative_events(conn, stat_type, start_date, end_date, max(1, int(len(positives) * negative_ratio)), seed)
+        print(f"loaded events positives={len(positives)} negatives={len(negatives)} stat_type={stat_type}", flush=True)
+        samples = materialize_events(conn, positives + negatives, daily_window, weekly_window, batch_size)
+    train_rows, test_rows = split_80_20(samples, seed)
     output_dir.mkdir(parents=True, exist_ok=True)
-    train_count = write_jsonl(output_dir / "train.jsonl", train_json)
-    valid_count = write_jsonl(output_dir / "valid.jsonl", valid_json)
-    write_jsonl(output_dir / "all.jsonl", rows)
-    (output_dir / "allowed_features.json").write_text(json.dumps({"features": sorted(allowed_features)}, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"dataset written dir={output_dir} train={train_count} valid={valid_count} all={len(rows)} features={len(allowed_features)}", flush=True)
-    return train_count, valid_count
+    write_jsonl(output_dir / "train.jsonl", train_rows)
+    write_jsonl(output_dir / "test.jsonl", test_rows)
+    write_jsonl(output_dir / "all.jsonl", samples)
+    print(f"dataset written dir={output_dir} train={len(train_rows)} test={len(test_rows)} all={len(samples)}", flush=True)
+    return len(train_rows), len(test_rows)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build LoRA instruction-tuning data from dkandles/wkandles/klinestatistics")
+    parser = argparse.ArgumentParser(description="Build 80/20 Qwen fine-tuning data from klinestatistics PrevTradeDate windows")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--stat-type", default=SHORT_TERM_SURGE_TYPE)
+    parser.add_argument("--stat-type", default=DEFAULT_STAT_TYPE)
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
-    parser.add_argument("--positive-limit", type=int, help="Limit positives for a smoke dataset")
-    parser.add_argument("--negative-ratio", type=float, default=DEFAULT_NEGATIVE_RATIO)
-    parser.add_argument("--valid-ratio", type=float, default=DEFAULT_VALID_RATIO)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SPLIT_SEED)
+    parser.add_argument("--positive-limit", type=int)
+    parser.add_argument("--negative-ratio", type=float, default=1.0)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--daily-window", type=int, default=DEFAULT_WINDOW)
     parser.add_argument("--weekly-window", type=int, default=DEFAULT_WINDOW)
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    parser.add_argument("--batch-size", type=int, default=30)
     return parser
 
 
@@ -177,17 +176,14 @@ def main(argv: Iterable[str] | None = None) -> None:
     build_dataset(
         output_dir=args.output_dir,
         stat_type=args.stat_type,
-        start_date=parse_date_arg(args.start_date),
-        end_date=parse_date_arg(args.end_date),
+        start_date=parse_date(args.start_date) if args.start_date else None,
+        end_date=parse_date(args.end_date) if args.end_date else None,
         positive_limit=args.positive_limit,
         negative_ratio=max(0.0, args.negative_ratio),
-        valid_ratio=args.valid_ratio,
         seed=args.seed,
         daily_window=max(2, args.daily_window),
         weekly_window=max(2, args.weekly_window),
         batch_size=max(1, args.batch_size),
     )
-
-
 if __name__ == "__main__":
     main()
