@@ -13,6 +13,37 @@ if str(PROJECT_ROOT) not in sys.path:
 from fingpt_forecaster_qlora.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_OUTPUT_DIR
 
 
+def missing_validation_data_error(data_dir: Path, valid_path: Path) -> FileNotFoundError:
+    return FileNotFoundError(
+        f"missing validation dataset: {valid_path}\n\n"
+        "Generate the dataset first, then rerun evaluation. For a quick smoke dataset:\n\n"
+        "  python -m fingpt_forecaster_qlora.build_dataset "
+        "--output-dir fingpt_forecaster_qlora/data/smoke "
+        "--positive-limit 200 "
+        "--negative-ratio 1.0 "
+        "--valid-ratio 0.2 "
+        "--daily-window 55 "
+        "--weekly-window 55 "
+        "--min-success-rate 0.40\n\n"
+        f"Then pass --data-dir {data_dir}"
+    )
+
+
+def missing_adapter_error(adapter_dir: Path) -> FileNotFoundError:
+    return FileNotFoundError(
+        f"missing trained LoRA adapter: {adapter_dir / 'adapter_config.json'}\n\n"
+        "Evaluation requires a completed training run. Train first, for example:\n\n"
+        "  python -m fingpt_forecaster_qlora.train_qlora "
+        "--base-model Qwen/Qwen2.5-0.5B-Instruct "
+        "--no-forecaster-adapter "
+        "--data-dir fingpt_forecaster_qlora/data/smoke "
+        "--output-dir fingpt_forecaster_qlora/runs/smoke-qwen-0.5b "
+        "--max-seq-length 2048 "
+        "--epochs 0.05\n\n"
+        "After training, rerun evaluate with --adapter-dir pointing to the generated adapter directory."
+    )
+
+
 def extract_json(text: str) -> dict:
     start = text.find("{")
     end = text.rfind("}")
@@ -25,6 +56,14 @@ def extract_json(text: str) -> dict:
 
 
 def evaluate(base_model: str, adapter_dir: Path, data_dir: Path, threshold: float, max_samples: int | None) -> dict:
+    adapter_dir = Path(adapter_dir)
+    data_dir = Path(data_dir)
+    valid_path = data_dir / "valid.jsonl"
+    if not valid_path.exists():
+        raise missing_validation_data_error(data_dir, valid_path)
+    if not (adapter_dir / "adapter_config.json").exists():
+        raise missing_adapter_error(adapter_dir)
+
     try:
         import torch
         from peft import PeftModel
@@ -33,7 +72,6 @@ def evaluate(base_model: str, adapter_dir: Path, data_dir: Path, threshold: floa
         raise RuntimeError("missing inference dependencies; install fingpt_forecaster_qlora/requirements.txt") from exc
 
     rows = []
-    valid_path = data_dir / "valid.jsonl"
     with valid_path.open("r", encoding="utf-8") as file:
         for line in file:
             rows.append(json.loads(line))
@@ -43,7 +81,7 @@ def evaluate(base_model: str, adapter_dir: Path, data_dir: Path, threshold: floa
     tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True, use_fast=True)
     quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=torch.float16)
     model = AutoModelForCausalLM.from_pretrained(base_model, trust_remote_code=True, device_map="auto", torch_dtype=torch.float16, quantization_config=quantization_config)
-    model = PeftModel.from_pretrained(model, adapter_dir)
+    model = PeftModel.from_pretrained(model, str(adapter_dir))
     model.eval()
 
     tp = fp = tn = fn = 0

@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from fingpt_forecaster_qlora import common
+from fingpt_forecaster_qlora import evaluate
 from fingpt_forecaster_qlora import train_qlora
 from fingpt_forecaster_qlora.common import load_key_value_file
 
@@ -89,6 +90,15 @@ class FinGptForecasterQloraTests(unittest.TestCase):
         self.assertIn("fingpt_forecaster_qlora", message)
         self.assertIn("data", message)
         self.assertIn("smoke", message)
+
+    def test_missing_adapter_error_mentions_training_command(self):
+        error = evaluate.missing_adapter_error(Path("fingpt_forecaster_qlora/runs/smoke-qwen-0.5b/adapter"))
+        message = str(error)
+
+        self.assertIn("adapter_config.json", message)
+        self.assertIn("train_qlora", message)
+        self.assertIn("smoke-qwen-0.5b", message)
+        self.assertIn("Qwen/Qwen2.5-0.5B-Instruct", message)
 
     def test_normalize_training_argument_keys_accepts_eval_strategy_rename(self):
         kwargs = train_qlora.normalize_training_argument_keys(
