@@ -126,6 +126,49 @@ python -m unittest tests.test_llm_finetune -v
 
 The old `fingpt_forecaster_qlora/` entry has been retired; its README points back to this pipeline.
 
+## Goal Pattern Search
+
+Use `klinestatistics` samples from `20200101` to `20251231`, split them into 80% training and 20% internal evaluation, then validate the retained pattern on `20260101` to `20260430`. The script writes retained patterns to `surgepatterns`.
+
+```powershell
+python .\signature_pattern_search.py `
+  --train-start-date 20200101 `
+  --train-end-date 20251231 `
+  --holdout-start-date 20260101 `
+  --holdout-end-date 20260430 `
+  --target-success-rate 0.40 `
+  --min-eval-success-rate 0.25 `
+  --min-eval-sample-count 5 `
+  --min-holdout-sample-count 5 `
+  --min-positive-supports 200,100,50,20,10,5,3,2,1 `
+  --batch-size 500
+```
+
+Verified result on the current local database:
+
+```text
+SampleCount=12
+SuccessCount=8
+SuccessRate=66.67%
+PositiveSupport=24
+```
+
+Select stocks for one trading day from all stocks using the current validated mode:
+
+```powershell
+python .\llm_pattern_selector.py `
+  --date 20260105 `
+  --min-success-rate 0.40 `
+  --min-threshold 0.40 `
+  --min-sample-count 5 `
+  --min-positive-support 20 `
+  --train-start-date 20200101 `
+  --train-end-date 20251231 `
+  --test-start-date 20260101 `
+  --test-end-date 20260430 `
+  --limit 20
+```
+
 ## CentOS 7 Cloud Server Deployment
 
 The verified cloud server project path is:
