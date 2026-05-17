@@ -126,6 +126,114 @@ python -m unittest tests.test_llm_finetune -v
 
 The old `fingpt_forecaster_qlora/` entry has been retired; its README points back to this pipeline.
 
+## Black-Box Qwen Fine-Tuning
+
+The black-box fine-tuning pipeline is in `blackbox_finetune/`. It treats `Qwen/Qwen2.5-0.5B-Instruct` as a trainable classifier rather than a rule generator. Positive samples come from `klinestatistics`. For each positive sample, the input is the `PrevTradeDate` plus the previous 55 daily K-lines and previous 55 weekly K-lines. Negative candidates are trading days outside the positive sample's `PrevTradeDate +/- 3` trading-day window, using the same 55 daily and 55 weekly K-line input format. The default training period is `20110101-20241231`; the default validation period is `20260101-20260430`. Evaluation fails unless positive recall is at least `60%`.
+
+Windows one-click smoke run:
+
+```powershell
+cd D:\Documents\StockInfoCrawler
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune\scripts\one_click_deploy.ps1 smoke
+```
+
+Windows full run:
+
+```powershell
+cd D:\Documents\StockInfoCrawler
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune\scripts\one_click_deploy.ps1 full
+```
+
+WSL2/Linux one-click smoke run:
+
+```bash
+cd /mnt/d/Documents/StockInfoCrawler
+bash blackbox_finetune/scripts/one_click_deploy.sh smoke
+```
+
+Build the training dataset manually:
+
+```powershell
+python -m blackbox_finetune.build_dataset `
+  --start-date 20110101 `
+  --end-date 20241231 `
+  --negative-ratio 1.0 `
+  --output-dir blackbox_finetune/data `
+  --daily-window 55 `
+  --weekly-window 55 `
+  --batch-size 80
+```
+
+Build the validation dataset manually:
+
+```powershell
+python -m blackbox_finetune.build_validation_dataset `
+  --start-date 20260101 `
+  --end-date 20260430 `
+  --negative-ratio 1.0 `
+  --output-dir blackbox_finetune/data_validation `
+  --daily-window 55 `
+  --weekly-window 55 `
+  --batch-size 80
+```
+
+Train with LoRA/QLoRA:
+
+```powershell
+python -m blackbox_finetune.train `
+  --base-model Qwen/Qwen2.5-0.5B-Instruct `
+  --data-dir blackbox_finetune/data `
+  --output-dir blackbox_finetune/runs/qwen2.5-0.5b-blackbox-lora `
+  --max-seq-length 2048 `
+  --epochs 1 `
+  --batch-size 1 `
+  --gradient-accumulation-steps 8 `
+  --learning-rate 2e-4
+```
+
+On native Windows CPU/GPU, add `--no-4bit` because `bitsandbytes` 4-bit training is best supported in Linux/WSL2:
+
+```powershell
+python -m blackbox_finetune.train `
+  --base-model Qwen/Qwen2.5-0.5B-Instruct `
+  --data-dir blackbox_finetune/data `
+  --output-dir blackbox_finetune/runs/qwen2.5-0.5b-blackbox-lora `
+  --max-seq-length 2048 `
+  --epochs 1 `
+  --batch-size 1 `
+  --gradient-accumulation-steps 8 `
+  --learning-rate 2e-4 `
+  --no-4bit
+```
+
+Evaluate on the `20260101-20260430` validation dataset and enforce `60%` positive recall:
+
+```powershell
+python -m blackbox_finetune.evaluate `
+  --base-model Qwen/Qwen2.5-0.5B-Instruct `
+  --adapter-dir blackbox_finetune/runs/qwen2.5-0.5b-blackbox-lora/adapter `
+  --data-dir blackbox_finetune/data_validation `
+  --threshold 0.50 `
+  --min-positive-recall 0.60
+```
+
+Predict all stocks for one trading day:
+
+```powershell
+python -m blackbox_finetune.predict_day `
+  --date 20260514 `
+  --adapter-dir blackbox_finetune/runs/qwen2.5-0.5b-blackbox-lora/adapter `
+  --threshold 0.50 `
+  --limit 20 `
+  --output data\blackbox_predictions_20260514.csv
+```
+
+Run automated tests:
+
+```powershell
+python -m unittest tests.test_blackbox_finetune -v
+```
+
 ## Goal Pattern Search
 
 Use `klinestatistics` samples from `20200101` to `20251231`, split them into 80% training and 20% internal evaluation, then validate the retained pattern on `20260101` to `20260430`. The script writes retained patterns to `surgepatterns`.

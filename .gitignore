@@ -3,11 +3,14 @@
 .venv-fingpt/
 .venv-fingpt-linux/
 .venv-qwen-finetune/
+.venv-blackbox-finetune/
 __pycache__/
 *.pyc
 data/
 llm_finetune/data*/
 llm_finetune/runs/
+blackbox_finetune/data*/
+blackbox_finetune/runs/
 fingpt_forecaster_qlora/data/
 fingpt_forecaster_qlora/runs/
 fingpt_forecaster_qlora/config.env
