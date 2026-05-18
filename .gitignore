@@ -4,7 +4,7 @@
 .venv-fingpt-linux/
 .venv-qwen-finetune/
 .venv-blackbox-finetune/
-.venv-blackbox-finetune-recall30/
+.venv-blackbox-finetune-recall*/
 __pycache__/
 *.pyc
 data/
@@ -12,8 +12,8 @@ llm_finetune/data*/
 llm_finetune/runs/
 blackbox_finetune/data*/
 blackbox_finetune/runs/
-blackbox_finetune_recall30/data*/
-blackbox_finetune_recall30/runs/
+blackbox_finetune_recall*/data*/
+blackbox_finetune_recall*/runs/
 fingpt_forecaster_qlora/data/
 fingpt_forecaster_qlora/runs/
 fingpt_forecaster_qlora/config.env

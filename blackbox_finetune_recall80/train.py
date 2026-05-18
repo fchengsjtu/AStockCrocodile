@@ -1,0 +1,198 @@
+from __future__ import annotations
+
+import argparse
+import math
+import random
+import sys
+import time
+from pathlib import Path
+from typing import Iterable
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from blackbox_finetune_recall80.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_OUTPUT_DIR
+from blackbox_finetune_recall80.gpu import prepare_rtx3060
+from llm_finetune.common import read_jsonl
+
+
+def _missing_dataset_error(data_dir: Path) -> FileNotFoundError:
+    return FileNotFoundError(f"missing dataset files under {data_dir}; run blackbox_finetune_recall80.build_dataset first")
+
+
+def _tokenize_row(tokenizer, row: dict, max_seq_length: int) -> dict:
+    prompt = tokenizer.apply_chat_template(row["messages"][:-1], tokenize=False, add_generation_prompt=True)
+    answer = row["messages"][-1]["content"] + tokenizer.eos_token
+    prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    answer_ids = tokenizer(answer, add_special_tokens=False)["input_ids"]
+    if len(answer_ids) >= max_seq_length:
+        answer_ids = answer_ids[: max_seq_length - 1] + [tokenizer.eos_token_id]
+    prompt_budget = max(1, max_seq_length - len(answer_ids))
+    if len(prompt_ids) > prompt_budget:
+        prompt_ids = prompt_ids[-prompt_budget:]
+    input_ids = (prompt_ids + answer_ids)[:max_seq_length]
+    labels = ([-100] * len(prompt_ids) + answer_ids)[:max_seq_length]
+    attention_mask = [1] * len(input_ids)
+    return {"input_ids": input_ids, "labels": labels, "attention_mask": attention_mask}
+
+
+def _collate(tokenizer, batch: list[dict], device: str) -> dict:
+    import torch
+
+    max_len = max(len(item["input_ids"]) for item in batch)
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+    input_ids = []
+    attention_mask = []
+    labels = []
+    for item in batch:
+        pad_len = max_len - len(item["input_ids"])
+        input_ids.append(item["input_ids"] + [pad_id] * pad_len)
+        attention_mask.append(item["attention_mask"] + [0] * pad_len)
+        labels.append(item["labels"] + [-100] * pad_len)
+    return {
+        "input_ids": torch.tensor(input_ids, dtype=torch.long, device=device),
+        "attention_mask": torch.tensor(attention_mask, dtype=torch.long, device=device),
+        "labels": torch.tensor(labels, dtype=torch.long, device=device),
+    }
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def train_recall80_lora(
+    base_model: str,
+    data_dir: Path,
+    output_dir: Path,
+    max_seq_length: int,
+    epochs: float,
+    batch_size: int,
+    gradient_accumulation_steps: int,
+    learning_rate: float,
+) -> None:
+    train_path = data_dir / "train.jsonl"
+    test_path = data_dir / "test.jsonl"
+    if not train_path.exists() or not test_path.exists():
+        raise _missing_dataset_error(data_dir)
+    try:
+        import torch
+        from peft import LoraConfig, get_peft_model
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+    except Exception as exc:
+        raise RuntimeError("missing training dependencies; run one_click_deploy.ps1 first") from exc
+
+    rows = read_jsonl(train_path)
+    valid_rows = read_jsonl(test_path)
+    if not rows or not valid_rows:
+        raise RuntimeError(f"dataset is empty or incomplete: train={len(rows)} test={len(valid_rows)}")
+
+    device = "cuda"
+    tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True, use_fast=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model,
+        trust_remote_code=True,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+    )
+    model.config.use_cache = False
+    if hasattr(model, "gradient_checkpointing_enable"):
+        model.gradient_checkpointing_enable()
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    )
+    model = get_peft_model(model, lora_config)
+    model.to(device)
+    model.train()
+
+    tokenized = [_tokenize_row(tokenizer, row, max_seq_length) for row in rows]
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
+    total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
+    rng = random.Random(20260518)
+    print(
+        f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
+        f"updates={total_updates} batch_size={batch_size} grad_accum={gradient_accumulation_steps}",
+        flush=True,
+    )
+    optimizer.zero_grad(set_to_none=True)
+    start_time = time.monotonic()
+    for micro_step in range(total_micro_steps):
+        batch = [tokenized[(micro_step * batch_size + offset) % len(tokenized)] for offset in range(batch_size)]
+        if micro_step % len(tokenized) == 0:
+            rng.shuffle(tokenized)
+        tensors = _collate(tokenizer, batch, device)
+        output = model(**tensors)
+        loss = output.loss / max(1, gradient_accumulation_steps)
+        loss.backward()
+        if (micro_step + 1) % max(1, gradient_accumulation_steps) == 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            update = (micro_step + 1) // max(1, gradient_accumulation_steps)
+            elapsed = time.monotonic() - start_time
+            progress = update / total_updates
+            remaining = elapsed * (1.0 - progress) / progress if progress > 0 else 0.0
+            eta_epoch = time.localtime(time.time() + remaining)
+            print(
+                f"train update {update}/{total_updates} "
+                f"({progress * 100:.2f}%) "
+                f"loss={float(loss.detach().cpu()) * max(1, gradient_accumulation_steps):.4f} "
+                f"elapsed={_format_duration(elapsed)} "
+                f"remaining={_format_duration(remaining)} "
+                f"eta={time.strftime('%Y-%m-%d %H:%M:%S', eta_epoch)}",
+                flush=True,
+            )
+
+    adapter_dir = output_dir / "adapter"
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(adapter_dir)
+    tokenizer.save_pretrained(adapter_dir)
+    print(f"adapter saved: {adapter_dir}", flush=True)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Fine-tune Qwen2.5 for recall80 black-box stock classification")
+    parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--max-seq-length", type=int, default=2048)
+    parser.add_argument("--epochs", type=float, default=1.0)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
+    parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--no-4bit", action="store_true", help="Accepted for script compatibility; recall80 Windows training uses fp16 LoRA on RTX3060.")
+    parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
+    parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
+    return parser
+
+
+def main(argv: Iterable[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    prepare_rtx3060(args.cuda_device, require_device=not args.allow_non_rtx3060)
+    train_recall80_lora(
+        base_model=args.base_model,
+        data_dir=args.data_dir,
+        output_dir=args.output_dir,
+        max_seq_length=args.max_seq_length,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        learning_rate=args.learning_rate,
+    )
+
+
+if __name__ == "__main__":
+    main()
