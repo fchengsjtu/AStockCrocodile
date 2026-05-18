@@ -38,6 +38,11 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         self.assertEqual(args.cuda_device, "0")
         self.assertFalse(args.allow_non_rtx3060)
 
+    def test_train_no_4bit_kept_for_script_compatibility(self):
+        args = train.build_parser().parse_args(["--no-4bit"])
+
+        self.assertTrue(args.no_4bit)
+
 
 if __name__ == "__main__":
     unittest.main()

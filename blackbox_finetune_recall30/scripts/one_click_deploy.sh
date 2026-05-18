@@ -60,5 +60,5 @@ fi
 python -m blackbox_finetune_recall30.build_dataset "${BUILD_ARGS[@]}"
 python -m blackbox_finetune_recall30.build_validation_dataset "${VAL_ARGS[@]}"
 python -m blackbox_finetune_recall30.train --base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate 2e-4 --cuda-device "$CUDA_DEVICE"
-python -m blackbox_finetune_recall30.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --min-positive-recall "$MIN_POSITIVE_RECALL" --cuda-device "$CUDA_DEVICE"
+python -m blackbox_finetune_recall30.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --min-positive-recall "$MIN_POSITIVE_RECALL" --cuda-device "$CUDA_DEVICE" --max-seq-length "$MAX_SEQ_LENGTH"
 python -m unittest tests.test_blackbox_finetune_recall30 -v

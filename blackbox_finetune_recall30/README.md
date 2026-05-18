@@ -123,6 +123,7 @@ python -m blackbox_finetune_recall30.evaluate `
   --data-dir blackbox_finetune_recall30/data_validation `
   --threshold 0.50 `
   --min-positive-recall 0.30 `
+  --max-seq-length 512 `
   --cuda-device 0
 ```
 
@@ -133,6 +134,7 @@ python -m blackbox_finetune_recall30.predict_day `
   --date 20260514 `
   --adapter-dir blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora/adapter `
   --threshold 0.50 `
+  --max-seq-length 512 `
   --cuda-device 0 `
   --limit 20 `
   --output data\blackbox_recall30_predictions_20260514.csv

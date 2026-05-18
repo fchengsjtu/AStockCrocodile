@@ -88,5 +88,5 @@ if ($Mode -eq "smoke") { $ValArgs += @("--positive-limit", $PositiveLimit) }
 Invoke-Step @ValArgs
 
 Invoke-Step -m blackbox_finetune_recall30.train --base-model $BaseModel --data-dir $DataDir --output-dir $OutputDir --max-seq-length $MaxSeqLength --epochs $Epochs --batch-size 1 --gradient-accumulation-steps $GradSteps --learning-rate 2e-4 --cuda-device $CudaDevice --no-4bit
-Invoke-Step -m blackbox_finetune_recall30.evaluate --base-model $BaseModel --adapter-dir "$OutputDir/adapter" --data-dir $ValidationDir --threshold 0.50 --min-positive-recall $MinRecall --cuda-device $CudaDevice
+Invoke-Step -m blackbox_finetune_recall30.evaluate --base-model $BaseModel --adapter-dir "$OutputDir/adapter" --data-dir $ValidationDir --threshold 0.50 --min-positive-recall $MinRecall --cuda-device $CudaDevice --max-seq-length $MaxSeqLength
 Invoke-Step -m unittest tests.test_blackbox_finetune_recall30 -v
