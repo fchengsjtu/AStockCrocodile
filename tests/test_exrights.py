@@ -358,6 +358,18 @@ class ExRightsTests(unittest.TestCase):
 
         self.assertTrue(result.empty)
 
+    def test_find_latest_available_tencent_daily_date_uses_recent_available_date(self):
+        with patch.object(crawler, "tencent_has_daily_data_for_date", side_effect=lambda probe, *_args: probe == "20260515"):
+            result = crawler.find_latest_available_tencent_daily_date("20260518", "qfq", 1, "D", lookback_days=7)
+
+        self.assertEqual(result, "20260515")
+
+    def test_find_latest_available_tencent_daily_date_returns_none_when_unavailable(self):
+        with patch.object(crawler, "tencent_has_daily_data_for_date", return_value=False):
+            result = crawler.find_latest_available_tencent_daily_date("20260518", "qfq", 1, "D", lookback_days=2)
+
+        self.assertIsNone(result)
+
     def test_fetch_daily_from_tencent_uses_configured_kline_limit(self):
         captured = {}
 

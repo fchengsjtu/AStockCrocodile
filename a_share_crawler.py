@@ -39,6 +39,7 @@ DEFAULT_FULL_KLINE_LIMIT = 640
 DEFAULT_INCREMENTAL_KLINE_LIMIT = 50
 ENSURED_KLINE_TABLE_KEYS: set[tuple[int, str]] = set()
 END_DATE_PROBE_SYMBOLS = ("000001", "600000", "000002")
+AVAILABLE_DATE_LOOKBACK_DAYS = 14
 PROJECT_ROOT = Path(__file__).resolve().parent
 LOG_DIR = PROJECT_ROOT / "logs"
 ENV_FILE = PROJECT_ROOT / "env.txt"
@@ -437,6 +438,23 @@ def tencent_has_daily_data_for_date(end_date: str, adjust: str, retries: int, kt
         if not df.empty:
             return True
     return False
+
+
+def find_latest_available_tencent_daily_date(end_date: str, adjust: str, retries: int, ktype: str, lookback_days: int = AVAILABLE_DATE_LOOKBACK_DAYS) -> str | None:
+    end_day = datetime.strptime(clean_yyyymmdd(end_date), "%Y%m%d").date()
+    for offset in range(max(0, lookback_days) + 1):
+        probe_day = end_day - timedelta(days=offset)
+        probe = probe_day.strftime("%Y%m%d")
+        if tencent_has_daily_data_for_date(probe, adjust, retries, ktype):
+            return probe
+    return None
+
+
+def load_local_latest_kline_time(conn: pymysql.connections.Connection, ktype: str) -> datetime | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT MAX(KTime) FROM dkandles WHERE KType = %s", (ktype,))
+        row = cur.fetchone()
+    return row[0] if row and row[0] is not None else None
 
 
 def filter_tasks_when_end_date_unavailable(
@@ -1125,6 +1143,17 @@ def crawl_daily_to_mysql(
     stocks = get_stock_list()
     logging.info("Start %s daily import into MySQL; stocks=%s end=%s", mode, len(stocks), end_date)
 
+    source_latest_date: str | None = None
+    if mode == "incremental":
+        source_latest_date = find_latest_available_tencent_daily_date(end_date, adjust, retries, ktype)
+        if source_latest_date is None:
+            logging.warning("Tencent daily data is unavailable between %s and the previous %s calendar days; incremental import will not fetch K-lines", end_date, AVAILABLE_DATE_LOOKBACK_DAYS)
+        elif source_latest_date < end_date:
+            logging.warning("Tencent daily data for requested end date %s is not available yet; using latest available source date %s", end_date, source_latest_date)
+            end_date = source_latest_date
+        else:
+            logging.info("Tencent daily data is available for requested end date %s", end_date)
+
     success_count = 0
     skip_count = 0
     fail_count = 0
@@ -1133,6 +1162,11 @@ def crawl_daily_to_mysql(
         upsert_stock_info(conn, stocks)
         sync_stock_latest_from_dkandles(conn, ktype)
         latest_map = load_latest_update_map(conn, ktype)
+        local_latest_before = load_local_latest_kline_time(conn, ktype)
+
+        if mode == "incremental" and source_latest_date is None:
+            logging.warning("Skipped incremental K-line fetch because Tencent has no available source date; local latest dkandles=%s", local_latest_before)
+            return
 
         fetch_tasks = []
         for row in stocks.itertuples(index=False):
@@ -1236,6 +1270,18 @@ def crawl_daily_to_mysql(
                         fail_count,
                         total_rows,
                     )
+
+        local_latest_after = load_local_latest_kline_time(conn, ktype)
+        if total_rows == 0:
+            source_note = source_latest_date or end_date
+            logging.info(
+                "No new daily rows inserted. local_latest_before=%s local_latest_after=%s tencent_latest_available=%s. If local_latest_after date equals tencent_latest_available, dkandles is already up to date.",
+                local_latest_before,
+                local_latest_after,
+                source_note,
+            )
+        else:
+            logging.info("Inserted/updated %s daily rows. local_latest_before=%s local_latest_after=%s", total_rows, local_latest_before, local_latest_after)
 
     logging.info(
         "Finished %s MySQL import: success=%s skipped=%s failed=%s rows=%s",
