@@ -4,6 +4,8 @@ This directory contains an independent black-box fine-tuning task for A-share su
 
 The model is `Qwen/Qwen2.5-0.5B-Instruct`. It is trained by LoRA/QLoRA parameter fine-tuning. It is not used as a rule miner and does not search explicit K-line features.
 
+This target writes to its own output directory and uses its own training seed, so it produces independent adapter parameters from the other recall target directories.
+
 - Positive samples come from `klinestatistics`.
 - Positive anchor date is `PrevTradeDate`.
 - Negative samples are trading days outside each positive sample's `PrevTradeDate +/- 3` trading-day window.

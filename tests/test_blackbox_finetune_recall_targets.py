@@ -2,11 +2,13 @@ import importlib
 import unittest
 
 
-TARGETS = [35, 40, 45, 50, 55, 60, 65, 70, 75, 80]
+TARGETS = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80]
 
 
 class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
     def test_target_packages_have_expected_defaults(self):
+        output_dirs = set()
+        train_seeds = set()
         for target in TARGETS:
             with self.subTest(target=target):
                 package = f"blackbox_finetune_recall{target}"
@@ -18,6 +20,7 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 predict_day = importlib.import_module(f"{package}.predict_day")
 
                 self.assertEqual(common.DEFAULT_MIN_POSITIVE_RECALL, target / 100)
+                self.assertEqual(common.DEFAULT_TRAIN_SEED, 20260500 + target)
                 self.assertEqual(common.DEFAULT_TRAIN_START_DATE, "20110101")
                 self.assertEqual(common.DEFAULT_TRAIN_END_DATE, "20251231")
                 self.assertEqual(common.DEFAULT_VALIDATION_START_DATE, "20260101")
@@ -25,6 +28,8 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertIn(package, str(common.DEFAULT_DATA_DIR))
                 self.assertIn(package, str(common.DEFAULT_VALIDATION_DIR))
                 self.assertIn(package, str(common.DEFAULT_OUTPUT_DIR))
+                output_dirs.add(str(common.DEFAULT_OUTPUT_DIR))
+                train_seeds.add(common.DEFAULT_TRAIN_SEED)
 
                 build_args = build_dataset.build_parser().parse_args([])
                 validation_args = build_validation.build_parser().parse_args([])
@@ -37,8 +42,12 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertEqual(validation_args.start_date, "20260101")
                 self.assertEqual(validation_args.end_date, "20260430")
                 self.assertEqual(evaluate_args.min_positive_recall, target / 100)
+                self.assertEqual(train_args.train_seed, 20260500 + target)
                 self.assertEqual(train_args.cuda_device, "0")
                 self.assertEqual(predict_args.cuda_device, "0")
+
+        self.assertEqual(len(output_dirs), len(TARGETS))
+        self.assertEqual(len(train_seeds), len(TARGETS))
 
 
 if __name__ == "__main__":

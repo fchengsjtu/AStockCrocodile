@@ -58,6 +58,7 @@ $DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall
 $ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall55/data_validation" }
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { "blackbox_finetune_recall55/runs/qwen2.5-0.5b-blackbox-recall55-lora" }
 $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.55" }
+$TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260555" }
 
 if ($Mode -eq "smoke") {
   $TrainStart = "20110101"
@@ -87,6 +88,6 @@ $ValArgs = @("-m", "blackbox_finetune_recall55.build_validation_dataset", "--out
 if ($Mode -eq "smoke") { $ValArgs += @("--positive-limit", $PositiveLimit) }
 Invoke-Step @ValArgs
 
-Invoke-Step -m blackbox_finetune_recall55.train --base-model $BaseModel --data-dir $DataDir --output-dir $OutputDir --max-seq-length $MaxSeqLength --epochs $Epochs --batch-size 1 --gradient-accumulation-steps $GradSteps --learning-rate 2e-4 --cuda-device $CudaDevice --no-4bit
+Invoke-Step -m blackbox_finetune_recall55.train --base-model $BaseModel --data-dir $DataDir --output-dir $OutputDir --max-seq-length $MaxSeqLength --epochs $Epochs --batch-size 1 --gradient-accumulation-steps $GradSteps --learning-rate 2e-4 --train-seed $TrainSeed --cuda-device $CudaDevice --no-4bit
 Invoke-Step -m blackbox_finetune_recall55.evaluate --base-model $BaseModel --adapter-dir "$OutputDir/adapter" --data-dir $ValidationDir --threshold 0.50 --min-positive-recall $MinRecall --cuda-device $CudaDevice --max-seq-length $MaxSeqLength
 Invoke-Step -m unittest tests.test_blackbox_finetune_recall55 -v

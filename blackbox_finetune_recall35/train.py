@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from blackbox_finetune_recall35.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_OUTPUT_DIR
+from blackbox_finetune_recall35.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_OUTPUT_DIR, DEFAULT_TRAIN_SEED
 from blackbox_finetune_recall35.gpu import prepare_rtx3060
 from llm_finetune.common import read_jsonl
 
@@ -75,6 +75,7 @@ def train_recall35_lora(
     batch_size: int,
     gradient_accumulation_steps: int,
     learning_rate: float,
+    train_seed: int,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -121,10 +122,13 @@ def train_recall35_lora(
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
-    rng = random.Random(20260518)
+    random.seed(train_seed)
+    torch.manual_seed(train_seed)
+    torch.cuda.manual_seed_all(train_seed)
+    rng = random.Random(train_seed)
     print(
         f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
-        f"updates={total_updates} batch_size={batch_size} grad_accum={gradient_accumulation_steps}",
+        f"updates={total_updates} batch_size={batch_size} grad_accum={gradient_accumulation_steps} train_seed={train_seed}",
         flush=True,
     )
     optimizer.zero_grad(set_to_none=True)
@@ -173,6 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--train-seed", type=int, default=DEFAULT_TRAIN_SEED, help="Target-specific seed for independent LoRA parameters.")
     parser.add_argument("--no-4bit", action="store_true", help="Accepted for script compatibility; recall35 Windows training uses fp16 LoRA on RTX3060.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
     parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
@@ -191,6 +196,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
+        train_seed=args.train_seed,
     )
 
 
