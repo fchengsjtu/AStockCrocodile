@@ -1,0 +1,126 @@
+# Black-Box Qwen Fine-Tuning, Recall 30
+
+This directory contains an independent black-box fine-tuning task for A-share surge selection.
+
+The model is `Qwen/Qwen2.5-0.5B-Instruct`. It is trained by LoRA/QLoRA parameter fine-tuning. It is not used as a rule miner and does not search explicit K-line features.
+
+- Positive samples come from `klinestatistics`.
+- Positive anchor date is `PrevTradeDate`.
+- Negative samples are trading days outside each positive sample's `PrevTradeDate +/- 3` trading-day window.
+- Each positive sample input contains the anchor date plus the previous 55 daily K-lines and previous 55 weekly K-lines.
+- Each negative sample input contains the negative trading day plus the previous 55 daily K-lines and previous 55 weekly K-lines.
+- Training period: `20110101-20251231`.
+- Validation period: `20260101-20260430`.
+- Target metric: positive recall, meaning the correctness rate when the sample is actually positive.
+- Required target: `positive_recall >= 30%`.
+
+## One-Click Run
+
+Windows smoke run:
+
+```powershell
+cd D:\Documents\StockInfoCrawler
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall30\scripts\one_click_deploy.ps1 smoke
+```
+
+Windows full run:
+
+```powershell
+cd D:\Documents\StockInfoCrawler
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall30\scripts\one_click_deploy.ps1 full
+```
+
+WSL2/Linux full run:
+
+```bash
+cd /mnt/d/Documents/StockInfoCrawler
+bash blackbox_finetune_recall30/scripts/one_click_deploy.sh full
+```
+
+## Manual Commands
+
+Build the training dataset:
+
+```powershell
+python -m blackbox_finetune_recall30.build_dataset `
+  --start-date 20110101 `
+  --end-date 20251231 `
+  --negative-ratio 1.0 `
+  --output-dir blackbox_finetune_recall30/data `
+  --daily-window 55 `
+  --weekly-window 55 `
+  --batch-size 80
+```
+
+Build the validation dataset:
+
+```powershell
+python -m blackbox_finetune_recall30.build_validation_dataset `
+  --start-date 20260101 `
+  --end-date 20260430 `
+  --negative-ratio 1.0 `
+  --output-dir blackbox_finetune_recall30/data_validation `
+  --daily-window 55 `
+  --weekly-window 55 `
+  --batch-size 80
+```
+
+Train on WSL2/Linux with QLoRA:
+
+```bash
+python -m blackbox_finetune_recall30.train \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
+  --data-dir blackbox_finetune_recall30/data \
+  --output-dir blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora \
+  --max-seq-length 2048 \
+  --epochs 1 \
+  --batch-size 1 \
+  --gradient-accumulation-steps 8 \
+  --learning-rate 2e-4
+```
+
+Train on native Windows with 4-bit loading disabled:
+
+```powershell
+python -m blackbox_finetune_recall30.train `
+  --base-model Qwen/Qwen2.5-0.5B-Instruct `
+  --data-dir blackbox_finetune_recall30/data `
+  --output-dir blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora `
+  --max-seq-length 2048 `
+  --epochs 1 `
+  --batch-size 1 `
+  --gradient-accumulation-steps 8 `
+  --learning-rate 2e-4 `
+  --no-4bit
+```
+
+If native Windows reports `os error 1455` or `页面文件太小，无法完成操作` while loading Qwen, increase the Windows page file size or run the full training in WSL2/Linux. The dataset and validation builders are lightweight, but model loading can still require several GB of RAM plus page file space even for Qwen2.5-0.5B.
+
+Evaluate and enforce the `30%` positive-recall target:
+
+```powershell
+python -m blackbox_finetune_recall30.evaluate `
+  --base-model Qwen/Qwen2.5-0.5B-Instruct `
+  --adapter-dir blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora/adapter `
+  --data-dir blackbox_finetune_recall30/data_validation `
+  --threshold 0.50 `
+  --min-positive-recall 0.30
+```
+
+Predict all stocks for one trading day:
+
+```powershell
+python -m blackbox_finetune_recall30.predict_day `
+  --date 20260514 `
+  --adapter-dir blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora/adapter `
+  --threshold 0.50 `
+  --limit 20 `
+  --output data\blackbox_recall30_predictions_20260514.csv
+```
+
+## Tests
+
+```powershell
+python -m unittest tests.test_blackbox_finetune_recall30 -v
+python -m unittest discover -s tests -v
+```
