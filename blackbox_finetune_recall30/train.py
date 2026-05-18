@@ -4,6 +4,7 @@ import argparse
 import math
 import random
 import sys
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -54,6 +55,15 @@ def _collate(tokenizer, batch: list[dict], device: str) -> dict:
         "attention_mask": torch.tensor(attention_mask, dtype=torch.long, device=device),
         "labels": torch.tensor(labels, dtype=torch.long, device=device),
     }
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
 
 
 def train_recall30_lora(
@@ -118,6 +128,7 @@ def train_recall30_lora(
         flush=True,
     )
     optimizer.zero_grad(set_to_none=True)
+    start_time = time.monotonic()
     for micro_step in range(total_micro_steps):
         batch = [tokenized[(micro_step * batch_size + offset) % len(tokenized)] for offset in range(batch_size)]
         if micro_step % len(tokenized) == 0:
@@ -131,7 +142,19 @@ def train_recall30_lora(
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             update = (micro_step + 1) // max(1, gradient_accumulation_steps)
-            print(f"train update {update}/{total_updates} loss={float(loss.detach().cpu()) * max(1, gradient_accumulation_steps):.4f}", flush=True)
+            elapsed = time.monotonic() - start_time
+            progress = update / total_updates
+            remaining = elapsed * (1.0 - progress) / progress if progress > 0 else 0.0
+            eta_epoch = time.localtime(time.time() + remaining)
+            print(
+                f"train update {update}/{total_updates} "
+                f"({progress * 100:.2f}%) "
+                f"loss={float(loss.detach().cpu()) * max(1, gradient_accumulation_steps):.4f} "
+                f"elapsed={_format_duration(elapsed)} "
+                f"remaining={_format_duration(remaining)} "
+                f"eta={time.strftime('%Y-%m-%d %H:%M:%S', eta_epoch)}",
+                flush=True,
+            )
 
     adapter_dir = output_dir / "adapter"
     adapter_dir.mkdir(parents=True, exist_ok=True)

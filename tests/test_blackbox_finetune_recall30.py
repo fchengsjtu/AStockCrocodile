@@ -43,6 +43,10 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
 
         self.assertTrue(args.no_4bit)
 
+    def test_format_duration_for_progress_log(self):
+        self.assertEqual(train._format_duration(65), "01:05")
+        self.assertEqual(train._format_duration(3661), "01:01:01")
+
 
 if __name__ == "__main__":
     unittest.main()
