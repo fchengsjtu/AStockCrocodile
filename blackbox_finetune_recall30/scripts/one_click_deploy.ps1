@@ -10,6 +10,26 @@ function Invoke-Step {
   }
 }
 
+function Test-TorchCuda {
+  $Diag = & $VenvPython -c "import torch; print('torch=' + torch.__version__); print('torch_cuda=' + str(torch.version.cuda)); print('cuda_available=' + str(torch.cuda.is_available())); print('cuda_device_count=' + str(torch.cuda.device_count()))" 2>&1
+  $Diag | ForEach-Object { Write-Host $_ }
+  if ($LASTEXITCODE -ne 0) {
+    return $false
+  }
+  $null = & $VenvPython -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>&1
+  return ($LASTEXITCODE -eq 0)
+}
+
+function Install-CudaTorch {
+  $TorchCudaIndex = if ($env:TORCH_CUDA_INDEX) { $env:TORCH_CUDA_INDEX } else { "https://download.pytorch.org/whl/cu121" }
+  Write-Host "Installing CUDA-enabled PyTorch from $TorchCudaIndex"
+  & $VenvPython -m pip uninstall -y torch torchvision torchaudio
+  & $VenvPython -m pip install --index-url $TorchCudaIndex torch torchvision torchaudio
+  if ($LASTEXITCODE -ne 0) {
+    throw "CUDA PyTorch installation failed. Try setting TORCH_CUDA_INDEX, for example https://download.pytorch.org/whl/cu121 or https://download.pytorch.org/whl/cu124"
+  }
+}
+
 $Mode = if ($args.Count -gt 0) { $args[0] } else { "smoke" }
 $PythonBin = if ($env:PYTHON_BIN) { $env:PYTHON_BIN } elseif (Test-Path ".\.venv\Scripts\python.exe") { ".\.venv\Scripts\python.exe" } else { "python" }
 $VenvDir = if ($env:VENV_DIR) { $env:VENV_DIR } else { ".\.venv-blackbox-finetune-recall30" }
@@ -25,6 +45,15 @@ $BaseModel = if ($env:BASE_MODEL) { $env:BASE_MODEL } else { "Qwen/Qwen2.5-0.5B-
 $CudaDevice = if ($env:CUDA_DEVICE) { $env:CUDA_DEVICE } else { "0" }
 $env:CUDA_VISIBLE_DEVICES = $CudaDevice
 $env:PYTORCH_CUDA_ALLOC_CONF = if ($env:PYTORCH_CUDA_ALLOC_CONF) { $env:PYTORCH_CUDA_ALLOC_CONF } else { "expandable_segments:True" }
+
+if (!(Test-TorchCuda)) {
+  Install-CudaTorch
+}
+Invoke-Step -m blackbox_finetune_recall30.gpu --cuda-device $CudaDevice
+if ($Mode -eq "diagnose") {
+  exit 0
+}
+
 $DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall30/data" }
 $ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall30/data_validation" }
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { "blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora" }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import argparse
 
 
 def configure_cuda(cuda_device: str = "0") -> None:
@@ -43,3 +44,19 @@ def require_rtx3060(enabled: bool = True) -> dict:
 def prepare_rtx3060(cuda_device: str = "0", require_device: bool = True) -> dict:
     configure_cuda(cuda_device)
     return require_rtx3060(require_device)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Diagnose CUDA/RTX3060 availability for recall30 fine-tuning")
+    parser.add_argument("--cuda-device", default="0")
+    parser.add_argument("--allow-non-rtx3060", action="store_true")
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    prepare_rtx3060(args.cuda_device, require_device=not args.allow_non_rtx3060)
+
+
+if __name__ == "__main__":
+    main()

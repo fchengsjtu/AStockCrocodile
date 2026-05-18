@@ -19,6 +19,10 @@ BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
 CUDA_DEVICE="${CUDA_DEVICE:-0}"
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+python -m blackbox_finetune_recall30.gpu --cuda-device "$CUDA_DEVICE"
+if [[ "$MODE" == "diagnose" ]]; then
+  exit 0
+fi
 DATA_DIR="${DATA_DIR:-blackbox_finetune_recall30/data}"
 VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall30/data_validation}"
 OUTPUT_DIR="${OUTPUT_DIR:-blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora}"

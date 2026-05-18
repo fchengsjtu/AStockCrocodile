@@ -1,6 +1,6 @@
 import unittest
 
-from blackbox_finetune_recall30 import build_dataset, build_validation_dataset, common, evaluate, predict_day, train
+from blackbox_finetune_recall30 import build_dataset, build_validation_dataset, common, evaluate, gpu, predict_day, train
 
 
 class BlackboxFinetuneRecall30Tests(unittest.TestCase):
@@ -31,6 +31,12 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         self.assertEqual(train.build_parser().parse_args([]).cuda_device, "0")
         self.assertEqual(evaluate.build_parser().parse_args([]).cuda_device, "0")
         self.assertEqual(predict_day.build_parser().parse_args(["--date", "20260514"]).cuda_device, "0")
+
+    def test_gpu_diagnose_parser_defaults_to_cuda_zero(self):
+        args = gpu.build_parser().parse_args([])
+
+        self.assertEqual(args.cuda_device, "0")
+        self.assertFalse(args.allow_non_rtx3060)
 
 
 if __name__ == "__main__":

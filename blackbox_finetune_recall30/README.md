@@ -23,6 +23,20 @@ cd D:\Documents\StockInfoCrawler
 powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall30\scripts\one_click_deploy.ps1 smoke
 ```
 
+Diagnose RTX3060/PyTorch CUDA before training:
+
+```powershell
+cd D:\Documents\StockInfoCrawler
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall30\scripts\one_click_deploy.ps1 diagnose
+```
+
+On Windows the one-click script checks whether PyTorch can see CUDA. If the environment contains a CPU-only PyTorch build, it uninstalls it and installs CUDA-enabled PyTorch from `https://download.pytorch.org/whl/cu121` by default. To use another CUDA wheel index:
+
+```powershell
+$env:TORCH_CUDA_INDEX='https://download.pytorch.org/whl/cu124'
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall30\scripts\one_click_deploy.ps1 diagnose
+```
+
 Windows full run:
 
 ```powershell
