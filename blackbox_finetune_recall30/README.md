@@ -76,7 +76,8 @@ python -m blackbox_finetune_recall30.train \
   --epochs 1 \
   --batch-size 1 \
   --gradient-accumulation-steps 8 \
-  --learning-rate 2e-4
+  --learning-rate 2e-4 \
+  --cuda-device 0
 ```
 
 Train on native Windows with 4-bit loading disabled:
@@ -91,8 +92,11 @@ python -m blackbox_finetune_recall30.train `
   --batch-size 1 `
   --gradient-accumulation-steps 8 `
   --learning-rate 2e-4 `
+  --cuda-device 0 `
   --no-4bit
 ```
+
+Training, evaluation, and prediction now bind CUDA device `0` by default and verify that the visible CUDA device name contains `RTX3060` or `RTX 3060`. Set `CUDA_DEVICE=0` before the one-click scripts if the RTX3060 is not the first GPU. For non-RTX3060 development machines, add `--allow-non-rtx3060` to the manual Python commands.
 
 If native Windows reports `os error 1455` or `页面文件太小，无法完成操作` while loading Qwen, increase the Windows page file size or run the full training in WSL2/Linux. The dataset and validation builders are lightweight, but model loading can still require several GB of RAM plus page file space even for Qwen2.5-0.5B.
 
@@ -104,7 +108,8 @@ python -m blackbox_finetune_recall30.evaluate `
   --adapter-dir blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora/adapter `
   --data-dir blackbox_finetune_recall30/data_validation `
   --threshold 0.50 `
-  --min-positive-recall 0.30
+  --min-positive-recall 0.30 `
+  --cuda-device 0
 ```
 
 Predict all stocks for one trading day:
@@ -114,6 +119,7 @@ python -m blackbox_finetune_recall30.predict_day `
   --date 20260514 `
   --adapter-dir blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora/adapter `
   --threshold 0.50 `
+  --cuda-device 0 `
   --limit 20 `
   --output data\blackbox_recall30_predictions_20260514.csv
 ```

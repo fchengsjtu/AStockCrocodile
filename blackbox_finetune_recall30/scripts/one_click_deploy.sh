@@ -16,6 +16,9 @@ python -m pip install --upgrade pip wheel "setuptools<82"
 python -m pip install -r blackbox_finetune_recall30/requirements.txt
 
 BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
+CUDA_DEVICE="${CUDA_DEVICE:-0}"
+export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 DATA_DIR="${DATA_DIR:-blackbox_finetune_recall30/data}"
 VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall30/data_validation}"
 OUTPUT_DIR="${OUTPUT_DIR:-blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora}"
@@ -52,6 +55,6 @@ fi
 
 python -m blackbox_finetune_recall30.build_dataset "${BUILD_ARGS[@]}"
 python -m blackbox_finetune_recall30.build_validation_dataset "${VAL_ARGS[@]}"
-python -m blackbox_finetune_recall30.train --base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate 2e-4
-python -m blackbox_finetune_recall30.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --min-positive-recall "$MIN_POSITIVE_RECALL"
+python -m blackbox_finetune_recall30.train --base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate 2e-4 --cuda-device "$CUDA_DEVICE"
+python -m blackbox_finetune_recall30.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --min-positive-recall "$MIN_POSITIVE_RECALL" --cuda-device "$CUDA_DEVICE"
 python -m unittest tests.test_blackbox_finetune_recall30 -v

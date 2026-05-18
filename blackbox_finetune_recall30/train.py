@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from blackbox_finetune_recall30.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_OUTPUT_DIR
+from blackbox_finetune_recall30.gpu import prepare_rtx3060
 from llm_finetune.train import train as train_lora
 
 
@@ -24,11 +25,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=2e-4)
     parser.add_argument("--no-4bit", action="store_true")
+    parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
+    parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
     return parser
 
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    prepare_rtx3060(args.cuda_device, require_device=not args.allow_non_rtx3060)
     train_lora(
         base_model=args.base_model,
         data_dir=args.data_dir,

@@ -16,6 +16,7 @@ from blackbox_finetune_recall30.common import (
     DEFAULT_OUTPUT_DIR,
     DEFAULT_VALIDATION_DIR,
 )
+from blackbox_finetune_recall30.gpu import prepare_rtx3060
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,11 +27,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=0.50)
     parser.add_argument("--min-positive-recall", type=float, default=DEFAULT_MIN_POSITIVE_RECALL)
     parser.add_argument("--max-samples", type=int)
+    parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
+    parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
     return parser
 
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    prepare_rtx3060(args.cuda_device, require_device=not args.allow_non_rtx3060)
     evaluate_dataset(
         args.base_model,
         args.adapter_dir,
