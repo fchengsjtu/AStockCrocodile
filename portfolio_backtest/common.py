@@ -14,6 +14,8 @@ DEFAULT_FEE_RATE = 0.0005
 DEFAULT_RANDOM_SEED = 20260519
 DEFAULT_SELECTION_RULE = "Use strategy signals on selection date; buy selected stocks on next trading day at same-day weighted average price."
 DEFAULT_EXIT_RULE = "T+1 sell rule; within 3 tradable days after buy, stop loss at -3%, take profit half at +10%, take profit remaining half at +20%, otherwise sell remaining shares at day-3 close."
+BLACKBOX_RECALL_TARGETS = (30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80)
+BLACKBOX_STRATEGIES = tuple(f"blackbox_finetune_recall{target}" for target in BLACKBOX_RECALL_TARGETS)
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,16 @@ class PortfolioBacktestConfig:
     batch_size: int = 80
     min_recommendations: int = 3
     max_recommendations: int = 5
+    blackbox_threshold: float = 0.50
+    blackbox_max_seq_length: int = 512
+    blackbox_daily_window: int = 55
+    blackbox_weekly_window: int = 55
+    blackbox_cuda_device: str = "0"
+    blackbox_allow_non_rtx3060: bool = False
+
+
+def is_blackbox_strategy(strategy_name: str) -> bool:
+    return strategy_name in BLACKBOX_STRATEGIES
 
 
 def round_cent(value: float) -> float:

@@ -20,6 +20,7 @@ from .common import (
     DEFAULT_INITIAL_CASH,
     DEFAULT_RANDOM_SEED,
     DEFAULT_START_DATE,
+    BLACKBOX_STRATEGIES,
     PortfolioBacktestConfig,
 )
 from .db import clear_backtest_rows, connect, ensure_portfolio_tables, load_daily_for_simulation, load_strategy_signals, save_results
@@ -35,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run portfolio-level T+1 backtest and save daily holdings into MySQL")
     parser.add_argument("--start-date", default=DEFAULT_START_DATE)
     parser.add_argument("--end-date", default=DEFAULT_END_DATE)
-    parser.add_argument("--strategy-name", default=STRATEGY_MA_BULLISH, choices=STRATEGIES)
+    parser.add_argument("--strategy-name", default=STRATEGY_MA_BULLISH, choices=(*STRATEGIES, *BLACKBOX_STRATEGIES))
     parser.add_argument("--initial-cash", type=float, default=DEFAULT_INITIAL_CASH)
     parser.add_argument("--buy-budget", type=float, default=DEFAULT_BUY_BUDGET)
     parser.add_argument("--fee-rate", type=float, default=DEFAULT_FEE_RATE)
@@ -46,6 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=80)
     parser.add_argument("--min-recommendations", type=int, default=3)
     parser.add_argument("--max-recommendations", type=int, default=5)
+    parser.add_argument("--blackbox-threshold", type=float, default=0.50)
+    parser.add_argument("--blackbox-max-seq-length", type=int, default=512)
+    parser.add_argument("--blackbox-daily-window", type=int, default=55)
+    parser.add_argument("--blackbox-weekly-window", type=int, default=55)
+    parser.add_argument("--blackbox-cuda-device", default="0")
+    parser.add_argument("--blackbox-allow-non-rtx3060", action="store_true")
     parser.add_argument("--no-save-db", action="store_true")
     parser.add_argument("--keep-existing", action="store_true", help="Do not delete existing rows for this backtest name and strategy before saving.")
     parser.add_argument("--quiet", action="store_true")
@@ -67,6 +74,12 @@ def config_from_args(args) -> PortfolioBacktestConfig:
         batch_size=args.batch_size,
         min_recommendations=args.min_recommendations,
         max_recommendations=args.max_recommendations,
+        blackbox_threshold=args.blackbox_threshold,
+        blackbox_max_seq_length=max(64, args.blackbox_max_seq_length),
+        blackbox_daily_window=max(2, args.blackbox_daily_window),
+        blackbox_weekly_window=max(2, args.blackbox_weekly_window),
+        blackbox_cuda_device=args.blackbox_cuda_device,
+        blackbox_allow_non_rtx3060=args.blackbox_allow_non_rtx3060,
     )
 
 
@@ -95,4 +108,3 @@ def main(argv: Iterable[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

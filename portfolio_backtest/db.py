@@ -9,7 +9,8 @@ from a_share_crawler import mysql_connect, none_if_nan
 from backtest_strategy import BacktestConfig, build_signals_stream, load_backtest_daily_for_symbols, load_symbols
 from stock_selector import STRATEGY_NEWS_HOT, STRATEGY_WEEKLY_VOLUME_DROP
 
-from .common import PortfolioBacktestConfig
+from .blackbox import build_blackbox_signals
+from .common import PortfolioBacktestConfig, is_blackbox_strategy
 
 
 DAILY_TABLE = "portfolio_backtest_daily"
@@ -186,6 +187,8 @@ def save_results(conn: pymysql.connections.Connection, daily: pd.DataFrame, hold
 
 
 def load_strategy_signals(conn: pymysql.connections.Connection, config: PortfolioBacktestConfig) -> pd.DataFrame:
+    if is_blackbox_strategy(config.strategy_name):
+        return build_blackbox_signals(conn, config)
     backtest_config = BacktestConfig(
         start_date=config.start_date.strftime("%Y%m%d"),
         end_date=config.end_date.strftime("%Y%m%d"),
@@ -218,4 +221,3 @@ def available_symbols(conn: pymysql.connections.Connection, config: PortfolioBac
 
 def connect():
     return mysql_connect()
-

@@ -1,13 +1,34 @@
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 import pandas as pd
 
-from portfolio_backtest.common import PortfolioBacktestConfig, buy_shares_for_budget, round_cent, weighted_average_price
+from portfolio_backtest.common import BLACKBOX_STRATEGIES, PortfolioBacktestConfig, buy_shares_for_budget, round_cent, weighted_average_price
+from portfolio_backtest import db as portfolio_db
+from portfolio_backtest import run as portfolio_run
 from portfolio_backtest.simulator import simulate_portfolio
 
 
 class PortfolioBacktestTests(unittest.TestCase):
+    def test_run_parser_accepts_blackbox_recall_strategies(self):
+        for strategy in BLACKBOX_STRATEGIES:
+            with self.subTest(strategy=strategy):
+                args = portfolio_run.build_parser().parse_args(["--strategy-name", strategy])
+                self.assertEqual(args.strategy_name, strategy)
+
+    def test_load_strategy_signals_routes_blackbox_strategy(self):
+        expected = pd.DataFrame(
+            [{"TradeDate": date(2026, 1, 5), "SCode": "000001", "SName": "A", "Close": 10.0, "Score": 0.9, "Reason": "x", "StrategyName": "blackbox_finetune_recall30"}]
+        )
+        config = PortfolioBacktestConfig(start_date=date(2026, 1, 1), end_date=date(2026, 1, 31), strategy_name="blackbox_finetune_recall30")
+
+        with patch.object(portfolio_db, "build_blackbox_signals", return_value=expected) as mocked:
+            result = portfolio_db.load_strategy_signals(object(), config)
+
+        mocked.assert_called_once()
+        self.assertEqual(result.iloc[0]["SCode"], "000001")
+
     def test_rounds_buy_shares_to_hundred_lot(self):
         self.assertEqual(buy_shares_for_budget(10.03, 100000), 10000)
         self.assertEqual(buy_shares_for_budget(10.08, 100000), 9900)

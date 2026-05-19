@@ -28,6 +28,39 @@ Weekly volume-drop strategy:
 python -m portfolio_backtest.run --strategy-name weekly_volume_drop_v1
 ```
 
+Black-box recall strategy:
+
+```powershell
+python -m portfolio_backtest.run --strategy-name blackbox_finetune_recall30 --limit-per-day 5
+```
+
+Supported black-box strategy names:
+
+- `blackbox_finetune_recall30`
+- `blackbox_finetune_recall35`
+- `blackbox_finetune_recall40`
+- `blackbox_finetune_recall45`
+- `blackbox_finetune_recall50`
+- `blackbox_finetune_recall55`
+- `blackbox_finetune_recall60`
+- `blackbox_finetune_recall65`
+- `blackbox_finetune_recall70`
+- `blackbox_finetune_recall75`
+- `blackbox_finetune_recall80`
+
+Black-box options:
+
+```powershell
+python -m portfolio_backtest.run `
+  --strategy-name blackbox_finetune_recall30 `
+  --blackbox-threshold 0.50 `
+  --blackbox-max-seq-length 512 `
+  --blackbox-cuda-device 0 `
+  --limit-per-day 5
+```
+
+The black-box portfolio backtest loads the corresponding LoRA adapter from that recall directory, scores each trading day in the backtest period, and uses positive predictions as same-day selection signals. It can be slow because every stock/date requires model scoring.
+
 Useful options:
 
 ```powershell
@@ -48,4 +81,3 @@ Tables:
 - `portfolio_backtest_trades`: buy and sell records.
 
 The daily and holding rows store both `SelectionRule` and `ExitRule`.
-
