@@ -43,6 +43,13 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
 
         self.assertTrue(args.no_4bit)
 
+    def test_train_stability_defaults(self):
+        args = train.build_parser().parse_args([])
+
+        self.assertEqual(args.learning_rate, 5e-5)
+        self.assertEqual(args.max_grad_norm, 0.5)
+        self.assertEqual(args.checkpoint_every, 1000)
+
     def test_format_duration_for_progress_log(self):
         self.assertEqual(train._format_duration(65), "01:05")
         self.assertEqual(train._format_duration(3661), "01:01:01")

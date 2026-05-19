@@ -76,6 +76,8 @@ def train_recall55_lora(
     gradient_accumulation_steps: int,
     learning_rate: float,
     train_seed: int,
+    max_grad_norm: float,
+    checkpoint_every: int,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -115,11 +117,14 @@ def train_recall55_lora(
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     )
     model = get_peft_model(model, lora_config)
+    trainable_params = [param for param in model.parameters() if param.requires_grad]
+    for param in trainable_params:
+        param.data = param.data.float()
     model.to(device)
     model.train()
 
     tokenized = [_tokenize_row(tokenizer, row, max_seq_length) for row in rows]
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate)
     total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
     random.seed(train_seed)
@@ -128,7 +133,8 @@ def train_recall55_lora(
     rng = random.Random(train_seed)
     print(
         f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
-        f"updates={total_updates} batch_size={batch_size} grad_accum={gradient_accumulation_steps} train_seed={train_seed}",
+        f"updates={total_updates} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
+        f"train_seed={train_seed} lr={learning_rate} max_grad_norm={max_grad_norm}",
         flush=True,
     )
     optimizer.zero_grad(set_to_none=True)
@@ -139,13 +145,30 @@ def train_recall55_lora(
             rng.shuffle(tokenized)
         tensors = _collate(tokenizer, batch, device)
         output = model(**tensors)
-        loss = output.loss / max(1, gradient_accumulation_steps)
+        raw_loss = output.loss
+        update = (micro_step + 1) // max(1, gradient_accumulation_steps)
+        if not torch.isfinite(raw_loss.detach()):
+            optimizer.zero_grad(set_to_none=True)
+            print(
+                f"WARNING skipped non-finite loss before update {max(1, update)}: "
+                f"{float(raw_loss.detach().cpu())}",
+                flush=True,
+            )
+            continue
+        loss = raw_loss / max(1, gradient_accumulation_steps)
         loss.backward()
         if (micro_step + 1) % max(1, gradient_accumulation_steps) == 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
+            if not torch.isfinite(grad_norm.detach()):
+                optimizer.zero_grad(set_to_none=True)
+                print(
+                    f"WARNING skipped update {update}/{total_updates} because grad_norm is non-finite: "
+                    f"{float(grad_norm.detach().cpu())}",
+                    flush=True,
+                )
+                continue
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
-            update = (micro_step + 1) // max(1, gradient_accumulation_steps)
             elapsed = time.monotonic() - start_time
             progress = update / total_updates
             remaining = elapsed * (1.0 - progress) / progress if progress > 0 else 0.0
@@ -153,12 +176,19 @@ def train_recall55_lora(
             print(
                 f"train update {update}/{total_updates} "
                 f"({progress * 100:.2f}%) "
-                f"loss={float(loss.detach().cpu()) * max(1, gradient_accumulation_steps):.4f} "
+                f"loss={float(raw_loss.detach().cpu()):.4f} "
+                f"grad_norm={float(grad_norm.detach().cpu()):.4f} "
                 f"elapsed={_format_duration(elapsed)} "
                 f"remaining={_format_duration(remaining)} "
                 f"eta={time.strftime('%Y-%m-%d %H:%M:%S', eta_epoch)}",
                 flush=True,
             )
+            if checkpoint_every > 0 and update % checkpoint_every == 0:
+                checkpoint_dir = output_dir / "checkpoints" / f"update-{update:06d}"
+                checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                model.save_pretrained(checkpoint_dir)
+                tokenizer.save_pretrained(checkpoint_dir)
+                print(f"checkpoint saved: {checkpoint_dir}", flush=True)
 
     adapter_dir = output_dir / "adapter"
     adapter_dir.mkdir(parents=True, exist_ok=True)
@@ -176,8 +206,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
-    parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--train-seed", type=int, default=DEFAULT_TRAIN_SEED, help="Target-specific seed for independent LoRA parameters.")
+    parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Clip LoRA gradients and skip non-finite updates.")
+    parser.add_argument("--checkpoint-every", type=int, default=1000, help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
     parser.add_argument("--no-4bit", action="store_true", help="Accepted for script compatibility; recall55 Windows training uses fp16 LoRA on RTX3060.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
     parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
@@ -197,6 +229,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         train_seed=args.train_seed,
+        max_grad_norm=args.max_grad_norm,
+        checkpoint_every=args.checkpoint_every,
     )
 
 

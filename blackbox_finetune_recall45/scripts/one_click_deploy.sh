@@ -28,6 +28,9 @@ VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall45/data_vali
 OUTPUT_DIR="${OUTPUT_DIR:-blackbox_finetune_recall45/runs/qwen2.5-0.5b-blackbox-recall45-lora}"
 MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-0.45}"
 TRAIN_SEED="${TRAIN_SEED:-20260545}"
+LEARNING_RATE="${LEARNING_RATE:-5e-5}"
+MAX_GRAD_NORM="${MAX_GRAD_NORM:-0.5}"
+CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-1000}"
 
 if [[ "$MODE" == "smoke" ]]; then
   TRAIN_START="20110101"
@@ -60,6 +63,6 @@ fi
 
 python -m blackbox_finetune_recall45.build_dataset "${BUILD_ARGS[@]}"
 python -m blackbox_finetune_recall45.build_validation_dataset "${VAL_ARGS[@]}"
-python -m blackbox_finetune_recall45.train --base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate 2e-4 --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE"
+python -m blackbox_finetune_recall45.train --base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --max-grad-norm "$MAX_GRAD_NORM" --checkpoint-every "$CHECKPOINT_EVERY" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE"
 python -m blackbox_finetune_recall45.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --min-positive-recall "$MIN_POSITIVE_RECALL" --cuda-device "$CUDA_DEVICE" --max-seq-length "$MAX_SEQ_LENGTH"
 python -m unittest tests.test_blackbox_finetune_recall45 -v
