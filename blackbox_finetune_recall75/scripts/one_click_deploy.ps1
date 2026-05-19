@@ -44,7 +44,7 @@ Invoke-Step -m pip install -r .\blackbox_finetune_recall75\requirements.txt
 $BaseModel = if ($env:BASE_MODEL) { $env:BASE_MODEL } else { "Qwen/Qwen2.5-0.5B-Instruct" }
 $CudaDevice = if ($env:CUDA_DEVICE) { $env:CUDA_DEVICE } else { "0" }
 $env:CUDA_VISIBLE_DEVICES = $CudaDevice
-$env:PYTORCH_CUDA_ALLOC_CONF = if ($env:PYTORCH_CUDA_ALLOC_CONF) { $env:PYTORCH_CUDA_ALLOC_CONF } else { "expandable_segments:True" }
+$env:PYTORCH_CUDA_ALLOC_CONF = if ($env:PYTORCH_CUDA_ALLOC_CONF) { $env:PYTORCH_CUDA_ALLOC_CONF } else { "" }
 
 if (!(Test-TorchCuda)) {
   Install-CudaTorch

@@ -123,7 +123,23 @@ def train_recall80_lora(
     model.to(device)
     model.train()
 
-    tokenized = [_tokenize_row(tokenizer, row, max_seq_length) for row in rows]
+    tokenized = []
+    tokenize_start = time.monotonic()
+    tokenize_total = len(rows)
+    print(f"tokenizing train rows={tokenize_total} max_seq_length={max_seq_length}", flush=True)
+    for index, row in enumerate(rows, start=1):
+        tokenized.append(_tokenize_row(tokenizer, row, max_seq_length))
+        if index % 5000 == 0 or index == tokenize_total:
+            elapsed = time.monotonic() - tokenize_start
+            progress = index / tokenize_total if tokenize_total else 1.0
+            remaining = elapsed * (1.0 - progress) / progress if progress > 0 else 0.0
+            print(
+                f"tokenize progress {index}/{tokenize_total} "
+                f"({progress * 100:.2f}%) "
+                f"elapsed={_format_duration(elapsed)} "
+                f"remaining={_format_duration(remaining)}",
+                flush=True,
+            )
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate)
     total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
