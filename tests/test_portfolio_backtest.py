@@ -16,6 +16,11 @@ class PortfolioBacktestTests(unittest.TestCase):
         row = type("Row", (), {"Amount": 1000.0, "Volume": 10000.0, "High": 11.0, "Low": 9.0, "Close": 10.0})()
         self.assertEqual(weighted_average_price(row), 10.0)
 
+    def test_weighted_average_price_handles_share_volume_units(self):
+        row = type("Row", (), {"Amount": 10211.14, "Volume": 2439931.0, "High": 43.0, "Low": 41.0, "Close": 42.21})()
+
+        self.assertEqual(weighted_average_price(row), 41.85)
+
     def test_simulation_buys_next_day_and_respects_t_plus_one(self):
         signals = pd.DataFrame(
             [{"TradeDate": date(2026, 1, 1), "SCode": "000001", "SName": "A", "Close": 10.0, "Score": 1.0, "Reason": "x", "StrategyName": "test"}]
@@ -80,6 +85,44 @@ class PortfolioBacktestTests(unittest.TestCase):
         sell = trades[trades["Side"] == "SELL"].iloc[0]
         self.assertEqual(sell.TradeDate, date(2026, 1, 5))
         self.assertEqual(sell.Reason, "time_exit_day3_close")
+
+    def test_simulation_stops_after_end_date_when_flat(self):
+        signals = pd.DataFrame(
+            [{"TradeDate": date(2026, 1, 1), "SCode": "000001", "SName": "A", "Close": 10.0, "Score": 1.0, "Reason": "x", "StrategyName": "test"}]
+        )
+        daily = pd.DataFrame(
+            [
+                ["000001", "A", date(2026, 1, 1), 10, 10, 10, 10, 1000, 10000],
+                ["000001", "A", date(2026, 1, 2), 10, 10, 10, 10, 1000, 10000],
+                ["000001", "A", date(2026, 1, 3), 10, 10, 10.5, 9.8, 1000, 10000],
+                ["000001", "A", date(2026, 1, 4), 10, 10, 10.5, 9.8, 1000, 10000],
+                ["000001", "A", date(2026, 1, 5), 10, 10, 10.5, 9.8, 1000, 10000],
+                ["000001", "A", date(2026, 1, 6), 10, 10, 10.5, 9.8, 1000, 10000],
+            ],
+            columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"],
+        )
+        config = PortfolioBacktestConfig(start_date=date(2026, 1, 1), end_date=date(2026, 1, 2), strategy_name="test")
+        snapshots, _, _ = simulate_portfolio(signals, daily, config, verbose=False)
+
+        self.assertEqual(snapshots.iloc[-1]["TradeDate"], date(2026, 1, 5))
+
+    def test_market_value_does_not_jump_when_amount_volume_scale_differs(self):
+        signals = pd.DataFrame(
+            [{"TradeDate": date(2026, 1, 8), "SCode": "688350", "SName": "B", "Close": 27.0, "Score": 1.0, "Reason": "x", "StrategyName": "test"}]
+        )
+        daily = pd.DataFrame(
+            [
+                ["688350", "B", date(2026, 1, 8), 26, 27, 28, 26, 27000.0, 10000000.0],
+                ["688350", "B", date(2026, 1, 9), 26, 27, 28, 26, 27000.0, 10000000.0],
+            ],
+            columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"],
+        )
+        config = PortfolioBacktestConfig(start_date=date(2026, 1, 8), end_date=date(2026, 1, 9), strategy_name="test")
+        snapshots, _, trades = simulate_portfolio(signals, daily, config, verbose=False)
+
+        buy = trades[trades["Side"] == "BUY"].iloc[0]
+        self.assertEqual(buy.Price, 27.0)
+        self.assertLess(snapshots.iloc[-1]["HoldingMarketValue"], 110000)
 
 
 if __name__ == "__main__":

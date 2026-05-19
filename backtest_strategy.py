@@ -204,7 +204,15 @@ def weighted_average_price(window: pd.DataFrame) -> float | None:
     volume_sum = window["Volume"].sum(skipna=True)
     amount_sum = window["Amount"].sum(skipna=True)
     if pd.notna(volume_sum) and volume_sum > 0 and pd.notna(amount_sum) and amount_sum > 0:
-        return float(amount_sum * 100 / volume_sum)
+        low = float(window["Low"].min(skipna=True))
+        high = float(window["High"].max(skipna=True))
+        close_anchor = float(window["Close"].mean(skipna=True))
+        candidates = [float(amount_sum * 100 / volume_sum), float(amount_sum * 10000 / volume_sum)]
+        lower = low * 0.8 if low > 0 else 0
+        upper = high * 1.2 if high > 0 else float("inf")
+        valid = [price for price in candidates if lower <= price <= upper]
+        if valid:
+            return min(valid, key=lambda price: abs(price - close_anchor))
     typical = ((window["High"] + window["Low"] + window["Close"]) / 3).mean(skipna=True)
     if pd.isna(typical):
         return None

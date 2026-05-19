@@ -273,6 +273,9 @@ def simulate_portfolio(
     trades = []
 
     for trade_date in trade_dates:
+        if trade_date > config.end_date and not positions and not buy_schedule.get(trade_date):
+            break
+
         daily_fee = 0.0
         daily_buy_amount = 0.0
         daily_sell_amount = 0.0
@@ -347,4 +350,3 @@ def simulate_portfolio(
             )
 
     return pd.DataFrame(snapshots), pd.DataFrame(holdings), pd.DataFrame(trades)
-

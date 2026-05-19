@@ -15,13 +15,26 @@ class StrategyBacktestTests(unittest.TestCase):
             {
                 "Amount": [1000.0, 2000.0],
                 "Volume": [10000.0, 10000.0],
-                "High": [11.0, 12.0],
-                "Low": [9.0, 10.0],
-                "Close": [10.0, 11.0],
+                "High": [16.0, 16.5],
+                "Low": [14.0, 14.5],
+                "Close": [15.0, 15.5],
             }
         )
 
         self.assertEqual(backtest.weighted_average_price(window), 15.0)
+
+    def test_weighted_average_price_handles_share_volume_units(self):
+        window = pd.DataFrame(
+            {
+                "Amount": [10211.14],
+                "Volume": [2439931.0],
+                "High": [43.0],
+                "Low": [41.0],
+                "Close": [42.21],
+            }
+        )
+
+        self.assertAlmostEqual(backtest.weighted_average_price(window), 41.85, places=2)
 
     def test_evaluate_selection_uses_third_to_eighth_trading_days(self):
         base = date(2026, 1, 1)

@@ -49,10 +49,15 @@ def buy_shares_for_budget(price: float, budget: float) -> int:
 def weighted_average_price(row) -> float:
     volume = float(getattr(row, "Volume", 0) or 0)
     amount = float(getattr(row, "Amount", 0) or 0)
-    if volume > 0 and amount > 0:
-        return round_cent(amount * 100.0 / volume)
     high = float(getattr(row, "High", 0) or 0)
     low = float(getattr(row, "Low", 0) or 0)
     close = float(getattr(row, "Close", 0) or 0)
+    if volume > 0 and amount > 0:
+        candidates = [amount * 100.0 / volume, amount * 10000.0 / volume]
+        lower = low * 0.8 if low > 0 else 0
+        upper = high * 1.2 if high > 0 else float("inf")
+        valid = [price for price in candidates if lower <= price <= upper]
+        if valid:
+            anchor = close if close > 0 else (high + low) / 2.0
+            return round_cent(min(valid, key=lambda price: abs(price - anchor)))
     return round_cent((high + low + close) / 3.0)
-
