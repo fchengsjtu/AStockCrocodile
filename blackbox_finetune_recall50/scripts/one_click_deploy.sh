@@ -4,6 +4,29 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
+env_flag() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|y|Y) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+dataset_ready() {
+  [[ -f "$1/train.jsonl" && -f "$1/test.jsonl" ]]
+}
+
+run_dataset_build_if_needed() {
+  local dir="$1"
+  local label="$2"
+  local force_value="${3:-}"
+  shift 3
+  if dataset_ready "$dir" && ! env_flag "$force_value"; then
+    echo "Using cached $label dataset in $dir; set REBUILD_DATASET=1 to rebuild all datasets."
+    return 0
+  fi
+  "$@"
+}
+
 MODE="${1:-smoke}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR="${VENV_DIR:-$HOME/.venvs/astock-blackbox-finetune-recall50}"
@@ -62,8 +85,8 @@ if [[ "$MODE" == "smoke" ]]; then
   VAL_ARGS+=(--positive-limit "$POS_LIMIT")
 fi
 
-python -m blackbox_finetune_recall50.build_dataset "${BUILD_ARGS[@]}"
-python -m blackbox_finetune_recall50.build_validation_dataset "${VAL_ARGS[@]}"
+run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" python -m blackbox_finetune_recall50.build_dataset "${BUILD_ARGS[@]}"
+run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" python -m blackbox_finetune_recall50.build_validation_dataset "${VAL_ARGS[@]}"
 TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --max-grad-norm "$MAX_GRAD_NORM" --checkpoint-every "$CHECKPOINT_EVERY" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
 if [[ -n "$RESUME_ADAPTER_DIR" ]]; then
   TRAIN_ARGS+=(--resume-adapter-dir "$RESUME_ADAPTER_DIR")

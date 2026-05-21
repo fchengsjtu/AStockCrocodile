@@ -30,6 +30,30 @@ function Install-CudaTorch {
   }
 }
 
+function Test-EnvFlag {
+  param([string]$Value)
+  return @("1", "true", "TRUE", "yes", "YES", "y", "Y") -contains $Value
+}
+
+function Test-DatasetReady {
+  param([string]$Dir)
+  return (Test-Path (Join-Path $Dir "train.jsonl")) -and (Test-Path (Join-Path $Dir "test.jsonl"))
+}
+
+function Invoke-DatasetBuildIfNeeded {
+  param(
+    [string]$Dir,
+    [string]$Label,
+    [string]$ForceValue,
+    [string[]]$CommandArgs
+  )
+  if ((Test-DatasetReady $Dir) -and -not (Test-EnvFlag $ForceValue)) {
+    Write-Host "Using cached $Label dataset in $Dir; set REBUILD_DATASET=1 to rebuild all datasets."
+    return
+  }
+  Invoke-Step @CommandArgs
+}
+
 $Mode = if ($args.Count -gt 0) { $args[0] } else { "smoke" }
 $PythonBin = if ($env:PYTHON_BIN) { $env:PYTHON_BIN } elseif (Test-Path ".\.venv\Scripts\python.exe") { ".\.venv\Scripts\python.exe" } else { "python" }
 $VenvDir = if ($env:VENV_DIR) { $env:VENV_DIR } else { ".\.venv-blackbox-finetune-recall55" }
@@ -86,11 +110,12 @@ if ($Mode -eq "smoke") {
 
 $BuildArgs = @("-m", "blackbox_finetune_recall55.build_dataset", "--output-dir", $DataDir, "--start-date", $TrainStart, "--end-date", $TrainEnd, "--negative-ratio", "1.0")
 if ($PositiveLimit) { $BuildArgs += @("--positive-limit", $PositiveLimit) }
-Invoke-Step @BuildArgs
+Invoke-DatasetBuildIfNeeded -Dir $DataDir -Label "training" -ForceValue $env:REBUILD_DATASET -CommandArgs $BuildArgs
 
 $ValArgs = @("-m", "blackbox_finetune_recall55.build_validation_dataset", "--output-dir", $ValidationDir, "--start-date", $ValidationStart, "--end-date", $ValidationEnd, "--negative-ratio", "1.0")
 if ($Mode -eq "smoke") { $ValArgs += @("--positive-limit", $PositiveLimit) }
-Invoke-Step @ValArgs
+$ForceValidationDataset = if ($env:REBUILD_VALIDATION_DATASET) { $env:REBUILD_VALIDATION_DATASET } else { $env:REBUILD_DATASET }
+Invoke-DatasetBuildIfNeeded -Dir $ValidationDir -Label "validation" -ForceValue $ForceValidationDataset -CommandArgs $ValArgs
 
 $TrainArgs = @(
   '-m', 'blackbox_finetune_recall55.train', '--base-model', $BaseModel, '--data-dir', $DataDir, '--output-dir', $OutputDir,

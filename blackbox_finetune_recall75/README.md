@@ -46,6 +46,24 @@ cd D:\Documents\StockInfoCrawler
 powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall75\scripts\one_click_deploy.ps1 full
 ```
 
+The one-click scripts reuse existing `train.jsonl` and `test.jsonl` files in `blackbox_finetune_recall75/data` and `blackbox_finetune_recall75/data_validation`. After the first full dataset build, later full runs skip the expensive sample materialization step and go straight to training/evaluation.
+
+Force a full dataset rebuild:
+
+```powershell
+$env:REBUILD_DATASET='1'
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall75\scripts\one_click_deploy.ps1 full
+Remove-Item Env:\REBUILD_DATASET
+```
+
+Force only the validation dataset rebuild:
+
+```powershell
+$env:REBUILD_VALIDATION_DATASET='1'
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall75\scripts\one_click_deploy.ps1 full
+Remove-Item Env:\REBUILD_VALIDATION_DATASET
+```
+
 WSL2/Linux full run:
 
 ```bash
