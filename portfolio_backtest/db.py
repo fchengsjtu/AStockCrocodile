@@ -27,6 +27,7 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
                 BacktestName VARCHAR(128) NOT NULL,
                 TradeDate DATE NOT NULL,
                 StrategyName VARCHAR(64) NOT NULL,
+                TradeRuleName VARCHAR(128) NOT NULL DEFAULT 'stop_loss_3pct_take_profit_10_20_hold_3d',
                 SelectionRule VARCHAR(512) NULL,
                 ExitRule VARCHAR(512) NULL,
                 TotalMarketValue DECIMAL(24,6) NOT NULL,
@@ -38,7 +39,7 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
                 PositionCount INT NOT NULL,
                 CreatedOn DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (Id),
-                UNIQUE KEY ux_portfolio_daily (BacktestName, StrategyName, TradeDate),
+                UNIQUE KEY ux_portfolio_daily (BacktestName, StrategyName, TradeRuleName, TradeDate),
                 KEY idx_portfolio_daily_date (TradeDate)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """
@@ -52,6 +53,7 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
                 SCode VARCHAR(10) NOT NULL,
                 SName VARCHAR(64) NULL,
                 StrategyName VARCHAR(64) NOT NULL,
+                TradeRuleName VARCHAR(128) NOT NULL DEFAULT 'stop_loss_3pct_take_profit_10_20_hold_3d',
                 SelectionDate DATE NOT NULL,
                 BuyDate DATE NOT NULL,
                 Shares INT NOT NULL,
@@ -63,7 +65,7 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
                 ExitRule VARCHAR(512) NULL,
                 CreatedOn DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (Id),
-                UNIQUE KEY ux_portfolio_holding (BacktestName, StrategyName, TradeDate, SCode, SelectionDate, BuyDate),
+                UNIQUE KEY ux_portfolio_holding (BacktestName, StrategyName, TradeRuleName, TradeDate, SCode, SelectionDate, BuyDate),
                 KEY idx_portfolio_holding_code (SCode, TradeDate)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """
@@ -77,6 +79,7 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
                 SCode VARCHAR(10) NOT NULL,
                 SName VARCHAR(64) NULL,
                 StrategyName VARCHAR(64) NOT NULL,
+                TradeRuleName VARCHAR(128) NOT NULL DEFAULT 'stop_loss_3pct_take_profit_10_20_hold_3d',
                 SelectionDate DATE NOT NULL,
                 Side VARCHAR(8) NOT NULL,
                 Shares INT NOT NULL,
@@ -94,13 +97,56 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """
         )
+        ensure_trade_rule_column(cur, DAILY_TABLE, "StrategyName")
+        ensure_trade_rule_column(cur, HOLDING_TABLE, "StrategyName")
+        ensure_trade_rule_column(cur, TRADE_TABLE, "StrategyName")
+        ensure_unique_index(
+            cur,
+            DAILY_TABLE,
+            "ux_portfolio_daily",
+            "BacktestName, StrategyName, TradeRuleName, TradeDate",
+        )
+        ensure_unique_index(
+            cur,
+            HOLDING_TABLE,
+            "ux_portfolio_holding",
+            "BacktestName, StrategyName, TradeRuleName, TradeDate, SCode, SelectionDate, BuyDate",
+        )
     conn.commit()
 
 
-def clear_backtest_rows(conn: pymysql.connections.Connection, backtest_name: str, strategy_name: str) -> None:
+def ensure_trade_rule_column(cur, table: str, after_column: str) -> None:
+    cur.execute(f"SHOW COLUMNS FROM {table} LIKE 'TradeRuleName'")
+    if cur.fetchone() is None:
+        cur.execute(
+            f"ALTER TABLE {table} "
+            "ADD COLUMN TradeRuleName VARCHAR(128) NOT NULL DEFAULT 'stop_loss_3pct_take_profit_10_20_hold_3d' "
+            f"AFTER {after_column}"
+        )
+
+
+def ensure_unique_index(cur, table: str, index_name: str, index_columns: str) -> None:
+    cur.execute(f"SHOW INDEX FROM {table} WHERE Key_name = %s", (index_name,))
+    rows = cur.fetchall()
+    existing_columns = ",".join(row[4] for row in rows) if rows else ""
+    desired_columns = ",".join(item.strip() for item in index_columns.split(","))
+    if existing_columns == desired_columns:
+        return
+    if rows:
+        cur.execute(f"ALTER TABLE {table} DROP INDEX {index_name}")
+    cur.execute(f"ALTER TABLE {table} ADD UNIQUE KEY {index_name} ({index_columns})")
+
+
+def clear_backtest_rows(conn: pymysql.connections.Connection, backtest_name: str, strategy_name: str, trade_rule_name: str | None = None) -> None:
     with conn.cursor() as cur:
         for table in (DAILY_TABLE, HOLDING_TABLE, TRADE_TABLE):
-            cur.execute(f"DELETE FROM {table} WHERE BacktestName = %s AND StrategyName = %s", (backtest_name, strategy_name))
+            if trade_rule_name is None:
+                cur.execute(f"DELETE FROM {table} WHERE BacktestName = %s AND StrategyName = %s", (backtest_name, strategy_name))
+            else:
+                cur.execute(
+                    f"DELETE FROM {table} WHERE BacktestName = %s AND StrategyName = %s AND TradeRuleName = %s",
+                    (backtest_name, strategy_name, trade_rule_name),
+                )
     conn.commit()
 
 
@@ -128,6 +174,7 @@ def save_results(conn: pymysql.connections.Connection, daily: pd.DataFrame, hold
                 "BacktestName",
                 "TradeDate",
                 "StrategyName",
+                "TradeRuleName",
                 "SelectionRule",
                 "ExitRule",
                 "TotalMarketValue",
@@ -149,6 +196,7 @@ def save_results(conn: pymysql.connections.Connection, daily: pd.DataFrame, hold
                 "SCode",
                 "SName",
                 "StrategyName",
+                "TradeRuleName",
                 "SelectionDate",
                 "BuyDate",
                 "Shares",
@@ -170,6 +218,7 @@ def save_results(conn: pymysql.connections.Connection, daily: pd.DataFrame, hold
                 "SCode",
                 "SName",
                 "StrategyName",
+                "TradeRuleName",
                 "SelectionDate",
                 "Side",
                 "Shares",

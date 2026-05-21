@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from portfolio_backtest.common import BLACKBOX_STRATEGIES, PortfolioBacktestConfig, buy_shares_for_budget, round_cent, weighted_average_price
+from portfolio_backtest.common import BLACKBOX_STRATEGIES, STOP_LOSS_SERIES, PortfolioBacktestConfig, buy_shares_for_budget, round_cent, stop_loss_rule_name, weighted_average_price
 from portfolio_backtest import db as portfolio_db
 from portfolio_backtest import run as portfolio_run
 from portfolio_backtest.simulator import simulate_portfolio
@@ -28,6 +28,13 @@ class PortfolioBacktestTests(unittest.TestCase):
 
         mocked.assert_called_once()
         self.assertEqual(result.iloc[0]["SCode"], "000001")
+
+    def test_stop_loss_series_builds_trade_rule_configs(self):
+        args = portfolio_run.build_parser().parse_args(["--trade-rule-series", "stop_loss"])
+        configs = portfolio_run.rule_configs_from_args(args)
+
+        self.assertEqual([config.stop_loss_pct for config in configs], list(STOP_LOSS_SERIES))
+        self.assertEqual(configs[1].trade_rule_name, "stop_loss_3_5pct_take_profit_10_20_hold_3d")
 
     def test_rounds_buy_shares_to_hundred_lot(self):
         self.assertEqual(buy_shares_for_budget(10.03, 100000), 10000)
@@ -85,6 +92,34 @@ class PortfolioBacktestTests(unittest.TestCase):
         sell = trades[trades["Side"] == "SELL"].iloc[0]
         self.assertEqual(sell.Reason, "stop_loss_3pct")
         self.assertEqual(round_cent(sell.Price), 9.70)
+        self.assertEqual(sell.TradeRuleName, stop_loss_rule_name(0.03))
+
+    def test_custom_stop_loss_rule_changes_exit_price_and_rule_name(self):
+        signals = pd.DataFrame(
+            [{"TradeDate": date(2026, 1, 1), "SCode": "000001", "SName": "A", "Close": 10.0, "Score": 1.0, "Reason": "x", "StrategyName": "test"}]
+        )
+        daily = pd.DataFrame(
+            [
+                ["000001", "A", date(2026, 1, 1), 10, 10, 10, 10, 1000, 10000],
+                ["000001", "A", date(2026, 1, 2), 10, 10, 10, 10, 1000, 10000],
+                ["000001", "A", date(2026, 1, 3), 10, 10, 12, 9.5, 1000, 10000],
+            ],
+            columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"],
+        )
+        config = PortfolioBacktestConfig(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 3),
+            strategy_name="test",
+            stop_loss_pct=0.05,
+            trade_rule_name=stop_loss_rule_name(0.05),
+        )
+        snapshots, holdings, trades = simulate_portfolio(signals, daily, config, verbose=False)
+
+        sell = trades[trades["Side"] == "SELL"].iloc[0]
+        self.assertEqual(sell.Reason, "stop_loss_5pct")
+        self.assertEqual(round_cent(sell.Price), 9.50)
+        self.assertTrue((snapshots["TradeRuleName"] == stop_loss_rule_name(0.05)).all())
+        self.assertTrue((holdings["TradeRuleName"] == stop_loss_rule_name(0.05)).all())
 
     def test_day_three_exit_sells_remaining_position(self):
         signals = pd.DataFrame(

@@ -14,6 +14,9 @@ DEFAULT_FEE_RATE = 0.0005
 DEFAULT_RANDOM_SEED = 20260519
 DEFAULT_SELECTION_RULE = "Use strategy signals on selection date; buy selected stocks on next trading day at same-day weighted average price."
 DEFAULT_EXIT_RULE = "T+1 sell rule; within 3 tradable days after buy, stop loss at -3%, take profit half at +10%, take profit remaining half at +20%, otherwise sell remaining shares at day-3 close."
+DEFAULT_TRADE_RULE_NAME = "stop_loss_3pct_take_profit_10_20_hold_3d"
+DEFAULT_STOP_LOSS_PCT = 0.03
+STOP_LOSS_SERIES = (0.03, 0.035, 0.04, 0.045, 0.05, 0.055, 0.06)
 BLACKBOX_RECALL_TARGETS = (30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80)
 BLACKBOX_STRATEGIES = tuple(f"blackbox_finetune_recall{target}" for target in BLACKBOX_RECALL_TARGETS)
 
@@ -28,6 +31,8 @@ class PortfolioBacktestConfig:
     fee_rate: float = DEFAULT_FEE_RATE
     random_seed: int = DEFAULT_RANDOM_SEED
     backtest_name: str = DEFAULT_BACKTEST_NAME
+    trade_rule_name: str = DEFAULT_TRADE_RULE_NAME
+    stop_loss_pct: float = DEFAULT_STOP_LOSS_PCT
     selection_rule: str = DEFAULT_SELECTION_RULE
     exit_rule: str = DEFAULT_EXIT_RULE
     ktype: str = "D"
@@ -46,6 +51,24 @@ class PortfolioBacktestConfig:
 
 def is_blackbox_strategy(strategy_name: str) -> bool:
     return strategy_name in BLACKBOX_STRATEGIES
+
+
+def stop_loss_rule_name(stop_loss_pct: float) -> str:
+    basis_points = int(round(stop_loss_pct * 1000))
+    if basis_points % 10 == 0:
+        label = f"{basis_points // 10}pct"
+    else:
+        label = f"{basis_points / 10:g}pct".replace(".", "_")
+    return f"stop_loss_{label}_take_profit_10_20_hold_3d"
+
+
+def exit_rule_text(stop_loss_pct: float) -> str:
+    percent = stop_loss_pct * 100
+    return (
+        "T+1 sell rule; within 3 tradable days after buy, "
+        f"stop loss at -{percent:g}%, take profit half at +10%, "
+        "take profit remaining half at +20%, otherwise sell remaining shares at day-3 close."
+    )
 
 
 def round_cent(value: float) -> float:

@@ -123,6 +123,7 @@ def trade_record(
         "SCode": position.scode,
         "SName": position.sname,
         "StrategyName": position.strategy_name,
+        "TradeRuleName": config.trade_rule_name,
         "SelectionDate": position.selection_date,
         "Side": side,
         "Shares": shares,
@@ -169,12 +170,12 @@ def process_position_exit(
     trades = []
     cash_delta = 0.0
     fee_total = 0.0
-    stop_price = round_cent(position.cost_price * 0.97)
+    stop_price = round_cent(position.cost_price * (1.0 - config.stop_loss_pct))
     take_10 = round_cent(position.cost_price * 1.10)
     take_20 = round_cent(position.cost_price * 1.20)
 
     if float(row.Low) <= stop_price and position.shares > 0:
-        cash, fee, trade = sell_position(config, trade_date, position, position.shares, stop_price, "stop_loss_3pct")
+        cash, fee, trade = sell_position(config, trade_date, position, position.shares, stop_price, f"stop_loss_{config.stop_loss_pct * 100:g}pct")
         return cash, fee, [trade]
 
     if not position.tp10_done and float(row.High) >= take_10 and position.shares > 0:
@@ -223,6 +224,7 @@ def build_snapshot(
                 "SCode": position.scode,
                 "SName": position.sname,
                 "StrategyName": position.strategy_name,
+                "TradeRuleName": config.trade_rule_name,
                 "SelectionDate": position.selection_date,
                 "BuyDate": position.buy_date,
                 "Shares": position.shares,
@@ -238,6 +240,7 @@ def build_snapshot(
         "BacktestName": config.backtest_name,
         "TradeDate": trade_date,
         "StrategyName": config.strategy_name,
+        "TradeRuleName": config.trade_rule_name,
         "SelectionRule": config.selection_rule,
         "ExitRule": config.exit_rule,
         "TotalMarketValue": cash + holding_value,

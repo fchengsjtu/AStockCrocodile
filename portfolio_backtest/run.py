@@ -21,7 +21,10 @@ from .common import (
     DEFAULT_RANDOM_SEED,
     DEFAULT_START_DATE,
     BLACKBOX_STRATEGIES,
+    STOP_LOSS_SERIES,
     PortfolioBacktestConfig,
+    exit_rule_text,
+    stop_loss_rule_name,
 )
 from .db import clear_backtest_rows, connect, ensure_portfolio_tables, load_daily_for_simulation, load_strategy_signals, save_results
 from .simulator import simulate_portfolio
@@ -42,6 +45,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fee-rate", type=float, default=DEFAULT_FEE_RATE)
     parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
     parser.add_argument("--backtest-name", default=DEFAULT_BACKTEST_NAME)
+    parser.add_argument("--trade-rule-name", default=None)
+    parser.add_argument("--stop-loss-pct", type=float, default=0.03, help="Stop loss percentage as decimal, for example 0.03.")
+    parser.add_argument("--trade-rule-series", choices=["single", "stop_loss"], default="single", help="Run one rule or the 3%-6% stop-loss rule series.")
     parser.add_argument("--min-turnover-amount", type=float, default=0.0)
     parser.add_argument("--limit-per-day", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=80)
@@ -60,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(args) -> PortfolioBacktestConfig:
+    trade_rule_name = args.trade_rule_name or stop_loss_rule_name(args.stop_loss_pct)
     return PortfolioBacktestConfig(
         start_date=parse_date(args.start_date),
         end_date=parse_date(args.end_date),
@@ -69,6 +76,9 @@ def config_from_args(args) -> PortfolioBacktestConfig:
         fee_rate=args.fee_rate,
         random_seed=args.random_seed,
         backtest_name=args.backtest_name,
+        trade_rule_name=trade_rule_name,
+        stop_loss_pct=args.stop_loss_pct,
+        exit_rule=exit_rule_text(args.stop_loss_pct),
         min_turnover_amount=args.min_turnover_amount,
         limit_per_day=args.limit_per_day,
         batch_size=args.batch_size,
@@ -83,17 +93,32 @@ def config_from_args(args) -> PortfolioBacktestConfig:
     )
 
 
-def run(config: PortfolioBacktestConfig, save_db: bool, keep_existing: bool, verbose: bool) -> tuple[int, int, int]:
+def rule_configs_from_args(args) -> list[PortfolioBacktestConfig]:
+    if args.trade_rule_series == "single":
+        return [config_from_args(args)]
+    configs = []
+    for stop_loss_pct in STOP_LOSS_SERIES:
+        item = argparse.Namespace(**vars(args))
+        item.stop_loss_pct = stop_loss_pct
+        item.trade_rule_name = stop_loss_rule_name(stop_loss_pct)
+        configs.append(config_from_args(item))
+    return configs
+
+
+def run(config: PortfolioBacktestConfig, save_db: bool, keep_existing: bool, verbose: bool, signals=None, daily_df=None) -> tuple[int, int, int]:
     with connect() as conn:
         ensure_portfolio_tables(conn)
-        signals = load_strategy_signals(conn, config)
-        print(f"signals loaded strategy={config.strategy_name} rows={len(signals)}", flush=True)
-        daily_df = load_daily_for_simulation(conn, signals, config)
-        print(f"daily rows loaded rows={len(daily_df)} symbols={daily_df['SCode'].nunique() if not daily_df.empty else 0}", flush=True)
+        if signals is None:
+            signals = load_strategy_signals(conn, config)
+            print(f"signals loaded strategy={config.strategy_name} rows={len(signals)}", flush=True)
+        if daily_df is None:
+            daily_df = load_daily_for_simulation(conn, signals, config)
+            print(f"daily rows loaded rows={len(daily_df)} symbols={daily_df['SCode'].nunique() if not daily_df.empty else 0}", flush=True)
+        print(f"running trade_rule={config.trade_rule_name} stop_loss={config.stop_loss_pct * 100:g}%", flush=True)
         daily, holdings, trades = simulate_portfolio(signals, daily_df, config, verbose=verbose)
         if save_db:
             if not keep_existing:
-                clear_backtest_rows(conn, config.backtest_name, config.strategy_name)
+                clear_backtest_rows(conn, config.backtest_name, config.strategy_name, config.trade_rule_name)
             counts = save_results(conn, daily, holdings, trades)
             print(f"saved daily={counts['daily']} holdings={counts['holdings']} trades={counts['trades']}", flush=True)
         return len(daily), len(holdings), len(trades)
@@ -101,9 +126,26 @@ def run(config: PortfolioBacktestConfig, save_db: bool, keep_existing: bool, ver
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    config = config_from_args(args)
-    daily_count, holding_count, trade_count = run(config, save_db=not args.no_save_db, keep_existing=args.keep_existing, verbose=not args.quiet)
-    print(f"done snapshots={daily_count} holdings={holding_count} trades={trade_count}", flush=True)
+    configs = rule_configs_from_args(args)
+    shared_signals = None
+    shared_daily = None
+    if configs:
+        with connect() as conn:
+            ensure_portfolio_tables(conn)
+            shared_signals = load_strategy_signals(conn, configs[0])
+            print(f"signals loaded strategy={configs[0].strategy_name} rows={len(shared_signals)}", flush=True)
+            shared_daily = load_daily_for_simulation(conn, shared_signals, configs[0])
+            print(f"daily rows loaded rows={len(shared_daily)} symbols={shared_daily['SCode'].nunique() if not shared_daily.empty else 0}", flush=True)
+    for config in configs:
+        daily_count, holding_count, trade_count = run(
+            config,
+            save_db=not args.no_save_db,
+            keep_existing=args.keep_existing,
+            verbose=not args.quiet,
+            signals=shared_signals,
+            daily_df=shared_daily,
+        )
+        print(f"done rule={config.trade_rule_name} snapshots={daily_count} holdings={holding_count} trades={trade_count}", flush=True)
 
 
 if __name__ == "__main__":

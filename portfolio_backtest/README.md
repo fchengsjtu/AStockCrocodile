@@ -74,10 +74,38 @@ python -m portfolio_backtest.run `
   --random-seed 20260519
 ```
 
+Run the stop-loss rule series:
+
+```powershell
+python -m portfolio_backtest.run `
+  --strategy-name ma_bullish_v1 `
+  --trade-rule-series stop_loss
+```
+
+This runs the same selection and take-profit logic with these stop-loss levels:
+
+- `3%`
+- `3.5%`
+- `4%`
+- `4.5%`
+- `5%`
+- `5.5%`
+- `6%`
+
+Each result row stores `TradeRuleName`, for example `stop_loss_3_5pct_take_profit_10_20_hold_3d`.
+
+Run a single custom stop-loss rule:
+
+```powershell
+python -m portfolio_backtest.run `
+  --strategy-name ma_bullish_v1 `
+  --stop-loss-pct 0.05
+```
+
 Tables:
 
 - `portfolio_backtest_daily`: daily account summary.
 - `portfolio_backtest_holdings`: per-stock daily holdings.
 - `portfolio_backtest_trades`: buy and sell records.
 
-The daily and holding rows store both `SelectionRule` and `ExitRule`.
+Rows store `TradeRuleName`, `SelectionRule`, and `ExitRule`.
