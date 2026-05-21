@@ -82,6 +82,14 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall65\scripts\on
 Remove-Item Env:\NO_AUTO_RESUME
 ```
 
+If a few 2048-token batches hit CUDA OOM on Windows, training now clears the CUDA cache, skips that micro batch, and continues. Abort happens only after `OOM_PATIENCE` consecutive OOM batches. If OOM persists, reduce sequence length and reuse the same checkpoint:
+
+```powershell
+$env:MAX_SEQ_LENGTH='1024'
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall65\scripts\one_click_deploy.ps1 full
+Remove-Item Env:\MAX_SEQ_LENGTH
+```
+
 WSL2/Linux full run:
 
 ```bash

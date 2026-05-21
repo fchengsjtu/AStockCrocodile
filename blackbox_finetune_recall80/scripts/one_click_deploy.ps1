@@ -86,6 +86,7 @@ $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260580" }
 $LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "2e-5" }
 $MaxGradNorm = if ($env:MAX_GRAD_NORM) { $env:MAX_GRAD_NORM } else { "0.5" }
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { "1000" }
+$OomPatience = if ($env:OOM_PATIENCE) { $env:OOM_PATIENCE } else { "20" }
 $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 
 if ($Mode -eq "smoke") {
@@ -120,7 +121,7 @@ Invoke-DatasetBuildIfNeeded -Dir $ValidationDir -Label "validation" -ForceValue 
 $TrainArgs = @(
   '-m', 'blackbox_finetune_recall80.train', '--base-model', $BaseModel, '--data-dir', $DataDir, '--output-dir', $OutputDir,
   '--max-seq-length', $MaxSeqLength, '--epochs', $Epochs, '--batch-size', '1', '--gradient-accumulation-steps', $GradSteps,
-  '--learning-rate', $LearningRate, '--max-grad-norm', $MaxGradNorm, '--checkpoint-every', $CheckpointEvery,
+  '--learning-rate', $LearningRate, '--max-grad-norm', $MaxGradNorm, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
   '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice, '--no-4bit'
 )
 if ($ResumeAdapterDir) { $TrainArgs += @('--resume-adapter-dir', $ResumeAdapterDir) }

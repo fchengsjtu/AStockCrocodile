@@ -52,6 +52,7 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         self.assertEqual(args.max_grad_norm, 0.5)
         self.assertEqual(args.checkpoint_every, 1000)
         self.assertEqual(args.nonfinite_patience, 20)
+        self.assertEqual(args.oom_patience, 20)
         self.assertFalse(args.no_auto_resume)
 
     def test_format_duration_for_progress_log(self):

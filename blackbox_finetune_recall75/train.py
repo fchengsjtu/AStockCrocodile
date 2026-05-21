@@ -163,6 +163,7 @@ def train_recall75_lora(
     nonfinite_patience: int,
     rebuild_token_cache: bool,
     auto_resume: bool,
+    oom_patience: int,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -240,31 +241,51 @@ def train_recall75_lora(
     optimizer.zero_grad(set_to_none=True)
     start_time = time.monotonic()
     consecutive_nonfinite = 0
+    consecutive_oom = 0
     for micro_step in range(start_micro_step, total_micro_steps):
-        batch = [tokenized[(micro_step * batch_size + offset) % len(tokenized)] for offset in range(batch_size)]
-        if micro_step % len(tokenized) == 0:
-            rng.shuffle(tokenized)
-        tensors = _collate(tokenizer, batch, device)
-        output = model(**tensors)
-        raw_loss = output.loss
         update = (micro_step + 1) // max(1, gradient_accumulation_steps)
-        if not torch.isfinite(raw_loss.detach()):
-            consecutive_nonfinite += 1
+        try:
+            batch = [tokenized[(micro_step * batch_size + offset) % len(tokenized)] for offset in range(batch_size)]
+            if micro_step % len(tokenized) == 0:
+                rng.shuffle(tokenized)
+            tensors = _collate(tokenizer, batch, device)
+            output = model(**tensors)
+            raw_loss = output.loss
+            if not torch.isfinite(raw_loss.detach()):
+                consecutive_nonfinite += 1
+                optimizer.zero_grad(set_to_none=True)
+                print(
+                    f"WARNING skipped non-finite loss before update {max(1, update)}: "
+                    f"{float(raw_loss.detach().cpu())} consecutive={consecutive_nonfinite}/{nonfinite_patience}",
+                    flush=True,
+                )
+                if consecutive_nonfinite >= max(1, nonfinite_patience):
+                    raise RuntimeError(
+                        f"Training aborted after {consecutive_nonfinite} consecutive non-finite losses near update {max(1, update)}. "
+                        f"Resume from the latest checkpoint with --resume-adapter-dir and a lower --learning-rate."
+                    )
+                continue
+            consecutive_nonfinite = 0
+            consecutive_oom = 0
+            loss = raw_loss / max(1, gradient_accumulation_steps)
+            loss.backward()
+        except torch.OutOfMemoryError as exc:
+            consecutive_oom += 1
             optimizer.zero_grad(set_to_none=True)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             print(
-                f"WARNING skipped non-finite loss before update {max(1, update)}: "
-                f"{float(raw_loss.detach().cpu())} consecutive={consecutive_nonfinite}/{nonfinite_patience}",
+                f"WARNING skipped CUDA OOM before update {max(1, update)} "
+                f"micro_step={micro_step + 1}/{total_micro_steps} "
+                f"consecutive={consecutive_oom}/{oom_patience}: {exc}",
                 flush=True,
             )
-            if consecutive_nonfinite >= max(1, nonfinite_patience):
+            if consecutive_oom >= max(1, oom_patience):
                 raise RuntimeError(
-                    f"Training aborted after {consecutive_nonfinite} consecutive non-finite losses near update {max(1, update)}. "
-                    f"Resume from the latest checkpoint with --resume-adapter-dir and a lower --learning-rate."
+                    f"Training aborted after {consecutive_oom} consecutive CUDA OOM errors near update {max(1, update)}. "
+                    f"Retry with a smaller --max-seq-length, for example MAX_SEQ_LENGTH=1024."
                 )
             continue
-        consecutive_nonfinite = 0
-        loss = raw_loss / max(1, gradient_accumulation_steps)
-        loss.backward()
         if (micro_step + 1) % max(1, gradient_accumulation_steps) == 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
             if not torch.isfinite(grad_norm.detach()):
@@ -331,6 +352,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-every", type=int, default=1000, help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
+    parser.add_argument("--oom-patience", type=int, default=20, help="Abort after this many consecutive CUDA OOM batches.")
     parser.add_argument("--rebuild-token-cache", action="store_true", help="Re-tokenize train.jsonl even when a tokenized cache exists.")
     parser.add_argument("--no-auto-resume", action="store_true", help="Do not automatically resume from the latest output-dir checkpoint.")
     parser.add_argument("--no-4bit", action="store_true", help="Accepted for script compatibility; recall75 Windows training uses fp16 LoRA on RTX3060.")
@@ -358,6 +380,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         nonfinite_patience=args.nonfinite_patience,
         rebuild_token_cache=args.rebuild_token_cache,
         auto_resume=not args.no_auto_resume,
+        oom_patience=args.oom_patience,
     )
 
 
