@@ -59,9 +59,10 @@ $ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { "blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora" }
 $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.30" }
 $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260530" }
-$LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "5e-5" }
+$LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "2e-5" }
 $MaxGradNorm = if ($env:MAX_GRAD_NORM) { $env:MAX_GRAD_NORM } else { "0.5" }
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { "1000" }
+$ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 
 if ($Mode -eq "smoke") {
   $TrainStart = "20110101"
@@ -91,6 +92,13 @@ $ValArgs = @("-m", "blackbox_finetune_recall30.build_validation_dataset", "--out
 if ($Mode -eq "smoke") { $ValArgs += @("--positive-limit", $PositiveLimit) }
 Invoke-Step @ValArgs
 
-Invoke-Step -m blackbox_finetune_recall30.train --base-model $BaseModel --data-dir $DataDir --output-dir $OutputDir --max-seq-length $MaxSeqLength --epochs $Epochs --batch-size 1 --gradient-accumulation-steps $GradSteps --learning-rate $LearningRate --max-grad-norm $MaxGradNorm --checkpoint-every $CheckpointEvery --train-seed $TrainSeed --cuda-device $CudaDevice --no-4bit
+$TrainArgs = @(
+  '-m', 'blackbox_finetune_recall30.train', '--base-model', $BaseModel, '--data-dir', $DataDir, '--output-dir', $OutputDir,
+  '--max-seq-length', $MaxSeqLength, '--epochs', $Epochs, '--batch-size', '1', '--gradient-accumulation-steps', $GradSteps,
+  '--learning-rate', $LearningRate, '--max-grad-norm', $MaxGradNorm, '--checkpoint-every', $CheckpointEvery,
+  '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice, '--no-4bit'
+)
+if ($ResumeAdapterDir) { $TrainArgs += @('--resume-adapter-dir', $ResumeAdapterDir) }
+Invoke-Step @TrainArgs
 Invoke-Step -m blackbox_finetune_recall30.evaluate --base-model $BaseModel --adapter-dir "$OutputDir/adapter" --data-dir $ValidationDir --threshold 0.50 --min-positive-recall $MinRecall --cuda-device $CudaDevice --max-seq-length $MaxSeqLength
 Invoke-Step -m unittest tests.test_blackbox_finetune_recall30 -v

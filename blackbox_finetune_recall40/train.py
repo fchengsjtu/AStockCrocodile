@@ -66,6 +66,12 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+def _params_are_finite(params) -> bool:
+    for param in params:
+        if not param.data.isfinite().all().item():
+            return False
+    return True
+
 def train_recall40_lora(
     base_model: str,
     data_dir: Path,
@@ -78,6 +84,8 @@ def train_recall40_lora(
     train_seed: int,
     max_grad_norm: float,
     checkpoint_every: int,
+    resume_adapter_dir: Path | None,
+    nonfinite_patience: int,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -85,7 +93,7 @@ def train_recall40_lora(
         raise _missing_dataset_error(data_dir)
     try:
         import torch
-        from peft import LoraConfig, get_peft_model
+        from peft import LoraConfig, PeftModel, get_peft_model
         from transformers import AutoModelForCausalLM, AutoTokenizer
     except Exception as exc:
         raise RuntimeError("missing training dependencies; run one_click_deploy.ps1 first") from exc
@@ -116,7 +124,11 @@ def train_recall40_lora(
         task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     )
-    model = get_peft_model(model, lora_config)
+    if resume_adapter_dir is not None and (resume_adapter_dir / "adapter_config.json").exists():
+        print(f"resuming adapter from {resume_adapter_dir}", flush=True)
+        model = PeftModel.from_pretrained(model, str(resume_adapter_dir), is_trainable=True)
+    else:
+        model = get_peft_model(model, lora_config)
     trainable_params = [param for param in model.parameters() if param.requires_grad]
     for param in trainable_params:
         param.data = param.data.float()
@@ -155,6 +167,7 @@ def train_recall40_lora(
     )
     optimizer.zero_grad(set_to_none=True)
     start_time = time.monotonic()
+    consecutive_nonfinite = 0
     for micro_step in range(total_micro_steps):
         batch = [tokenized[(micro_step * batch_size + offset) % len(tokenized)] for offset in range(batch_size)]
         if micro_step % len(tokenized) == 0:
@@ -164,26 +177,44 @@ def train_recall40_lora(
         raw_loss = output.loss
         update = (micro_step + 1) // max(1, gradient_accumulation_steps)
         if not torch.isfinite(raw_loss.detach()):
+            consecutive_nonfinite += 1
             optimizer.zero_grad(set_to_none=True)
             print(
                 f"WARNING skipped non-finite loss before update {max(1, update)}: "
-                f"{float(raw_loss.detach().cpu())}",
+                f"{float(raw_loss.detach().cpu())} consecutive={consecutive_nonfinite}/{nonfinite_patience}",
                 flush=True,
             )
+            if consecutive_nonfinite >= max(1, nonfinite_patience):
+                raise RuntimeError(
+                    f"Training aborted after {consecutive_nonfinite} consecutive non-finite losses near update {max(1, update)}. "
+                    f"Resume from the latest checkpoint with --resume-adapter-dir and a lower --learning-rate."
+                )
             continue
+        consecutive_nonfinite = 0
         loss = raw_loss / max(1, gradient_accumulation_steps)
         loss.backward()
         if (micro_step + 1) % max(1, gradient_accumulation_steps) == 0:
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
             if not torch.isfinite(grad_norm.detach()):
+                consecutive_nonfinite += 1
                 optimizer.zero_grad(set_to_none=True)
                 print(
                     f"WARNING skipped update {update}/{total_updates} because grad_norm is non-finite: "
-                    f"{float(grad_norm.detach().cpu())}",
+                    f"{float(grad_norm.detach().cpu())} consecutive={consecutive_nonfinite}/{nonfinite_patience}",
                     flush=True,
                 )
+                if consecutive_nonfinite >= max(1, nonfinite_patience):
+                    raise RuntimeError(
+                        f"Training aborted after {consecutive_nonfinite} consecutive non-finite gradients near update {update}. "
+                        f"Resume from the latest checkpoint with --resume-adapter-dir and a lower --learning-rate."
+                    )
                 continue
             optimizer.step()
+            if not _params_are_finite(trainable_params):
+                raise RuntimeError(
+                    f"Training aborted because trainable LoRA parameters became non-finite after update {update}. "
+                    f"Resume from the latest checkpoint with --resume-adapter-dir and a lower --learning-rate."
+                )
             optimizer.zero_grad(set_to_none=True)
             elapsed = time.monotonic() - start_time
             progress = update / total_updates
@@ -222,10 +253,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
-    parser.add_argument("--learning-rate", type=float, default=5e-5)
+    parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--train-seed", type=int, default=DEFAULT_TRAIN_SEED, help="Target-specific seed for independent LoRA parameters.")
     parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Clip LoRA gradients and skip non-finite updates.")
     parser.add_argument("--checkpoint-every", type=int, default=1000, help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
+    parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
+    parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
     parser.add_argument("--no-4bit", action="store_true", help="Accepted for script compatibility; recall40 Windows training uses fp16 LoRA on RTX3060.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
     parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
@@ -247,6 +280,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         train_seed=args.train_seed,
         max_grad_norm=args.max_grad_norm,
         checkpoint_every=args.checkpoint_every,
+        resume_adapter_dir=args.resume_adapter_dir,
+        nonfinite_patience=args.nonfinite_patience,
     )
 
 
