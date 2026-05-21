@@ -94,6 +94,9 @@ fi
 if env_flag "${REBUILD_TOKEN_CACHE:-}"; then
   TRAIN_ARGS+=(--rebuild-token-cache)
 fi
+if env_flag "${NO_AUTO_RESUME:-}"; then
+  TRAIN_ARGS+=(--no-auto-resume)
+fi
 python -m blackbox_finetune_recall60.train "${TRAIN_ARGS[@]}"
 python -m blackbox_finetune_recall60.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --min-positive-recall "$MIN_POSITIVE_RECALL" --cuda-device "$CUDA_DEVICE" --max-seq-length "$MAX_SEQ_LENGTH"
 python -m unittest tests.test_blackbox_finetune_recall60 -v

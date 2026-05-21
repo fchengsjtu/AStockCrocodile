@@ -74,6 +74,14 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall70\scripts\on
 Remove-Item Env:\REBUILD_TOKEN_CACHE
 ```
 
+Training automatically resumes from the latest `blackbox_finetune_recall70/runs/qwen2.5-0.5b-blackbox-recall70-lora/checkpoints/update-*` checkpoint. The log should show `resuming adapter from ...` and `start_update=N`. Disable automatic resume only when you intentionally want to restart from the base model:
+
+```powershell
+$env:NO_AUTO_RESUME='1'
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall70\scripts\one_click_deploy.ps1 full
+Remove-Item Env:\NO_AUTO_RESUME
+```
+
 WSL2/Linux full run:
 
 ```bash

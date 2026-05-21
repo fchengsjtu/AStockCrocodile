@@ -78,6 +78,29 @@ def _params_are_finite(params) -> bool:
     return True
 
 
+def _checkpoint_update(checkpoint_dir: Path | None) -> int:
+    if checkpoint_dir is None:
+        return 0
+    match = re.fullmatch(r"update-(\d+)", checkpoint_dir.name)
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
+def _latest_checkpoint(output_dir: Path) -> Path | None:
+    checkpoint_root = output_dir / "checkpoints"
+    if not checkpoint_root.exists():
+        return None
+    candidates = [
+        path
+        for path in checkpoint_root.iterdir()
+        if path.is_dir() and (path / "adapter_config.json").exists() and _checkpoint_update(path) > 0
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=_checkpoint_update)
+
+
 def _token_cache_path(data_dir: Path, train_path: Path, base_model: str, max_seq_length: int) -> Path:
     stat = train_path.stat()
     fingerprint = hashlib.sha256(
@@ -139,6 +162,7 @@ def train_recall75_lora(
     resume_adapter_dir: Path | None,
     nonfinite_patience: int,
     rebuild_token_cache: bool,
+    auto_resume: bool,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -177,6 +201,8 @@ def train_recall75_lora(
         task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     )
+    if resume_adapter_dir is None and auto_resume:
+        resume_adapter_dir = _latest_checkpoint(output_dir)
     if resume_adapter_dir is not None and (resume_adapter_dir / "adapter_config.json").exists():
         print(f"resuming adapter from {resume_adapter_dir}", flush=True)
         model = PeftModel.from_pretrained(model, str(resume_adapter_dir), is_trainable=True)
@@ -192,20 +218,29 @@ def train_recall75_lora(
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate)
     total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
+    start_update = min(_checkpoint_update(resume_adapter_dir), total_updates)
+    start_micro_step = start_update * max(1, gradient_accumulation_steps)
     random.seed(train_seed)
     torch.manual_seed(train_seed)
     torch.cuda.manual_seed_all(train_seed)
     rng = random.Random(train_seed)
     print(
         f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
-        f"updates={total_updates} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
+        f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
         f"train_seed={train_seed} lr={learning_rate} max_grad_norm={max_grad_norm}",
         flush=True,
     )
+    if start_update >= total_updates:
+        adapter_dir = output_dir / "adapter"
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+        model.save_pretrained(adapter_dir)
+        tokenizer.save_pretrained(adapter_dir)
+        print(f"checkpoint already reached target updates; adapter saved: {adapter_dir}", flush=True)
+        return
     optimizer.zero_grad(set_to_none=True)
     start_time = time.monotonic()
     consecutive_nonfinite = 0
-    for micro_step in range(total_micro_steps):
+    for micro_step in range(start_micro_step, total_micro_steps):
         batch = [tokenized[(micro_step * batch_size + offset) % len(tokenized)] for offset in range(batch_size)]
         if micro_step % len(tokenized) == 0:
             rng.shuffle(tokenized)
@@ -297,6 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
     parser.add_argument("--rebuild-token-cache", action="store_true", help="Re-tokenize train.jsonl even when a tokenized cache exists.")
+    parser.add_argument("--no-auto-resume", action="store_true", help="Do not automatically resume from the latest output-dir checkpoint.")
     parser.add_argument("--no-4bit", action="store_true", help="Accepted for script compatibility; recall75 Windows training uses fp16 LoRA on RTX3060.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
     parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
@@ -321,6 +357,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         resume_adapter_dir=args.resume_adapter_dir,
         nonfinite_patience=args.nonfinite_patience,
         rebuild_token_cache=args.rebuild_token_cache,
+        auto_resume=not args.no_auto_resume,
     )
 
 

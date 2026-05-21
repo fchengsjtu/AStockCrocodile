@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from blackbox_finetune_recall30 import build_dataset, build_validation_dataset, common, evaluate, gpu, predict_day, train
 
@@ -50,10 +52,22 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         self.assertEqual(args.max_grad_norm, 0.5)
         self.assertEqual(args.checkpoint_every, 1000)
         self.assertEqual(args.nonfinite_patience, 20)
+        self.assertFalse(args.no_auto_resume)
 
     def test_format_duration_for_progress_log(self):
         self.assertEqual(train._format_duration(65), "01:05")
         self.assertEqual(train._format_duration(3661), "01:01:01")
+
+    def test_latest_checkpoint_picks_highest_update(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for name in ["update-000010", "update-000200", "bad-name"]:
+                checkpoint = root / "checkpoints" / name
+                checkpoint.mkdir(parents=True)
+                (checkpoint / "adapter_config.json").write_text("{}", encoding="utf-8")
+
+            self.assertEqual(train._latest_checkpoint(root).name, "update-000200")
+            self.assertEqual(train._checkpoint_update(root / "checkpoints" / "update-000200"), 200)
 
 
 if __name__ == "__main__":
