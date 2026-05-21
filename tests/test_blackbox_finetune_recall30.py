@@ -48,10 +48,14 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
     def test_train_stability_defaults(self):
         args = train.build_parser().parse_args([])
 
-        self.assertEqual(args.learning_rate, 2e-5)
+        self.assertEqual(args.learning_rate, 1e-5)
         self.assertEqual(args.max_grad_norm, 0.5)
         self.assertEqual(args.checkpoint_every, 1000)
         self.assertEqual(args.nonfinite_patience, 20)
+        self.assertEqual(args.nonfinite_skip_limit, 100)
+        self.assertEqual(args.nonfinite_backoff_every, 10)
+        self.assertEqual(args.lr_backoff_factor, 0.5)
+        self.assertEqual(args.min_learning_rate, 1e-6)
         self.assertEqual(args.oom_patience, 20)
         self.assertFalse(args.no_auto_resume)
 

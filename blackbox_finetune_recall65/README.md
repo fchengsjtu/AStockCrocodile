@@ -90,6 +90,18 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall65\scripts\on
 Remove-Item Env:\MAX_SEQ_LENGTH
 ```
 
+The default learning rate is `1e-5`. When non-finite loss or gradient appears, training counts total skipped batches and automatically halves the optimizer learning rate every 10 skips down to `1e-6`. If total non-finite skips reach `NONFINITE_SKIP_LIMIT` (default `100`), training stops so you can resume from an earlier checkpoint.
+
+For a more conservative resume:
+
+```powershell
+$env:LEARNING_RATE='5e-6'
+$env:RESUME_ADAPTER_DIR='blackbox_finetune_recall65\runs\qwen2.5-0.5b-blackbox-recall65-lora\checkpoints\update-012000'
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall65\scripts\one_click_deploy.ps1 full
+Remove-Item Env:\LEARNING_RATE
+Remove-Item Env:\RESUME_ADAPTER_DIR
+```
+
 WSL2/Linux full run:
 
 ```bash

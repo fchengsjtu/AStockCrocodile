@@ -51,10 +51,14 @@ VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall65/data_vali
 OUTPUT_DIR="${OUTPUT_DIR:-blackbox_finetune_recall65/runs/qwen2.5-0.5b-blackbox-recall65-lora}"
 MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-0.65}"
 TRAIN_SEED="${TRAIN_SEED:-20260565}"
-LEARNING_RATE="${LEARNING_RATE:-2e-5}"
+LEARNING_RATE="${LEARNING_RATE:-1e-5}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-0.5}"
 CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-1000}"
 OOM_PATIENCE="${OOM_PATIENCE:-20}"
+NONFINITE_SKIP_LIMIT="${NONFINITE_SKIP_LIMIT:-100}"
+NONFINITE_BACKOFF_EVERY="${NONFINITE_BACKOFF_EVERY:-10}"
+LR_BACKOFF_FACTOR="${LR_BACKOFF_FACTOR:-0.5}"
+MIN_LEARNING_RATE="${MIN_LEARNING_RATE:-1e-6}"
 RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
 
 if [[ "$MODE" == "smoke" ]]; then
@@ -88,7 +92,7 @@ fi
 
 run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" python -m blackbox_finetune_recall65.build_dataset "${BUILD_ARGS[@]}"
 run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" python -m blackbox_finetune_recall65.build_validation_dataset "${VAL_ARGS[@]}"
-TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --max-grad-norm "$MAX_GRAD_NORM" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
+TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --max-grad-norm "$MAX_GRAD_NORM" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --nonfinite-skip-limit "$NONFINITE_SKIP_LIMIT" --nonfinite-backoff-every "$NONFINITE_BACKOFF_EVERY" --lr-backoff-factor "$LR_BACKOFF_FACTOR" --min-learning-rate "$MIN_LEARNING_RATE" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
 if [[ -n "$RESUME_ADAPTER_DIR" ]]; then
   TRAIN_ARGS+=(--resume-adapter-dir "$RESUME_ADAPTER_DIR")
 fi

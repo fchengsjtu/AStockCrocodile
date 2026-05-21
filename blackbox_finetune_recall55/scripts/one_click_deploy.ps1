@@ -83,10 +83,14 @@ $ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { "blackbox_finetune_recall55/runs/qwen2.5-0.5b-blackbox-recall55-lora" }
 $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.55" }
 $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260555" }
-$LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "2e-5" }
+$LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "1e-5" }
 $MaxGradNorm = if ($env:MAX_GRAD_NORM) { $env:MAX_GRAD_NORM } else { "0.5" }
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { "1000" }
 $OomPatience = if ($env:OOM_PATIENCE) { $env:OOM_PATIENCE } else { "20" }
+$NonfiniteSkipLimit = if ($env:NONFINITE_SKIP_LIMIT) { $env:NONFINITE_SKIP_LIMIT } else { "100" }
+$NonfiniteBackoffEvery = if ($env:NONFINITE_BACKOFF_EVERY) { $env:NONFINITE_BACKOFF_EVERY } else { "10" }
+$LrBackoffFactor = if ($env:LR_BACKOFF_FACTOR) { $env:LR_BACKOFF_FACTOR } else { "0.5" }
+$MinLearningRate = if ($env:MIN_LEARNING_RATE) { $env:MIN_LEARNING_RATE } else { "1e-6" }
 $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 
 if ($Mode -eq "smoke") {
@@ -122,6 +126,8 @@ $TrainArgs = @(
   '-m', 'blackbox_finetune_recall55.train', '--base-model', $BaseModel, '--data-dir', $DataDir, '--output-dir', $OutputDir,
   '--max-seq-length', $MaxSeqLength, '--epochs', $Epochs, '--batch-size', '1', '--gradient-accumulation-steps', $GradSteps,
   '--learning-rate', $LearningRate, '--max-grad-norm', $MaxGradNorm, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
+  '--nonfinite-skip-limit', $NonfiniteSkipLimit, '--nonfinite-backoff-every', $NonfiniteBackoffEvery, '--lr-backoff-factor', $LrBackoffFactor,
+  '--min-learning-rate', $MinLearningRate,
   '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice, '--no-4bit'
 )
 if ($ResumeAdapterDir) { $TrainArgs += @('--resume-adapter-dir', $ResumeAdapterDir) }

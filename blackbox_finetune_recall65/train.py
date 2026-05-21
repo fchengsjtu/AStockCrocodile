@@ -164,6 +164,10 @@ def train_recall65_lora(
     rebuild_token_cache: bool,
     auto_resume: bool,
     oom_patience: int,
+    nonfinite_skip_limit: int,
+    nonfinite_backoff_every: int,
+    lr_backoff_factor: float,
+    min_learning_rate: float,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -241,6 +245,7 @@ def train_recall65_lora(
     optimizer.zero_grad(set_to_none=True)
     start_time = time.monotonic()
     consecutive_nonfinite = 0
+    total_nonfinite_skips = 0
     consecutive_oom = 0
     for micro_step in range(start_micro_step, total_micro_steps):
         update = (micro_step + 1) // max(1, gradient_accumulation_steps)
@@ -253,12 +258,25 @@ def train_recall65_lora(
             raw_loss = output.loss
             if not torch.isfinite(raw_loss.detach()):
                 consecutive_nonfinite += 1
+                total_nonfinite_skips += 1
                 optimizer.zero_grad(set_to_none=True)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 print(
                     f"WARNING skipped non-finite loss before update {max(1, update)}: "
-                    f"{float(raw_loss.detach().cpu())} consecutive={consecutive_nonfinite}/{nonfinite_patience}",
+                    f"{float(raw_loss.detach().cpu())} consecutive={consecutive_nonfinite}/{nonfinite_patience} "
+                    f"total={total_nonfinite_skips}/{nonfinite_skip_limit}",
                     flush=True,
                 )
+                if nonfinite_backoff_every > 0 and total_nonfinite_skips % nonfinite_backoff_every == 0:
+                    for group in optimizer.param_groups:
+                        group["lr"] = max(min_learning_rate, float(group["lr"]) * lr_backoff_factor)
+                    print(f"WARNING reduced learning rate after non-finite skips: lr={optimizer.param_groups[0]['lr']}", flush=True)
+                if total_nonfinite_skips >= max(1, nonfinite_skip_limit):
+                    raise RuntimeError(
+                        f"Training aborted after {total_nonfinite_skips} total non-finite skips near update {max(1, update)}. "
+                        f"Resume from an earlier checkpoint and/or lower --learning-rate."
+                    )
                 if consecutive_nonfinite >= max(1, nonfinite_patience):
                     raise RuntimeError(
                         f"Training aborted after {consecutive_nonfinite} consecutive non-finite losses near update {max(1, update)}. "
@@ -290,12 +308,25 @@ def train_recall65_lora(
             grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, max_grad_norm)
             if not torch.isfinite(grad_norm.detach()):
                 consecutive_nonfinite += 1
+                total_nonfinite_skips += 1
                 optimizer.zero_grad(set_to_none=True)
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 print(
                     f"WARNING skipped update {update}/{total_updates} because grad_norm is non-finite: "
-                    f"{float(grad_norm.detach().cpu())} consecutive={consecutive_nonfinite}/{nonfinite_patience}",
+                    f"{float(grad_norm.detach().cpu())} consecutive={consecutive_nonfinite}/{nonfinite_patience} "
+                    f"total={total_nonfinite_skips}/{nonfinite_skip_limit}",
                     flush=True,
                 )
+                if nonfinite_backoff_every > 0 and total_nonfinite_skips % nonfinite_backoff_every == 0:
+                    for group in optimizer.param_groups:
+                        group["lr"] = max(min_learning_rate, float(group["lr"]) * lr_backoff_factor)
+                    print(f"WARNING reduced learning rate after non-finite skips: lr={optimizer.param_groups[0]['lr']}", flush=True)
+                if total_nonfinite_skips >= max(1, nonfinite_skip_limit):
+                    raise RuntimeError(
+                        f"Training aborted after {total_nonfinite_skips} total non-finite skips near update {update}. "
+                        f"Resume from an earlier checkpoint and/or lower --learning-rate."
+                    )
                 if consecutive_nonfinite >= max(1, nonfinite_patience):
                     raise RuntimeError(
                         f"Training aborted after {consecutive_nonfinite} consecutive non-finite gradients near update {update}. "
@@ -318,6 +349,7 @@ def train_recall65_lora(
                 f"({progress * 100:.2f}%) "
                 f"loss={float(raw_loss.detach().cpu()):.4f} "
                 f"grad_norm={float(grad_norm.detach().cpu()):.4f} "
+                f"lr={optimizer.param_groups[0]['lr']:.2e} "
                 f"elapsed={_format_duration(elapsed)} "
                 f"remaining={_format_duration(remaining)} "
                 f"eta={time.strftime('%Y-%m-%d %H:%M:%S', eta_epoch)}",
@@ -346,12 +378,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
-    parser.add_argument("--learning-rate", type=float, default=2e-5)
+    parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--train-seed", type=int, default=DEFAULT_TRAIN_SEED, help="Target-specific seed for independent LoRA parameters.")
     parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Clip LoRA gradients and skip non-finite updates.")
     parser.add_argument("--checkpoint-every", type=int, default=1000, help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
+    parser.add_argument("--nonfinite-skip-limit", type=int, default=100, help="Abort after this many total non-finite losses or gradients.")
+    parser.add_argument("--nonfinite-backoff-every", type=int, default=10, help="Reduce optimizer LR after every N total non-finite skips; 0 disables.")
+    parser.add_argument("--lr-backoff-factor", type=float, default=0.5, help="Multiplier used when non-finite LR backoff is triggered.")
+    parser.add_argument("--min-learning-rate", type=float, default=1e-6, help="Smallest LR allowed by automatic non-finite backoff.")
     parser.add_argument("--oom-patience", type=int, default=20, help="Abort after this many consecutive CUDA OOM batches.")
     parser.add_argument("--rebuild-token-cache", action="store_true", help="Re-tokenize train.jsonl even when a tokenized cache exists.")
     parser.add_argument("--no-auto-resume", action="store_true", help="Do not automatically resume from the latest output-dir checkpoint.")
@@ -381,6 +417,10 @@ def main(argv: Iterable[str] | None = None) -> None:
         rebuild_token_cache=args.rebuild_token_cache,
         auto_resume=not args.no_auto_resume,
         oom_patience=args.oom_patience,
+        nonfinite_skip_limit=args.nonfinite_skip_limit,
+        nonfinite_backoff_every=args.nonfinite_backoff_every,
+        lr_backoff_factor=args.lr_backoff_factor,
+        min_learning_rate=args.min_learning_rate,
     )
 
 
