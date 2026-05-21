@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import math
+import pickle
 import random
+import re
 import sys
 import time
 from pathlib import Path
@@ -15,6 +18,8 @@ if str(PROJECT_ROOT) not in sys.path:
 from blackbox_finetune_recall35.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_OUTPUT_DIR, DEFAULT_TRAIN_SEED
 from blackbox_finetune_recall35.gpu import prepare_rtx3060
 from llm_finetune.common import read_jsonl
+
+TOKEN_CACHE_VERSION = "v1"
 
 
 def _missing_dataset_error(data_dir: Path) -> FileNotFoundError:
@@ -72,6 +77,53 @@ def _params_are_finite(params) -> bool:
             return False
     return True
 
+
+def _token_cache_path(data_dir: Path, train_path: Path, base_model: str, max_seq_length: int) -> Path:
+    stat = train_path.stat()
+    fingerprint = hashlib.sha256(
+        f"{TOKEN_CACHE_VERSION}|{train_path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{base_model}|{max_seq_length}".encode("utf-8")
+    ).hexdigest()[:16]
+    model_key = re.sub(r"[^A-Za-z0-9_.-]+", "_", base_model).strip("_") or "model"
+    return data_dir / "tokenized" / f"{model_key}_seq{max_seq_length}_{fingerprint}.pkl"
+
+
+def _load_or_build_tokenized(tokenizer, rows: list[dict], data_dir: Path, train_path: Path, base_model: str, max_seq_length: int, rebuild: bool) -> list[dict]:
+    cache_path = _token_cache_path(data_dir, train_path, base_model, max_seq_length)
+    if cache_path.exists() and not rebuild:
+        load_start = time.monotonic()
+        with cache_path.open("rb") as file:
+            tokenized = pickle.load(file)
+        print(
+            f"loaded tokenized train cache rows={len(tokenized)} path={cache_path} "
+            f"elapsed={_format_duration(time.monotonic() - load_start)}",
+            flush=True,
+        )
+        return tokenized
+
+    tokenized = []
+    tokenize_start = time.monotonic()
+    tokenize_total = len(rows)
+    print(f"tokenizing train rows={tokenize_total} max_seq_length={max_seq_length}", flush=True)
+    for index, row in enumerate(rows, start=1):
+        tokenized.append(_tokenize_row(tokenizer, row, max_seq_length))
+        if index % 5000 == 0 or index == tokenize_total:
+            elapsed = time.monotonic() - tokenize_start
+            progress = index / tokenize_total if tokenize_total else 1.0
+            remaining = elapsed * (1.0 - progress) / progress if progress > 0 else 0.0
+            print(
+                f"tokenize progress {index}/{tokenize_total} "
+                f"({progress * 100:.2f}%) "
+                f"elapsed={_format_duration(elapsed)} "
+                f"remaining={_format_duration(remaining)}",
+                flush=True,
+            )
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("wb") as file:
+        pickle.dump(tokenized, file, protocol=pickle.HIGHEST_PROTOCOL)
+    print(f"tokenized train cache saved rows={len(tokenized)} path={cache_path}", flush=True)
+    return tokenized
+
+
 def train_recall35_lora(
     base_model: str,
     data_dir: Path,
@@ -86,6 +138,7 @@ def train_recall35_lora(
     checkpoint_every: int,
     resume_adapter_dir: Path | None,
     nonfinite_patience: int,
+    rebuild_token_cache: bool,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -135,23 +188,7 @@ def train_recall35_lora(
     model.to(device)
     model.train()
 
-    tokenized = []
-    tokenize_start = time.monotonic()
-    tokenize_total = len(rows)
-    print(f"tokenizing train rows={tokenize_total} max_seq_length={max_seq_length}", flush=True)
-    for index, row in enumerate(rows, start=1):
-        tokenized.append(_tokenize_row(tokenizer, row, max_seq_length))
-        if index % 5000 == 0 or index == tokenize_total:
-            elapsed = time.monotonic() - tokenize_start
-            progress = index / tokenize_total if tokenize_total else 1.0
-            remaining = elapsed * (1.0 - progress) / progress if progress > 0 else 0.0
-            print(
-                f"tokenize progress {index}/{tokenize_total} "
-                f"({progress * 100:.2f}%) "
-                f"elapsed={_format_duration(elapsed)} "
-                f"remaining={_format_duration(remaining)}",
-                flush=True,
-            )
+    tokenized = _load_or_build_tokenized(tokenizer, rows, data_dir, train_path, base_model, max_seq_length, rebuild_token_cache)
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate)
     total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
@@ -259,6 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-every", type=int, default=1000, help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
+    parser.add_argument("--rebuild-token-cache", action="store_true", help="Re-tokenize train.jsonl even when a tokenized cache exists.")
     parser.add_argument("--no-4bit", action="store_true", help="Accepted for script compatibility; recall35 Windows training uses fp16 LoRA on RTX3060.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
     parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
@@ -282,6 +320,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         checkpoint_every=args.checkpoint_every,
         resume_adapter_dir=args.resume_adapter_dir,
         nonfinite_patience=args.nonfinite_patience,
+        rebuild_token_cache=args.rebuild_token_cache,
     )
 
 

@@ -91,6 +91,9 @@ TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUT
 if [[ -n "$RESUME_ADAPTER_DIR" ]]; then
   TRAIN_ARGS+=(--resume-adapter-dir "$RESUME_ADAPTER_DIR")
 fi
+if env_flag "${REBUILD_TOKEN_CACHE:-}"; then
+  TRAIN_ARGS+=(--rebuild-token-cache)
+fi
 python -m blackbox_finetune_recall45.train "${TRAIN_ARGS[@]}"
 python -m blackbox_finetune_recall45.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --min-positive-recall "$MIN_POSITIVE_RECALL" --cuda-device "$CUDA_DEVICE" --max-seq-length "$MAX_SEQ_LENGTH"
 python -m unittest tests.test_blackbox_finetune_recall45 -v

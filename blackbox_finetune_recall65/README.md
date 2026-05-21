@@ -64,6 +64,16 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall65\scripts\on
 Remove-Item Env:\REBUILD_VALIDATION_DATASET
 ```
 
+Training also caches tokenized samples under `blackbox_finetune_recall65/data/tokenized`. If `train.jsonl`, `BASE_MODEL`, and `MAX_SEQ_LENGTH` are unchanged, later training runs load the tokenized cache and skip the slow tokenization pass.
+
+Force tokenization rebuild:
+
+```powershell
+$env:REBUILD_TOKEN_CACHE='1'
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall65\scripts\one_click_deploy.ps1 full
+Remove-Item Env:\REBUILD_TOKEN_CACHE
+```
+
 WSL2/Linux full run:
 
 ```bash
