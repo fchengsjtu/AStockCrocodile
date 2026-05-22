@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-date", default=DEFAULT_VALIDATION_START_DATE)
     parser.add_argument("--end-date", default=DEFAULT_VALIDATION_END_DATE)
     parser.add_argument("--positive-limit", type=int)
-    parser.add_argument("--negative-ratio", type=float, default=1.0)
+    parser.add_argument("--negative-ratio", type=float, default=3.0)
     parser.add_argument("--daily-window", type=int, default=DEFAULT_WINDOW)
     parser.add_argument("--weekly-window", type=int, default=DEFAULT_WINDOW)
     parser.add_argument("--batch-size", type=int, default=80)

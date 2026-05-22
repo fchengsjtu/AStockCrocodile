@@ -10,7 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from blackbox_finetune.build_dataset import (
-    load_negative_events,
+    load_random_negative_events,
     load_positive_events,
     split_train_test,
 )
@@ -45,7 +45,7 @@ def build_recall35_dataset(
     with mysql_connect() as conn:
         positives = load_positive_events(conn, stat_type, start_date, end_date, positive_limit)
         negative_limit = max(1, int(len(positives) * negative_ratio))
-        negatives = load_negative_events(conn, stat_type, start_date, end_date, negative_limit, seed, batch_size)
+        negatives = load_random_negative_events(conn, stat_type, start_date, end_date, negative_limit, seed, batch_size)
         all_events = positives + negatives
         print(f"loaded events positives={len(positives)} negatives={len(negatives)}", flush=True)
         samples = materialize_events(conn, all_events, daily_window, weekly_window, batch_size)
@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-date", default=DEFAULT_TRAIN_START_DATE)
     parser.add_argument("--end-date", default=DEFAULT_TRAIN_END_DATE)
     parser.add_argument("--positive-limit", type=int)
-    parser.add_argument("--negative-ratio", type=float, default=1.0)
+    parser.add_argument("--negative-ratio", type=float, default=3.0)
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--daily-window", type=int, default=DEFAULT_WINDOW)

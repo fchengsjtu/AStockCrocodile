@@ -4,7 +4,7 @@ from datetime import date
 from unittest.mock import patch
 
 
-RANDOM_NEGATIVE_TARGETS = [80]
+RANDOM_NEGATIVE_TARGETS = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80]
 
 
 class FakeCursor:

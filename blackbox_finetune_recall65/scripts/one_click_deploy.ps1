@@ -113,11 +113,11 @@ if ($Mode -eq "smoke") {
   $GradSteps = if ($env:GRADIENT_ACCUMULATION_STEPS) { $env:GRADIENT_ACCUMULATION_STEPS } else { "8" }
 }
 
-$BuildArgs = @("-m", "blackbox_finetune_recall65.build_dataset", "--output-dir", $DataDir, "--start-date", $TrainStart, "--end-date", $TrainEnd, "--negative-ratio", "1.0")
+$BuildArgs = @("-m", "blackbox_finetune_recall65.build_dataset", "--output-dir", $DataDir, "--start-date", $TrainStart, "--end-date", $TrainEnd, "--negative-ratio", "3.0")
 if ($PositiveLimit) { $BuildArgs += @("--positive-limit", $PositiveLimit) }
 Invoke-DatasetBuildIfNeeded -Dir $DataDir -Label "training" -ForceValue $env:REBUILD_DATASET -CommandArgs $BuildArgs
 
-$ValArgs = @("-m", "blackbox_finetune_recall65.build_validation_dataset", "--output-dir", $ValidationDir, "--start-date", $ValidationStart, "--end-date", $ValidationEnd, "--negative-ratio", "1.0")
+$ValArgs = @("-m", "blackbox_finetune_recall65.build_validation_dataset", "--output-dir", $ValidationDir, "--start-date", $ValidationStart, "--end-date", $ValidationEnd, "--negative-ratio", "3.0")
 if ($Mode -eq "smoke") { $ValArgs += @("--positive-limit", $PositiveLimit) }
 $ForceValidationDataset = if ($env:REBUILD_VALIDATION_DATASET) { $env:REBUILD_VALIDATION_DATASET } else { $env:REBUILD_DATASET }
 Invoke-DatasetBuildIfNeeded -Dir $ValidationDir -Label "validation" -ForceValue $ForceValidationDataset -CommandArgs $ValArgs

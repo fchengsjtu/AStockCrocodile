@@ -41,8 +41,10 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
 
                 self.assertEqual(build_args.start_date, expected_train_start)
                 self.assertEqual(build_args.end_date, expected_train_end)
+                self.assertEqual(build_args.negative_ratio, 3.0)
                 self.assertEqual(validation_args.start_date, "20260101")
                 self.assertEqual(validation_args.end_date, "20260430")
+                self.assertEqual(validation_args.negative_ratio, 3.0)
                 self.assertEqual(evaluate_args.min_positive_recall, target / 100)
                 self.assertEqual(train_args.train_seed, 20260500 + target)
                 self.assertEqual(train_args.cuda_device, "0")

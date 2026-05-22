@@ -81,8 +81,8 @@ else
   GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-8}"
 fi
 
-BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio 1.0)
-VAL_ARGS=(--output-dir "$VALIDATION_DATA_DIR" --start-date "$VALIDATION_START" --end-date "$VALIDATION_END" --negative-ratio 1.0)
+BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio 3.0)
+VAL_ARGS=(--output-dir "$VALIDATION_DATA_DIR" --start-date "$VALIDATION_START" --end-date "$VALIDATION_END" --negative-ratio 3.0)
 if [[ -n "$POS_LIMIT" ]]; then
   BUILD_ARGS+=(--positive-limit "$POS_LIMIT")
 fi

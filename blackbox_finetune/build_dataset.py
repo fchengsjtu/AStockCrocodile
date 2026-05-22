@@ -141,6 +141,49 @@ def load_negative_events(
     return candidates[:limit]
 
 
+def load_random_negative_events(
+    conn,
+    stat_type: str,
+    start_date: date,
+    end_date: date,
+    limit: int,
+    seed: int,
+    batch_size: int,
+) -> list[SampleEvent]:
+    positive_windows = load_excluded_positive_windows(conn, stat_type, start_date, end_date)
+    excluded = excluded_dates_by_symbol(conn, positive_windows, start_date, end_date, 3, batch_size)
+    candidates: list[SampleEvent] = []
+    seen: set[tuple[str, date]] = set()
+    scan_limit = max(limit * 3, limit + 1000, 5000)
+    attempt = 0
+    while len(candidates) < limit and attempt < 5:
+        sql = """
+            SELECT SCode, DATE(KTime)
+            FROM dkandles
+            WHERE KType = 'D'
+              AND KTime >= %s
+              AND KTime < %s
+            ORDER BY RAND(%s)
+            LIMIT %s
+        """
+        with conn.cursor() as cur:
+            cur.execute(sql, (start_date, end_date + timedelta(days=1), seed + attempt, scan_limit))
+            rows = cur.fetchall()
+        for scode, trade_date_value in rows:
+            scode = str(scode)
+            trade_date = parse_date(trade_date_value)
+            key = (scode, trade_date)
+            if key in seen or trade_date in excluded.get(scode, set()):
+                continue
+            seen.add(key)
+            candidates.append(SampleEvent(scode, trade_date, 0, "negative", None))
+            if len(candidates) >= limit:
+                break
+        attempt += 1
+        scan_limit *= 2
+    return candidates[:limit]
+
+
 def split_train_test(rows: list[dict], train_ratio: float, seed: int) -> tuple[list[dict], list[dict]]:
     ordered = sorted(rows, key=lambda row: stable_rank(seed, row["metadata"]["scode"], row["metadata"]["anchor_date"], row["metadata"]["label"]))
     test_count = max(1, int(round(len(ordered) * (1.0 - train_ratio)))) if len(ordered) > 1 else 0
@@ -211,4 +254,3 @@ def main(argv: Iterable[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-
