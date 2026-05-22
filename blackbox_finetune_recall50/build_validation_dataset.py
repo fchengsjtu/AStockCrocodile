@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from blackbox_finetune.build_dataset import build_dataset
+from blackbox_finetune_recall50.build_dataset import build_recall50_dataset
 from blackbox_finetune_recall50.common import (
     DEFAULT_STAT_TYPE,
     DEFAULT_VALIDATION_DIR,
@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    build_dataset(
+    build_recall50_dataset(
         output_dir=args.output_dir,
         stat_type=args.stat_type,
         start_date=parse_date(args.start_date),
