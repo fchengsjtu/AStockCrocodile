@@ -460,6 +460,14 @@ Equivalent explicit command:
 python .\a_share_crawler.py run --mode incremental --period daily
 ```
 
+Daily incremental workflow with ex-rights/forward-adjustment check first:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_daily_incremental_with_exrights.ps1
+```
+
+This script first runs `python .\a_share_crawler.py exrights`. If new or changed ex-rights rows are found, the crawler refreshes that stock's forward-adjusted daily K-lines from `2010-01-01` and rebuilds weekly/monthly K-lines for the affected stock. It then runs `python .\a_share_crawler.py run --mode incremental --period daily`.
+
 After each stock is written successfully, `stockinfo.LatestUpdateKandle` is updated to that stock's newest imported daily K-line time, e.g. `2026-05-06 15:00:00`.
 
 ## Run Parameters

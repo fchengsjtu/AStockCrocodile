@@ -21,6 +21,7 @@ param(
   [string]$CudaDevice = "0",
   [int]$CrawlerWorkers = 8,
   [int]$BatchSize = 80,
+  [switch]$SkipExrights,
   [switch]$SkipKlineCrawl,
   [switch]$SkipDerivedKlines,
   [switch]$SkipPredictions,
@@ -105,6 +106,16 @@ Write-Host "BlackboxPython=$BlackboxPythonExe"
 Write-Host "LogFile=$LogFile"
 
 try {
+  if (-not $SkipExrights) {
+    Invoke-Step "crawl exrights and refresh changed qfq K-lines" $MainPythonExe @(
+      ".\a_share_crawler.py", "exrights",
+      "--end-date", $TradeDate,
+      "--workers", [string]$CrawlerWorkers
+    )
+  } else {
+    Write-Host "Skip exrights crawl."
+  }
+
   if (-not $SkipKlineCrawl) {
     Invoke-Step "crawl daily K-lines" $MainPythonExe @(
       ".\a_share_crawler.py", "run",
