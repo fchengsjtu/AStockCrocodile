@@ -87,16 +87,19 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows)
 
         self.assertIn("cols=dt/o/h/l/c/v/a/m5/m13/m34/m55", prompt)
+        self.assertIn("D\n1,4,", prompt)
+        self.assertIn("7,10,", prompt)
+        self.assertIn("W\n1,3,", prompt)
+        self.assertIn("7,9,", prompt)
         self.assertNotIn("260101", prompt)
         self.assertNotIn("260102", prompt)
         self.assertNotIn("260103", prompt)
-        self.assertIn("260104", prompt)
-        self.assertIn("260110", prompt)
-        self.assertNotIn("260101,1,", prompt)
+        self.assertNotIn("260104", prompt)
+        self.assertNotIn("260110", prompt)
         self.assertNotIn("250101", prompt)
         self.assertNotIn("250201", prompt)
-        self.assertIn("250301", prompt)
-        self.assertIn("250901", prompt)
+        self.assertNotIn("250301", prompt)
+        self.assertNotIn("250901", prompt)
 
 
 if __name__ == "__main__":

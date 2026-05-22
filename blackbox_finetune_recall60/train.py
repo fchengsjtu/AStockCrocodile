@@ -19,7 +19,7 @@ from blackbox_finetune_recall60.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_D
 from blackbox_finetune_recall60.gpu import prepare_rtx3060
 from llm_finetune.common import read_jsonl
 
-TOKEN_CACHE_VERSION = "v3_csv11_7d7w"
+TOKEN_CACHE_VERSION = "v4_csv11_7d7w_seqdt"
 
 
 def _missing_dataset_error(data_dir: Path) -> FileNotFoundError:

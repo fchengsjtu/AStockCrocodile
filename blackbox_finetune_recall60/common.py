@@ -59,8 +59,8 @@ def _csv_number(value) -> str:
 def _compact_kline_csv(rows: list[dict]) -> str:
     keys = ["date", "open", "high", "low", "close", "volume", "amount", "ma5", "ma13", "ma34", "ma55"]
     lines = []
-    for row in rows:
-        values = [str(row.get("date", ""))[2:]]
+    for index, row in enumerate(rows, start=1):
+        values = [str(index)]
         values.extend(_csv_number(row.get(key)) for key in keys[1:])
         lines.append(",".join(values))
     return "\n".join(lines)
@@ -77,7 +77,7 @@ def build_compact_prompt(
     daily_rows = daily_55[-daily_window:] if daily_window > 0 else []
     weekly_rows = weekly_55[-weekly_window:] if weekly_window > 0 else []
     return (
-        f"s={scode};t={compact_date(anchor_date)[2:]}\n"
+        f"s={scode}\n"
         f"cols={CSV_COLUMNS}\n"
         "D\n"
         f"{_compact_kline_csv(daily_rows)}\n"
