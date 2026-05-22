@@ -643,6 +643,17 @@ python .\backtest_strategy.py --start-date 20240101 --end-date 20241231 --no-sav
 
 The output summary includes total selections, success rate, failure rate, and explosive rate. The optional CSV stores detailed rows for each evaluated selection.
 
+Run portfolio backtest with a trained black-box model. Use the black-box virtual environment because the main `.venv` does not install PyTorch:
+
+```powershell
+.\.venv-blackbox-finetune-recall30\Scripts\python.exe -m portfolio_backtest.run `
+  --strategy-name blackbox_finetune_recall30 `
+  --blackbox-threshold 0.50 `
+  --blackbox-max-seq-length 512 `
+  --blackbox-cuda-device 0 `
+  --limit-per-day 5
+```
+
 ## K-line Statistics
 
 `kline_statistics.py` computes statistics from existing daily rows in `dkandles` and writes matched rows to MySQL table `klinestatistics`.

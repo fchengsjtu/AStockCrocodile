@@ -97,7 +97,17 @@ def close_from_daily_window(daily: list[dict]) -> float | None:
 
 def build_blackbox_signals(conn, config: PortfolioBacktestConfig) -> pd.DataFrame:
     modules = load_modules(config.strategy_name)
-    modules.gpu.prepare_rtx3060(config.blackbox_cuda_device, require_device=not config.blackbox_allow_non_rtx3060)
+    try:
+        modules.gpu.prepare_rtx3060(config.blackbox_cuda_device, require_device=not config.blackbox_allow_non_rtx3060)
+    except RuntimeError as exc:
+        if "PyTorch is required" in str(exc):
+            env_name = f".venv-blackbox-finetune-recall{config.strategy_name.removeprefix('blackbox_finetune_recall')}"
+            raise RuntimeError(
+                f"{config.strategy_name} portfolio backtest requires the blackbox finetune Python environment. "
+                f"Run it with {env_name}\\Scripts\\python.exe instead of the main .venv python, or install PyTorch "
+                f"and the blackbox requirements into the active environment."
+            ) from exc
+        raise
     adapter_dir = modules.common.DEFAULT_OUTPUT_DIR / "adapter"
     model, tokenizer = modules.inference.load_model(modules.common.DEFAULT_BASE_MODEL, adapter_dir)
 
