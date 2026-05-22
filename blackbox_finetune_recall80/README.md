@@ -83,12 +83,22 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall80\scripts\on
 Remove-Item Env:\NO_AUTO_RESUME
 ```
 
-If a few 1024-token batches hit CUDA OOM on Windows, training now clears the CUDA cache, skips that micro batch, and continues. Abort happens only after `OOM_PATIENCE` consecutive OOM batches. If OOM persists, reduce sequence length and reuse the same checkpoint:
+If 1024-token batches hit CUDA OOM on Windows, training automatically re-tokenizes with a smaller sequence length and continues. The default fallback is `MIN_SEQ_LENGTH_ON_OOM=512` with `OOM_SHRINK_FACTOR=0.5`. Abort happens only after `OOM_PATIENCE` consecutive OOM batches at the fallback length. To force a smaller run from the start:
 
 ```powershell
-$env:MAX_SEQ_LENGTH='1024'
+$env:MAX_SEQ_LENGTH='512'
 powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall80\scripts\one_click_deploy.ps1 full
 Remove-Item Env:\MAX_SEQ_LENGTH
+```
+
+Tune the automatic OOM fallback:
+
+```powershell
+$env:MIN_SEQ_LENGTH_ON_OOM='512'
+$env:OOM_SHRINK_FACTOR='0.5'
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall80\scripts\one_click_deploy.ps1 full
+Remove-Item Env:\MIN_SEQ_LENGTH_ON_OOM
+Remove-Item Env:\OOM_SHRINK_FACTOR
 ```
 
 The default learning rate is `2e-5`. When non-finite loss or gradient appears, training counts total skipped batches and automatically halves the optimizer learning rate every 10 skips down to `1e-6`. If total non-finite skips reach `NONFINITE_SKIP_LIMIT` (default `100`), training stops so you can resume from an earlier checkpoint.

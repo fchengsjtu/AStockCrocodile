@@ -168,6 +168,8 @@ def train_recall80_lora(
     nonfinite_backoff_every: int,
     lr_backoff_factor: float,
     min_learning_rate: float,
+    min_seq_length_on_oom: int,
+    oom_shrink_factor: float,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -219,7 +221,10 @@ def train_recall80_lora(
     model.to(device)
     model.train()
 
-    tokenized = _load_or_build_tokenized(tokenizer, rows, data_dir, train_path, base_model, max_seq_length, rebuild_token_cache)
+    active_max_seq_length = max(64, max_seq_length)
+    min_seq_length_on_oom = min(active_max_seq_length, max(64, min_seq_length_on_oom))
+    oom_shrink_factor = min(max(oom_shrink_factor, 0.1), 0.95)
+    tokenized = _load_or_build_tokenized(tokenizer, rows, data_dir, train_path, base_model, active_max_seq_length, rebuild_token_cache)
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate)
     total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
@@ -232,7 +237,8 @@ def train_recall80_lora(
     print(
         f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
-        f"train_seed={train_seed} lr={learning_rate} max_grad_norm={max_grad_norm}",
+        f"train_seed={train_seed} lr={learning_rate} max_grad_norm={max_grad_norm} "
+        f"max_seq_length={active_max_seq_length} min_seq_length_on_oom={min_seq_length_on_oom}",
         flush=True,
     )
     if start_update >= total_updates:
@@ -290,18 +296,40 @@ def train_recall80_lora(
         except torch.OutOfMemoryError as exc:
             consecutive_oom += 1
             optimizer.zero_grad(set_to_none=True)
+            tensors = None
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            if active_max_seq_length > min_seq_length_on_oom:
+                next_seq_length = max(min_seq_length_on_oom, int(active_max_seq_length * oom_shrink_factor))
+                if next_seq_length < active_max_seq_length:
+                    print(
+                        f"WARNING CUDA OOM at max_seq_length={active_max_seq_length}; "
+                        f"re-tokenizing with max_seq_length={next_seq_length} and continuing.",
+                        flush=True,
+                    )
+                    active_max_seq_length = next_seq_length
+                    tokenized = _load_or_build_tokenized(
+                        tokenizer,
+                        rows,
+                        data_dir,
+                        train_path,
+                        base_model,
+                        active_max_seq_length,
+                        rebuild=False,
+                    )
+                    consecutive_oom = 0
+                    continue
             print(
                 f"WARNING skipped CUDA OOM before update {max(1, update)} "
                 f"micro_step={micro_step + 1}/{total_micro_steps} "
-                f"consecutive={consecutive_oom}/{oom_patience}: {exc}",
+                f"consecutive={consecutive_oom}/{oom_patience} "
+                f"max_seq_length={active_max_seq_length}: {exc}",
                 flush=True,
             )
             if consecutive_oom >= max(1, oom_patience):
                 raise RuntimeError(
                     f"Training aborted after {consecutive_oom} consecutive CUDA OOM errors near update {max(1, update)}. "
-                    f"Retry with a smaller --max-seq-length, for example MAX_SEQ_LENGTH=1024."
+                    f"Retry with a smaller --max-seq-length, for example MAX_SEQ_LENGTH={min_seq_length_on_oom}."
                 )
             continue
         if (micro_step + 1) % max(1, gradient_accumulation_steps) == 0:
@@ -389,6 +417,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr-backoff-factor", type=float, default=0.5, help="Multiplier used when non-finite LR backoff is triggered.")
     parser.add_argument("--min-learning-rate", type=float, default=1e-6, help="Smallest LR allowed by automatic non-finite backoff.")
     parser.add_argument("--oom-patience", type=int, default=20, help="Abort after this many consecutive CUDA OOM batches.")
+    parser.add_argument("--min-seq-length-on-oom", type=int, default=512, help="Automatically shrink max sequence length down to this value after CUDA OOM.")
+    parser.add_argument("--oom-shrink-factor", type=float, default=0.5, help="Multiplier for automatic sequence-length shrink after CUDA OOM.")
     parser.add_argument("--rebuild-token-cache", action="store_true", help="Re-tokenize train.jsonl even when a tokenized cache exists.")
     parser.add_argument("--no-auto-resume", action="store_true", help="Do not automatically resume from the latest output-dir checkpoint.")
     parser.add_argument("--no-4bit", action="store_true", help="Accepted for script compatibility; recall80 Windows training uses fp16 LoRA on RTX3060.")
@@ -421,6 +451,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         nonfinite_backoff_every=args.nonfinite_backoff_every,
         lr_backoff_factor=args.lr_backoff_factor,
         min_learning_rate=args.min_learning_rate,
+        min_seq_length_on_oom=args.min_seq_length_on_oom,
+        oom_shrink_factor=args.oom_shrink_factor,
     )
 
 
