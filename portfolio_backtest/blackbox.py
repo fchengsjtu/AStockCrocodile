@@ -126,7 +126,10 @@ def build_blackbox_signals(conn, config: PortfolioBacktestConfig) -> pd.DataFram
             batch_selected = 0
             for scode in batch:
                 daily = modules.common.pick_window(daily_map.get(scode, []), trade_date, config.blackbox_daily_window)
-                weekly = modules.common.pick_window(weekly_map.get(scode, []), trade_date, config.blackbox_weekly_window)
+                if hasattr(modules.common, "pick_weekly_window"):
+                    weekly = modules.common.pick_weekly_window(weekly_map.get(scode, []), daily_map.get(scode, []), trade_date, config.blackbox_weekly_window)
+                else:
+                    weekly = modules.common.pick_window(weekly_map.get(scode, []), trade_date, config.blackbox_weekly_window)
                 if daily is None or weekly is None:
                     continue
                 prompt = tokenizer.apply_chat_template(

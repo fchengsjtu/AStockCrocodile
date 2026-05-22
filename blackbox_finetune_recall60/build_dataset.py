@@ -9,17 +9,53 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from blackbox_finetune.build_dataset import build_dataset
+from blackbox_finetune.build_dataset import (
+    load_negative_events,
+    load_positive_events,
+    split_train_test,
+)
 from blackbox_finetune_recall60.common import (
     DEFAULT_DATA_DIR,
     DEFAULT_STAT_TYPE,
     DEFAULT_TRAIN_END_DATE,
     DEFAULT_TRAIN_START_DATE,
     DEFAULT_WINDOW,
+    materialize_events,
+    mysql_connect,
     parse_date,
+    write_jsonl,
 )
 
 DEFAULT_SEED = 20260518
+
+
+def build_recall60_dataset(
+    output_dir: Path,
+    stat_type,
+    start_date,
+    end_date,
+    positive_limit: int | None,
+    negative_ratio: float,
+    train_ratio: float,
+    seed: int,
+    daily_window: int,
+    weekly_window: int,
+    batch_size: int,
+) -> tuple[int, int]:
+    with mysql_connect() as conn:
+        positives = load_positive_events(conn, stat_type, start_date, end_date, positive_limit)
+        negative_limit = max(1, int(len(positives) * negative_ratio))
+        negatives = load_negative_events(conn, stat_type, start_date, end_date, negative_limit, seed, batch_size)
+        all_events = positives + negatives
+        print(f"loaded events positives={len(positives)} negatives={len(negatives)}", flush=True)
+        samples = materialize_events(conn, all_events, daily_window, weekly_window, batch_size)
+    train_rows, test_rows = split_train_test(samples, train_ratio, seed)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_jsonl(output_dir / "train.jsonl", train_rows)
+    write_jsonl(output_dir / "test.jsonl", test_rows)
+    write_jsonl(output_dir / "all.jsonl", samples)
+    print(f"dataset written dir={output_dir} train={len(train_rows)} test={len(test_rows)} all={len(samples)}", flush=True)
+    return len(train_rows), len(test_rows)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,7 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    build_dataset(
+    build_recall60_dataset(
         output_dir=args.output_dir,
         stat_type=args.stat_type,
         start_date=parse_date(args.start_date),

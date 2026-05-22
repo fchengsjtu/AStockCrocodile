@@ -78,8 +78,8 @@ if ($Mode -eq "diagnose") {
   exit 0
 }
 
-$DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall60/data" }
-$ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall60/data_validation" }
+$DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall60/data_partial_week" }
+$ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall60/data_validation_partial_week" }
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { "blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-lora" }
 $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.60" }
 $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260560" }
@@ -104,7 +104,7 @@ if ($Mode -eq "smoke") {
   $GradSteps = if ($env:GRADIENT_ACCUMULATION_STEPS) { $env:GRADIENT_ACCUMULATION_STEPS } else { "1" }
 } else {
   $TrainStart = "20110101"
-  $TrainEnd = "20251231"
+  $TrainEnd = "20241231"
   $ValidationStart = "20260101"
   $ValidationEnd = "20260430"
   $PositiveLimit = $env:POSITIVE_LIMIT

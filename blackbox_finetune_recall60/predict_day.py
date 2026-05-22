@@ -22,6 +22,7 @@ from blackbox_finetune_recall60.common import (
     load_kline_map,
     mysql_connect,
     parse_date,
+    pick_weekly_window,
     pick_window,
 )
 from blackbox_finetune_recall60.gpu import prepare_rtx3060
@@ -58,7 +59,7 @@ def predict_day(
             selected = 0
             for scode in batch:
                 daily = pick_window(daily_map.get(scode, []), anchor, daily_window)
-                weekly = pick_window(weekly_map.get(scode, []), anchor, weekly_window)
+                weekly = pick_weekly_window(weekly_map.get(scode, []), daily_map.get(scode, []), anchor, weekly_window)
                 if daily is None or weekly is None:
                     continue
                 prompt = tokenizer.apply_chat_template(build_messages(scode, anchor, daily, weekly), tokenize=False, add_generation_prompt=True)
