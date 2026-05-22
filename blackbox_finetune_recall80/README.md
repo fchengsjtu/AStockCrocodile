@@ -11,7 +11,8 @@ This target writes to its own output directory and uses its own training seed, s
 - Negative samples are trading days outside each positive sample's `PrevTradeDate +/- 3` trading-day window.
 - Each positive sample input contains the anchor date plus the previous 55 daily K-lines and previous 55 weekly K-lines.
 - Each negative sample input contains the negative trading day plus the previous 55 daily K-lines and previous 55 weekly K-lines.
-- Training period: `20110101-20251231`.
+- If the anchor date is Monday-Thursday, the latest weekly K-line is built in memory from that week's Monday-to-anchor daily K-lines; it is not written to the database.
+- Training period: `20110101-20241231`.
 - Validation period: `20260101-20260430`.
 - Target metric: positive recall, meaning the correctness rate when the sample is actually positive.
 - Required target: `positive_recall >= 80%`.
@@ -46,7 +47,7 @@ cd D:\Documents\StockInfoCrawler
 powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall80\scripts\one_click_deploy.ps1 full
 ```
 
-The one-click scripts reuse existing `train.jsonl` and `test.jsonl` files in `blackbox_finetune_recall80/data` and `blackbox_finetune_recall80/data_validation`. After the first full dataset build, later full runs skip the expensive sample materialization step and go straight to training/evaluation.
+The one-click scripts reuse existing `train.jsonl` and `test.jsonl` files in `blackbox_finetune_recall80/data_partial_week` and `blackbox_finetune_recall80/data_validation_partial_week`. After the first full dataset build, later full runs skip the expensive sample materialization step and go straight to training/evaluation.
 
 Force a full dataset rebuild:
 
@@ -64,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall80\scripts\on
 Remove-Item Env:\REBUILD_VALIDATION_DATASET
 ```
 
-Training also caches tokenized samples under `blackbox_finetune_recall80/data/tokenized`. If `train.jsonl`, `BASE_MODEL`, and `MAX_SEQ_LENGTH` are unchanged, later training runs load the tokenized cache and skip the slow tokenization pass.
+Training also caches tokenized samples under `blackbox_finetune_recall80/data_partial_week/tokenized`. If `train.jsonl`, `BASE_MODEL`, and `MAX_SEQ_LENGTH` are unchanged, later training runs load the tokenized cache and skip the slow tokenization pass.
 
 Force tokenization rebuild:
 
@@ -82,7 +83,7 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall80\scripts\on
 Remove-Item Env:\NO_AUTO_RESUME
 ```
 
-If a few 2048-token batches hit CUDA OOM on Windows, training now clears the CUDA cache, skips that micro batch, and continues. Abort happens only after `OOM_PATIENCE` consecutive OOM batches. If OOM persists, reduce sequence length and reuse the same checkpoint:
+If a few 1024-token batches hit CUDA OOM on Windows, training now clears the CUDA cache, skips that micro batch, and continues. Abort happens only after `OOM_PATIENCE` consecutive OOM batches. If OOM persists, reduce sequence length and reuse the same checkpoint:
 
 ```powershell
 $env:MAX_SEQ_LENGTH='1024'
@@ -90,7 +91,7 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall80\scripts\on
 Remove-Item Env:\MAX_SEQ_LENGTH
 ```
 
-The default learning rate is `1e-5`. When non-finite loss or gradient appears, training counts total skipped batches and automatically halves the optimizer learning rate every 10 skips down to `1e-6`. If total non-finite skips reach `NONFINITE_SKIP_LIMIT` (default `100`), training stops so you can resume from an earlier checkpoint.
+The default learning rate is `2e-5`. When non-finite loss or gradient appears, training counts total skipped batches and automatically halves the optimizer learning rate every 10 skips down to `1e-6`. If total non-finite skips reach `NONFINITE_SKIP_LIMIT` (default `100`), training stops so you can resume from an earlier checkpoint.
 
 For a more conservative resume:
 
@@ -116,9 +117,9 @@ Build the training dataset:
 ```powershell
 python -m blackbox_finetune_recall80.build_dataset `
   --start-date 20110101 `
-  --end-date 20251231 `
+  --end-date 20241231 `
   --negative-ratio 1.0 `
-  --output-dir blackbox_finetune_recall80/data `
+  --output-dir blackbox_finetune_recall80/data_partial_week `
   --daily-window 55 `
   --weekly-window 55 `
   --batch-size 80
@@ -131,7 +132,7 @@ python -m blackbox_finetune_recall80.build_validation_dataset `
   --start-date 20260101 `
   --end-date 20260430 `
   --negative-ratio 1.0 `
-  --output-dir blackbox_finetune_recall80/data_validation `
+  --output-dir blackbox_finetune_recall80/data_validation_partial_week `
   --daily-window 55 `
   --weekly-window 55 `
   --batch-size 80
@@ -142,13 +143,13 @@ Train on WSL2/Linux with QLoRA:
 ```bash
 python -m blackbox_finetune_recall80.train \
   --base-model Qwen/Qwen2.5-0.5B-Instruct \
-  --data-dir blackbox_finetune_recall80/data \
+  --data-dir blackbox_finetune_recall80/data_partial_week \
   --output-dir blackbox_finetune_recall80/runs/qwen2.5-0.5b-blackbox-recall80-lora \
-  --max-seq-length 2048 \
+  --max-seq-length 1024 \
   --epochs 1 \
   --batch-size 1 \
   --gradient-accumulation-steps 8 \
-  --learning-rate 2e-4 \
+  --learning-rate 2e-5 \
   --cuda-device 0
 ```
 
@@ -157,13 +158,13 @@ Train on native Windows with 4-bit loading disabled:
 ```powershell
 python -m blackbox_finetune_recall80.train `
   --base-model Qwen/Qwen2.5-0.5B-Instruct `
-  --data-dir blackbox_finetune_recall80/data `
+  --data-dir blackbox_finetune_recall80/data_partial_week `
   --output-dir blackbox_finetune_recall80/runs/qwen2.5-0.5b-blackbox-recall80-lora `
-  --max-seq-length 2048 `
+  --max-seq-length 1024 `
   --epochs 1 `
   --batch-size 1 `
   --gradient-accumulation-steps 8 `
-  --learning-rate 2e-4 `
+  --learning-rate 2e-5 `
   --cuda-device 0 `
   --no-4bit
 ```
@@ -178,10 +179,10 @@ Evaluate and enforce the `80%` positive-recall target:
 python -m blackbox_finetune_recall80.evaluate `
   --base-model Qwen/Qwen2.5-0.5B-Instruct `
   --adapter-dir blackbox_finetune_recall80/runs/qwen2.5-0.5b-blackbox-recall80-lora/adapter `
-  --data-dir blackbox_finetune_recall80/data_validation `
+  --data-dir blackbox_finetune_recall80/data_validation_partial_week `
   --threshold 0.50 `
   --min-positive-recall 0.80 `
-  --max-seq-length 512 `
+  --max-seq-length 1024 `
   --cuda-device 0
 ```
 
@@ -192,7 +193,7 @@ python -m blackbox_finetune_recall80.predict_day `
   --date 20260514 `
   --adapter-dir blackbox_finetune_recall80/runs/qwen2.5-0.5b-blackbox-recall80-lora/adapter `
   --threshold 0.50 `
-  --max-seq-length 512 `
+  --max-seq-length 1024 `
   --cuda-device 0 `
   --limit 20 `
   --output data\blackbox_recall80_predictions_20260514.csv

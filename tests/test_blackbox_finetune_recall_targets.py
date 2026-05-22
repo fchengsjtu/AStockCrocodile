@@ -22,7 +22,7 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertEqual(common.DEFAULT_MIN_POSITIVE_RECALL, target / 100)
                 self.assertEqual(common.DEFAULT_TRAIN_SEED, 20260500 + target)
                 self.assertEqual(common.DEFAULT_TRAIN_START_DATE, "20110101")
-                expected_train_end = "20241231" if target == 60 else "20251231"
+                expected_train_end = "20241231" if target in (60, 80) else "20251231"
                 self.assertEqual(common.DEFAULT_TRAIN_END_DATE, expected_train_end)
                 self.assertEqual(common.DEFAULT_VALIDATION_START_DATE, "20260101")
                 self.assertEqual(common.DEFAULT_VALIDATION_END_DATE, "20260430")
@@ -45,7 +45,13 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertEqual(evaluate_args.min_positive_recall, target / 100)
                 self.assertEqual(train_args.train_seed, 20260500 + target)
                 self.assertEqual(train_args.cuda_device, "0")
-                self.assertEqual(train_args.learning_rate, 1e-5)
+                expected_learning_rate = 2e-5 if target == 80 else 1e-5
+                self.assertEqual(train_args.learning_rate, expected_learning_rate)
+                expected_max_seq_length = 1024 if target == 80 else 2048
+                self.assertEqual(train_args.max_seq_length, expected_max_seq_length)
+                expected_eval_seq_length = 1024 if target == 80 else 512
+                self.assertEqual(evaluate_args.max_seq_length, expected_eval_seq_length)
+                self.assertEqual(predict_args.max_seq_length, expected_eval_seq_length)
                 self.assertEqual(train_args.max_grad_norm, 0.5)
                 self.assertEqual(train_args.checkpoint_every, 1000)
                 self.assertEqual(train_args.nonfinite_patience, 20)
