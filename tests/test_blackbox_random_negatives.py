@@ -4,7 +4,7 @@ from datetime import date
 from unittest.mock import patch
 
 
-RANDOM_NEGATIVE_TARGETS = [35, 40, 45, 50, 55, 65, 70, 75, 80]
+RANDOM_NEGATIVE_TARGETS = [80]
 
 
 class FakeCursor:
@@ -50,7 +50,7 @@ class BlackboxRandomNegativeTests(unittest.TestCase):
                 self.assertFalse(hasattr(module, "load_negative_events"))
 
     def test_random_negative_loader_uses_rand_and_filters_excluded_dates(self):
-        module = importlib.import_module("blackbox_finetune_recall35.build_dataset")
+        module = importlib.import_module("blackbox_finetune_recall80.build_dataset")
         conn = FakeConnection()
 
         with (

@@ -22,6 +22,7 @@ from blackbox_finetune_recall70.common import (
     load_kline_map,
     mysql_connect,
     parse_date,
+    pick_weekly_window,
     pick_window,
 )
 from blackbox_finetune_recall70.gpu import prepare_rtx3060
@@ -61,7 +62,7 @@ def predict_day(
             selected = 0
             for scode in batch:
                 daily = pick_window(daily_map.get(scode, []), anchor, daily_window)
-                weekly = pick_window(weekly_map.get(scode, []), anchor, weekly_window)
+                weekly = pick_weekly_window(weekly_map.get(scode, []), daily_map.get(scode, []), anchor, weekly_window)
                 if daily is None or weekly is None:
                     continue
                 prompt = tokenizer.apply_chat_template(build_messages(scode, anchor, daily, weekly), tokenize=False, add_generation_prompt=True)
@@ -108,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=40)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--max-seq-length", type=int, default=512)
+    parser.add_argument("--max-seq-length", type=int, default=2048)
     parser.add_argument("--save-top-n", type=int, default=5, help="Save top N predictions to MySQL; default saves top 5.")
     parser.add_argument("--no-save-db", action="store_true", help="Do not save top predictions to MySQL.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")

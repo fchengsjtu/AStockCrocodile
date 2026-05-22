@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -11,8 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from blackbox_finetune.build_dataset import (
-    excluded_dates_by_symbol,
-    load_excluded_positive_windows,
+    load_negative_events,
     load_positive_events,
     split_train_test,
 )
@@ -22,7 +20,6 @@ from blackbox_finetune_recall75.common import (
     DEFAULT_TRAIN_END_DATE,
     DEFAULT_TRAIN_START_DATE,
     DEFAULT_WINDOW,
-    SampleEvent,
     materialize_events,
     mysql_connect,
     parse_date,
@@ -30,49 +27,6 @@ from blackbox_finetune_recall75.common import (
 )
 
 DEFAULT_SEED = 20260518
-
-
-def load_random_negative_events(
-    conn,
-    stat_type: str,
-    start_date: date,
-    end_date: date,
-    limit: int,
-    seed: int,
-    batch_size: int,
-) -> list[SampleEvent]:
-    positive_windows = load_excluded_positive_windows(conn, stat_type, start_date, end_date)
-    excluded = excluded_dates_by_symbol(conn, positive_windows, start_date, end_date, 3, batch_size)
-    candidates: list[SampleEvent] = []
-    seen: set[tuple[str, date]] = set()
-    scan_limit = max(limit * 3, limit + 1000, 5000)
-    attempt = 0
-    while len(candidates) < limit and attempt < 5:
-        sql = """
-            SELECT SCode, DATE(KTime)
-            FROM dkandles
-            WHERE KType = 'D'
-              AND KTime >= %s
-              AND KTime < %s
-            ORDER BY RAND(%s)
-            LIMIT %s
-        """
-        with conn.cursor() as cur:
-            cur.execute(sql, (start_date, end_date + timedelta(days=1), seed + attempt, scan_limit))
-            rows = cur.fetchall()
-        for scode, trade_date_value in rows:
-            scode = str(scode)
-            trade_date = parse_date(trade_date_value)
-            key = (scode, trade_date)
-            if key in seen or trade_date in excluded.get(scode, set()):
-                continue
-            seen.add(key)
-            candidates.append(SampleEvent(scode, trade_date, 0, "negative", None))
-            if len(candidates) >= limit:
-                break
-        attempt += 1
-        scan_limit *= 2
-    return candidates[:limit]
 
 
 def build_recall75_dataset(
@@ -91,7 +45,7 @@ def build_recall75_dataset(
     with mysql_connect() as conn:
         positives = load_positive_events(conn, stat_type, start_date, end_date, positive_limit)
         negative_limit = max(1, int(len(positives) * negative_ratio))
-        negatives = load_random_negative_events(conn, stat_type, start_date, end_date, negative_limit, seed, batch_size)
+        negatives = load_negative_events(conn, stat_type, start_date, end_date, negative_limit, seed, batch_size)
         all_events = positives + negatives
         print(f"loaded events positives={len(positives)} negatives={len(negatives)}", flush=True)
         samples = materialize_events(conn, all_events, daily_window, weekly_window, batch_size)

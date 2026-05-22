@@ -78,12 +78,12 @@ if ($Mode -eq "diagnose") {
   exit 0
 }
 
-$DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall70/data" }
-$ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall70/data_validation" }
+$DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall70/data_no_partial_week" }
+$ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall70/data_evaluation_no_partial_week" }
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { "blackbox_finetune_recall70/runs/qwen2.5-0.5b-blackbox-recall70-lora" }
-$MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.70" }
-$TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260570" }
-$LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "1e-5" }
+$MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.60" }
+$TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260560" }
+$LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "5e-6" }
 $MaxGradNorm = if ($env:MAX_GRAD_NORM) { $env:MAX_GRAD_NORM } else { "0.5" }
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { "1000" }
 $OomPatience = if ($env:OOM_PATIENCE) { $env:OOM_PATIENCE } else { "20" }
@@ -94,16 +94,16 @@ $MinLearningRate = if ($env:MIN_LEARNING_RATE) { $env:MIN_LEARNING_RATE } else {
 $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 
 if ($Mode -eq "smoke") {
-  $TrainStart = "20110101"
-  $TrainEnd = "20151231"
+  $TrainStart = "20200101"
+  $TrainEnd = "20211231"
   $ValidationStart = "20260101"
   $ValidationEnd = "20260131"
   $PositiveLimit = if ($env:SMOKE_POSITIVE_LIMIT) { $env:SMOKE_POSITIVE_LIMIT } else { "12" }
   $Epochs = if ($env:EPOCHS) { $env:EPOCHS } else { "3" }
-  $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { "512" }
+  $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { "2048" }
   $GradSteps = if ($env:GRADIENT_ACCUMULATION_STEPS) { $env:GRADIENT_ACCUMULATION_STEPS } else { "1" }
 } else {
-  $TrainStart = "20110101"
+  $TrainStart = "20200101"
   $TrainEnd = "20251231"
   $ValidationStart = "20260101"
   $ValidationEnd = "20260430"

@@ -10,7 +10,7 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         parser = build_dataset.build_parser()
         args = parser.parse_args([])
 
-        self.assertEqual(args.start_date, "20110101")
+        self.assertEqual(args.start_date, "20200101")
         self.assertEqual(args.end_date, "20251231")
         self.assertEqual(args.output_dir, common.DEFAULT_DATA_DIR)
 
@@ -48,7 +48,7 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
     def test_train_stability_defaults(self):
         args = train.build_parser().parse_args([])
 
-        self.assertEqual(args.learning_rate, 1e-5)
+        self.assertEqual(args.learning_rate, 5e-6)
         self.assertEqual(args.max_grad_norm, 0.5)
         self.assertEqual(args.checkpoint_every, 1000)
         self.assertEqual(args.nonfinite_patience, 20)
@@ -57,6 +57,8 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         self.assertEqual(args.lr_backoff_factor, 0.5)
         self.assertEqual(args.min_learning_rate, 1e-6)
         self.assertEqual(args.oom_patience, 20)
+        self.assertFalse(hasattr(args, "min_seq_length_on_oom"))
+        self.assertFalse(hasattr(args, "oom_shrink_factor"))
         self.assertFalse(args.no_auto_resume)
 
     def test_format_duration_for_progress_log(self):

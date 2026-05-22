@@ -220,6 +220,7 @@ def train_recall60_lora(
     model.to(device)
     model.train()
 
+    max_seq_length = max(64, max_seq_length)
     tokenized = _load_or_build_tokenized(tokenizer, rows, data_dir, train_path, base_model, max_seq_length, rebuild_token_cache)
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate)
     total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
@@ -233,7 +234,8 @@ def train_recall60_lora(
     print(
         f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
-        f"train_seed={train_seed} lr={learning_rate} max_grad_norm={max_grad_norm}",
+        f"train_seed={train_seed} lr={learning_rate} max_grad_norm={max_grad_norm} "
+        f"max_seq_length={max_seq_length}",
         flush=True,
     )
     if start_update >= total_updates:
@@ -291,18 +293,22 @@ def train_recall60_lora(
         except torch.OutOfMemoryError as exc:
             consecutive_oom += 1
             optimizer.zero_grad(set_to_none=True)
+            tensors = None
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            for group in optimizer.param_groups:
+                group["lr"] = max(min_learning_rate, float(group["lr"]) * 0.5)
             print(
                 f"WARNING skipped CUDA OOM before update {max(1, update)} "
                 f"micro_step={micro_step + 1}/{total_micro_steps} "
-                f"consecutive={consecutive_oom}/{oom_patience}: {exc}",
+                f"consecutive={consecutive_oom}/{oom_patience} "
+                f"max_seq_length={max_seq_length} lr={optimizer.param_groups[0]['lr']}: {exc}",
                 flush=True,
             )
             if consecutive_oom >= max(1, oom_patience):
                 raise RuntimeError(
                     f"Training aborted after {consecutive_oom} consecutive CUDA OOM errors near update {max(1, update)}. "
-                    f"Retry with a smaller --max-seq-length, for example MAX_SEQ_LENGTH=1024."
+                    f"MAX_SEQ_LENGTH was not changed automatically; set --max-seq-length explicitly if you want a smaller value."
                 )
             continue
         if (micro_step + 1) % max(1, gradient_accumulation_steps) == 0:
@@ -379,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
-    parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--train-seed", type=int, default=DEFAULT_TRAIN_SEED, help="Target-specific seed for independent LoRA parameters.")
     parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Clip LoRA gradients and skip non-finite updates.")
     parser.add_argument("--checkpoint-every", type=int, default=1000, help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
