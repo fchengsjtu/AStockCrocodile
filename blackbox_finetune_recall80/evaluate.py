@@ -15,6 +15,7 @@ from blackbox_finetune_recall80.common import (
     DEFAULT_MIN_POSITIVE_RECALL,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_VALIDATION_DIR,
+    compact_messages_from_sample,
     read_jsonl,
 )
 from blackbox_finetune_recall80.gpu import prepare_rtx3060
@@ -37,7 +38,8 @@ def evaluate_dataset(
     model, tokenizer = load_model(base_model, adapter_dir)
     tp = fp = tn = fn = positives = 0
     for idx, row in enumerate(rows, start=1):
-        prompt = tokenizer.apply_chat_template(row["messages"][:-1], tokenize=False, add_generation_prompt=True)
+        messages = compact_messages_from_sample(row)
+        prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
         pred = score_prediction(model, tokenizer, prompt, max_seq_length, threshold)
         predicted_positive = pred["label"] == "positive"
         actual_positive = int(row["metadata"]["label"]) == 1

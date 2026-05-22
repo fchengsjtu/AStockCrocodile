@@ -1,7 +1,7 @@
 import unittest
 from datetime import date, timedelta
 
-from blackbox_finetune_recall80 import build_dataset, build_validation_dataset, common
+from blackbox_finetune_recall80 import build_dataset, build_validation_dataset, common, evaluate, predict_day, train
 
 
 def daily(day, open_, high, low, close, volume=100.0, amount=1000.0):
@@ -38,6 +38,31 @@ class BlackboxFinetuneRecall80Tests(unittest.TestCase):
         self.assertEqual(args.start_date, "20260101")
         self.assertEqual(args.end_date, "20260430")
         self.assertEqual(str(args.output_dir), "blackbox_finetune_recall80\\data_validation_partial_week")
+
+    def test_tokenization_uses_compact_csv_scheme_without_changing_recall80_defaults(self):
+        self.assertEqual(common.COMPACT_DAILY_WINDOW, 21)
+        self.assertEqual(common.COMPACT_WEEKLY_WINDOW, 13)
+        self.assertEqual(train.build_parser().parse_args([]).max_seq_length, 1024)
+        self.assertEqual(evaluate.build_parser().parse_args([]).max_seq_length, 1024)
+        self.assertEqual(predict_day.build_parser().parse_args(["--date", "20260514"]).max_seq_length, 1024)
+
+    def test_compact_prompt_normalizes_prices_volume_and_amount(self):
+        daily_rows = [
+            daily("20260101", 1, 2, 1, 2, volume=100, amount=1000),
+            daily("20260102", 2, 3, 1, 2, volume=200, amount=3000),
+        ]
+        weekly_rows = [
+            daily("20260102", 1, 2, 1, 2, volume=10, amount=50),
+            daily("20260109", 2, 3, 1, 2, volume=30, amount=150),
+        ]
+
+        prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows, daily_window=2, weekly_window=2)
+
+        self.assertIn("cols=dt/o/h/l/c/v/a/m5/m13/m34/m55", prompt)
+        self.assertIn("D\n1,0.5,1,0.5,1,0.67,0.5", prompt)
+        self.assertIn("2,1,1.5,0.5,1,1.33,1.5", prompt)
+        self.assertIn("W\n1,0.5,1,0.5,1,0.5,0.5", prompt)
+        self.assertIn("2,1,1.5,0.5,1,1.5,1.5", prompt)
 
     def test_pick_weekly_window_appends_temporary_week_for_midweek_anchor(self):
         first_week = date(2025, 3, 21)

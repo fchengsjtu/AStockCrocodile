@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Sequence
 
 from blackbox_finetune.common import *  # noqa: F401,F403
-from blackbox_finetune.common import DEFAULT_BASE_MODEL, DEFAULT_STAT_TYPE, DEFAULT_WINDOW, SampleEvent, build_messages
+from blackbox_finetune.common import DEFAULT_BASE_MODEL, DEFAULT_STAT_TYPE, DEFAULT_WINDOW, SampleEvent
 from llm_finetune.common import compact_date, iter_batches, load_kline_map, parse_date
 
 DEFAULT_DATA_DIR = Path("blackbox_finetune_recall80") / "data_partial_week"
@@ -18,10 +18,137 @@ DEFAULT_VALIDATION_START_DATE = "20260101"
 DEFAULT_VALIDATION_END_DATE = "20260430"
 DEFAULT_MIN_POSITIVE_RECALL = 0.80
 DEFAULT_TRAIN_SEED = 20260580
+CSV_COLUMNS = "dt/o/h/l/c/v/a/m5/m13/m34/m55"
+COMPACT_DAILY_WINDOW = 21
+COMPACT_WEEKLY_WINDOW = 13
+SYSTEM_PROMPT = "Classify A-share surge. Return JSON."
+
+
+def label_answer(label: int) -> str:
+    return '{"p":1}' if label else '{"p":0}'
+
+
+def _scaled_number(number: float, scale: float, suffix: str, decimals: int) -> str:
+    text = f"{number / scale:.{decimals}f}".rstrip("0").rstrip(".")
+    if text == "-0":
+        text = "0"
+    return f"{text}{suffix}"
 
 
 def _row_date(row: dict) -> date:
     return parse_date(row["date"])
+
+
+def _csv_number(value) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return str(value)
+    abs_number = abs(number)
+    if abs_number >= 1_000_000_000:
+        return _scaled_number(number, 1_000_000_000, "b", 2)
+    if abs_number >= 1_000_000:
+        return _scaled_number(number, 1_000_000, "m", 2)
+    if abs_number >= 1000:
+        return _scaled_number(number, 1000, "k", 1)
+    return f"{number:.2f}".rstrip("0").rstrip(".") or "0"
+
+
+def _float_value(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _average_positive(rows: list[dict], key: str) -> float:
+    values = [_float_value(row.get(key)) for row in rows]
+    positives = [value for value in values if value > 0]
+    return sum(positives) / len(positives) if positives else 0.0
+
+
+def _ratio_number(value, denominator: float) -> str:
+    if denominator <= 0:
+        return "0"
+    return f"{_float_value(value) / denominator:.2f}".rstrip("0").rstrip(".") or "0"
+
+
+def _compact_kline_csv(rows: list[dict]) -> str:
+    keys = ["open", "high", "low", "close", "volume", "amount", "ma5", "ma13", "ma34", "ma55"]
+    close_avg = _average_positive(rows, "close")
+    volume_avg = _average_positive(rows, "volume")
+    amount_avg = _average_positive(rows, "amount")
+    lines = []
+    for index, row in enumerate(rows, start=1):
+        values = [str(index)]
+        for key in keys:
+            if key == "volume":
+                values.append(_ratio_number(row.get(key), volume_avg))
+            elif key == "amount":
+                values.append(_ratio_number(row.get(key), amount_avg))
+            elif key in {"open", "high", "low", "close", "ma5", "ma13", "ma34", "ma55"}:
+                values.append(_ratio_number(row.get(key), close_avg))
+            else:
+                values.append(_csv_number(row.get(key)))
+        lines.append(",".join(values))
+    return "\n".join(lines)
+
+
+def build_compact_prompt(
+    scode: str,
+    anchor_date: date,
+    daily_55: list[dict],
+    weekly_55: list[dict],
+    daily_window: int = COMPACT_DAILY_WINDOW,
+    weekly_window: int = COMPACT_WEEKLY_WINDOW,
+) -> str:
+    daily_rows = daily_55[-daily_window:] if daily_window > 0 else []
+    weekly_rows = weekly_55[-weekly_window:] if weekly_window > 0 else []
+    return (
+        f"s={scode}\n"
+        f"cols={CSV_COLUMNS}\n"
+        "D\n"
+        f"{_compact_kline_csv(daily_rows)}\n"
+        "W\n"
+        f"{_compact_kline_csv(weekly_rows)}"
+    )
+
+
+def build_messages(scode: str, anchor_date: date, daily_55: list[dict], weekly_55: list[dict], label: int | None = None) -> list[dict]:
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": build_compact_prompt(scode, anchor_date, daily_55, weekly_55)},
+    ]
+    if label is not None:
+        messages.append({"role": "assistant", "content": label_answer(label)})
+    return messages
+
+
+def _rows_from_compact_payload(rows: list[list]) -> list[dict]:
+    keys = ["date", "open", "high", "low", "close", "volume", "amount", "ma5", "ma13", "ma34", "ma55"]
+    return [dict(zip(keys, row)) for row in rows]
+
+
+def compact_messages_from_sample(row: dict) -> list[dict]:
+    messages = row["messages"]
+    user_content = messages[1]["content"]
+    if "daily_55" not in user_content or "weekly_55" not in user_content:
+        return messages
+    try:
+        import json
+
+        data = json.loads(user_content)
+        return build_messages(
+            str(data["scode"]),
+            parse_date(data["anchor_date"]),
+            _rows_from_compact_payload(data["daily_55"]),
+            _rows_from_compact_payload(data["weekly_55"]),
+            int(row["metadata"]["label"]) if len(messages) > 2 else None,
+        )
+    except Exception:
+        return messages
 
 
 def _average_close(rows: list[dict], count: int) -> float:
