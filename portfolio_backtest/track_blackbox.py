@@ -64,7 +64,8 @@ def run_tracker(args) -> tuple[int, int, int]:
         ensure_portfolio_tables(conn)
         first_date = first_prediction_date(conn, args.strategy_name)
         if first_date is None:
-            raise RuntimeError(f"No saved blackbox predictions found for strategy {args.strategy_name}. Run predict_day first.")
+            print(f"No saved blackbox predictions found for strategy {args.strategy_name}; skip tracking.", flush=True)
+            return 0, 0, 0
         start_date = parse_date(args.start_date) if args.start_date else first_date
         end_date = parse_date(args.end_date) if args.end_date else latest_daily_date(conn)
         if end_date is None:

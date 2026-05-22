@@ -671,6 +671,32 @@ Track a live/paper portfolio from the first saved prediction date for a strategy
   --strategy-name blackbox_finetune_recall30
 ```
 
+Daily after-close automation runs the full daily workflow at 16:00: incremental daily K-line crawl, weekly K-line generation on Fridays, monthly K-line generation on the last trading day of the month, black-box recallXX top-5 predictions written to `blackbox_predictions`, and prediction portfolio tracking.
+
+Run it manually:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_daily_after_close.ps1
+```
+
+Install the Windows scheduled task:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install_daily_after_close_task.ps1
+```
+
+Useful manual options:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_daily_after_close.ps1 `
+  -TradeDate 20260522 `
+  -BlackboxTopN 5 `
+  -BlackboxThreshold 0.50 `
+  -CrawlerWorkers 8
+```
+
+The script skips missing recallXX directories or strategies whose trained adapter is not present, so unfinished models do not block the daily K-line update.
+
 ## K-line Statistics
 
 `kline_statistics.py` computes statistics from existing daily rows in `dkandles` and writes matched rows to MySQL table `klinestatistics`.
