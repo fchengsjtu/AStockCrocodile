@@ -26,6 +26,7 @@ from blackbox_finetune_recall70.common import (
 )
 from blackbox_finetune_recall70.gpu import prepare_rtx3060
 from blackbox_finetune_recall70.inference import load_model, score_prediction
+from blackbox_finetune.prediction_store import save_top_predictions
 from stock_selector import latest_trade_date
 from surge_pattern_miner import load_symbols
 
@@ -41,6 +42,8 @@ def predict_day(
     limit: int | None,
     output: Path | None,
     max_seq_length: int,
+    save_db: bool,
+    save_top_n: int,
 ) -> pd.DataFrame:
     anchor = parse_date(trade_date)
     model, tokenizer = load_model(base_model, adapter_dir)
@@ -84,6 +87,10 @@ def predict_day(
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
         result.to_csv(output, index=False, encoding="utf-8-sig")
+    if save_db:
+        with mysql_connect() as conn:
+            saved = save_top_predictions(conn, result, "blackbox_finetune_recall70", threshold, max_seq_length, save_top_n)
+        print(json.dumps({"date": str(anchor), "saved_predictions": saved, "strategy": "blackbox_finetune_recall70"}, ensure_ascii=False), flush=True)
     print(json.dumps({"date": str(anchor), "selected": len(result)}, ensure_ascii=False), flush=True)
     if not result.empty:
         print(result.to_string(index=False), flush=True)
@@ -102,6 +109,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--max-seq-length", type=int, default=512)
+    parser.add_argument("--save-top-n", type=int, default=5, help="Save top N predictions to MySQL; default saves top 5.")
+    parser.add_argument("--no-save-db", action="store_true", help="Do not save top predictions to MySQL.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
     parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
     return parser
@@ -121,6 +130,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.limit,
         args.output,
         max(64, args.max_seq_length),
+        not args.no_save_db,
+        max(0, args.save_top_n),
     )
 
 

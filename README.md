@@ -654,6 +654,23 @@ Run portfolio backtest with a trained black-box model. Use the black-box virtual
   --limit-per-day 5
 ```
 
+Black-box `predict_day` saves the top 5 ranked predictions to MySQL table `blackbox_predictions` by default, including the strategy name:
+
+```powershell
+.\.venv-blackbox-finetune-recall30\Scripts\python.exe -m blackbox_finetune_recall30.predict_day `
+  --date 20260514 `
+  --threshold 0.50 `
+  --max-seq-length 512 `
+  --cuda-device 0
+```
+
+Track a live/paper portfolio from the first saved prediction date for a strategy. It uses the same T+1, stop-loss, take-profit, and day-3 exit rules as `portfolio_backtest.run`, starts with `1000000` cash by default, and writes daily value, holdings, and trades to the portfolio tables with `BacktestName=blackbox_prediction_tracker_v1`:
+
+```powershell
+.\.venv-blackbox-finetune-recall30\Scripts\python.exe -m portfolio_backtest.track_blackbox `
+  --strategy-name blackbox_finetune_recall30
+```
+
 ## K-line Statistics
 
 `kline_statistics.py` computes statistics from existing daily rows in `dkandles` and writes matched rows to MySQL table `klinestatistics`.
