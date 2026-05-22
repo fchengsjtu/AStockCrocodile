@@ -19,8 +19,8 @@ DEFAULT_VALIDATION_END_DATE = "20260430"
 DEFAULT_MIN_POSITIVE_RECALL = 0.60
 DEFAULT_TRAIN_SEED = 20260560
 CSV_COLUMNS = "dt/o/h/l/c/v/a/m5/m13/m34/m55"
-COMPACT_DAILY_WINDOW = 7
-COMPACT_WEEKLY_WINDOW = 7
+COMPACT_DAILY_WINDOW = 21
+COMPACT_WEEKLY_WINDOW = 13
 SYSTEM_PROMPT = "Classify A-share surge. Return JSON."
 
 
@@ -77,6 +77,7 @@ def _ratio_number(value, denominator: float) -> str:
 
 def _compact_kline_csv(rows: list[dict]) -> str:
     keys = ["open", "high", "low", "close", "volume", "amount", "ma5", "ma13", "ma34", "ma55"]
+    close_avg = _average_positive(rows, "close")
     volume_avg = _average_positive(rows, "volume")
     amount_avg = _average_positive(rows, "amount")
     lines = []
@@ -87,6 +88,8 @@ def _compact_kline_csv(rows: list[dict]) -> str:
                 values.append(_ratio_number(row.get(key), volume_avg))
             elif key == "amount":
                 values.append(_ratio_number(row.get(key), amount_avg))
+            elif key in {"open", "high", "low", "close", "ma5", "ma13", "ma34", "ma55"}:
+                values.append(_ratio_number(row.get(key), close_avg))
             else:
                 values.append(_csv_number(row.get(key)))
         lines.append(",".join(values))

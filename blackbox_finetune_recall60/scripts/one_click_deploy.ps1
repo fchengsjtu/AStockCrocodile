@@ -100,7 +100,7 @@ if ($Mode -eq "smoke") {
   $ValidationEnd = "20260131"
   $PositiveLimit = if ($env:SMOKE_POSITIVE_LIMIT) { $env:SMOKE_POSITIVE_LIMIT } else { "12" }
   $Epochs = if ($env:EPOCHS) { $env:EPOCHS } else { "3" }
-  $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { "512" }
+  $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { "2048" }
   $GradSteps = if ($env:GRADIENT_ACCUMULATION_STEPS) { $env:GRADIENT_ACCUMULATION_STEPS } else { "1" }
 } else {
   $TrainStart = "20110101"

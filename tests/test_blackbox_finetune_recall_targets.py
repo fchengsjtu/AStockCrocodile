@@ -49,7 +49,7 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertEqual(train_args.learning_rate, expected_learning_rate)
                 expected_max_seq_length = 1024 if target == 80 else 2048
                 self.assertEqual(train_args.max_seq_length, expected_max_seq_length)
-                expected_eval_seq_length = 1024 if target == 80 else 512
+                expected_eval_seq_length = 1024 if target == 80 else 2048 if target == 60 else 512
                 self.assertEqual(evaluate_args.max_seq_length, expected_eval_seq_length)
                 self.assertEqual(predict_args.max_seq_length, expected_eval_seq_length)
                 self.assertEqual(train_args.max_grad_norm, 0.5)

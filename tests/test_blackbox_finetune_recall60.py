@@ -1,7 +1,7 @@
 import unittest
 from datetime import date
 
-from blackbox_finetune_recall60 import build_dataset, build_validation_dataset, common
+from blackbox_finetune_recall60 import build_dataset, build_validation_dataset, common, evaluate, predict_day, train
 
 
 def daily(day, open_, high, low, close, volume=100.0, amount=1000.0):
@@ -34,6 +34,13 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.start_date, "20260101")
         self.assertEqual(args.end_date, "20260430")
         self.assertEqual(args.output_dir, common.DEFAULT_VALIDATION_DIR)
+
+    def test_compact_window_and_sequence_length_defaults_match_2048_format(self):
+        self.assertEqual(common.COMPACT_DAILY_WINDOW, 21)
+        self.assertEqual(common.COMPACT_WEEKLY_WINDOW, 13)
+        self.assertEqual(train.build_parser().parse_args([]).max_seq_length, 2048)
+        self.assertEqual(evaluate.build_parser().parse_args([]).max_seq_length, 2048)
+        self.assertEqual(predict_day.build_parser().parse_args(["--date", "20260514"]).max_seq_length, 2048)
 
     def test_build_partial_weekly_bar_for_monday_to_anchor(self):
         rows = [
@@ -80,17 +87,23 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(window[-1]["close"], 16)
         self.assertEqual(window[-1]["ma5"], (10 + 11 + 12 + 13 + 16) / 5)
 
-    def test_compact_prompt_uses_short_csv_recent_seven_daily_and_weekly(self):
-        daily_rows = [daily(f"202601{day:02d}", day, day + 1, day - 1, day + 0.5) for day in range(1, 11)]
-        weekly_rows = [daily(f"20250{month}01", month, month + 1, month - 1, month + 0.5) for month in range(1, 10)]
+    def test_compact_prompt_uses_short_csv_recent_twenty_one_daily_and_thirteen_weekly(self):
+        daily_rows = [daily(f"202601{day:02d}", day, day + 1, day - 1, day + 0.5) for day in range(1, 26)]
+        weekly_rows = [daily(f"2025{week:02d}01", week, week + 1, week - 1, week + 0.5) for week in range(1, 16)]
 
         prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows)
 
         self.assertIn("cols=dt/o/h/l/c/v/a/m5/m13/m34/m55", prompt)
-        self.assertIn("D\n1,4,", prompt)
-        self.assertIn("7,10,", prompt)
-        self.assertIn("W\n1,3,", prompt)
-        self.assertIn("7,9,", prompt)
+        self.assertEqual(prompt.splitlines().count("D"), 1)
+        self.assertEqual(prompt.splitlines().count("W"), 1)
+        daily_section = prompt.split("D\n", 1)[1].split("\nW\n", 1)[0].splitlines()
+        weekly_section = prompt.split("\nW\n", 1)[1].splitlines()
+        self.assertEqual(len(daily_section), 21)
+        self.assertEqual(len(weekly_section), 13)
+        self.assertTrue(daily_section[0].startswith("1,"))
+        self.assertTrue(daily_section[-1].startswith("21,"))
+        self.assertTrue(weekly_section[0].startswith("1,"))
+        self.assertTrue(weekly_section[-1].startswith("13,"))
         self.assertNotIn("260101", prompt)
         self.assertNotIn("260102", prompt)
         self.assertNotIn("260103", prompt)
@@ -101,7 +114,7 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertNotIn("250301", prompt)
         self.assertNotIn("250901", prompt)
 
-    def test_compact_prompt_normalizes_volume_and_amount_by_window_average(self):
+    def test_compact_prompt_normalizes_prices_volume_and_amount_by_window_average(self):
         daily_rows = [
             daily("20260101", 1, 2, 1, 2, volume=100, amount=1000),
             daily("20260102", 2, 3, 1, 2, volume=200, amount=3000),
@@ -113,10 +126,10 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
 
         prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows, daily_window=2, weekly_window=2)
 
-        self.assertIn("D\n1,1,2,1,2,0.67,0.5", prompt)
-        self.assertIn("2,2,3,1,2,1.33,1.5", prompt)
-        self.assertIn("W\n1,1,2,1,2,0.5,0.5", prompt)
-        self.assertIn("2,2,3,1,2,1.5,1.5", prompt)
+        self.assertIn("D\n1,0.5,1,0.5,1,0.67,0.5", prompt)
+        self.assertIn("2,1,1.5,0.5,1,1.33,1.5", prompt)
+        self.assertIn("W\n1,0.5,1,0.5,1,0.5,0.5", prompt)
+        self.assertIn("2,1,1.5,0.5,1,1.5,1.5", prompt)
 
 
 if __name__ == "__main__":
