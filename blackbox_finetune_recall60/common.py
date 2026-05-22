@@ -56,12 +56,39 @@ def _csv_number(value) -> str:
     return f"{number:.2f}".rstrip("0").rstrip(".") or "0"
 
 
+def _float_value(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _average_positive(rows: list[dict], key: str) -> float:
+    values = [_float_value(row.get(key)) for row in rows]
+    positives = [value for value in values if value > 0]
+    return sum(positives) / len(positives) if positives else 0.0
+
+
+def _ratio_number(value, denominator: float) -> str:
+    if denominator <= 0:
+        return "0"
+    return f"{_float_value(value) / denominator:.2f}".rstrip("0").rstrip(".") or "0"
+
+
 def _compact_kline_csv(rows: list[dict]) -> str:
-    keys = ["date", "open", "high", "low", "close", "volume", "amount", "ma5", "ma13", "ma34", "ma55"]
+    keys = ["open", "high", "low", "close", "volume", "amount", "ma5", "ma13", "ma34", "ma55"]
+    volume_avg = _average_positive(rows, "volume")
+    amount_avg = _average_positive(rows, "amount")
     lines = []
     for index, row in enumerate(rows, start=1):
         values = [str(index)]
-        values.extend(_csv_number(row.get(key)) for key in keys[1:])
+        for key in keys:
+            if key == "volume":
+                values.append(_ratio_number(row.get(key), volume_avg))
+            elif key == "amount":
+                values.append(_ratio_number(row.get(key), amount_avg))
+            else:
+                values.append(_csv_number(row.get(key)))
         lines.append(",".join(values))
     return "\n".join(lines)
 

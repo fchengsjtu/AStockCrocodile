@@ -101,6 +101,23 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertNotIn("250301", prompt)
         self.assertNotIn("250901", prompt)
 
+    def test_compact_prompt_normalizes_volume_and_amount_by_window_average(self):
+        daily_rows = [
+            daily("20260101", 1, 2, 1, 2, volume=100, amount=1000),
+            daily("20260102", 2, 3, 1, 2, volume=200, amount=3000),
+        ]
+        weekly_rows = [
+            daily("20260102", 1, 2, 1, 2, volume=10, amount=50),
+            daily("20260109", 2, 3, 1, 2, volume=30, amount=150),
+        ]
+
+        prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows, daily_window=2, weekly_window=2)
+
+        self.assertIn("D\n1,1,2,1,2,0.67,0.5", prompt)
+        self.assertIn("2,2,3,1,2,1.33,1.5", prompt)
+        self.assertIn("W\n1,1,2,1,2,0.5,0.5", prompt)
+        self.assertIn("2,2,3,1,2,1.5,1.5", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
