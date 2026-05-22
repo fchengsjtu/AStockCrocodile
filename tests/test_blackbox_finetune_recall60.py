@@ -80,6 +80,24 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(window[-1]["close"], 16)
         self.assertEqual(window[-1]["ma5"], (10 + 11 + 12 + 13 + 16) / 5)
 
+    def test_compact_prompt_uses_short_csv_recent_seven_daily_and_weekly(self):
+        daily_rows = [daily(f"202601{day:02d}", day, day + 1, day - 1, day + 0.5) for day in range(1, 11)]
+        weekly_rows = [daily(f"20250{month}01", month, month + 1, month - 1, month + 0.5) for month in range(1, 10)]
+
+        prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows)
+
+        self.assertIn("cols=dt/o/h/l/c/v/a/m5/m13/m34/m55", prompt)
+        self.assertNotIn("260101", prompt)
+        self.assertNotIn("260102", prompt)
+        self.assertNotIn("260103", prompt)
+        self.assertIn("260104", prompt)
+        self.assertIn("260110", prompt)
+        self.assertNotIn("260101,1,", prompt)
+        self.assertNotIn("250101", prompt)
+        self.assertNotIn("250201", prompt)
+        self.assertIn("250301", prompt)
+        self.assertIn("250901", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

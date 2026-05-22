@@ -15,11 +15,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from blackbox_finetune_recall60.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_OUTPUT_DIR, DEFAULT_TRAIN_SEED
+from blackbox_finetune_recall60.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_OUTPUT_DIR, DEFAULT_TRAIN_SEED, compact_messages_from_sample
 from blackbox_finetune_recall60.gpu import prepare_rtx3060
 from llm_finetune.common import read_jsonl
 
-TOKEN_CACHE_VERSION = "v1"
+TOKEN_CACHE_VERSION = "v3_csv11_7d7w"
 
 
 def _missing_dataset_error(data_dir: Path) -> FileNotFoundError:
@@ -27,8 +27,9 @@ def _missing_dataset_error(data_dir: Path) -> FileNotFoundError:
 
 
 def _tokenize_row(tokenizer, row: dict, max_seq_length: int) -> dict:
-    prompt = tokenizer.apply_chat_template(row["messages"][:-1], tokenize=False, add_generation_prompt=True)
-    answer = row["messages"][-1]["content"] + tokenizer.eos_token
+    messages = compact_messages_from_sample(row)
+    prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
+    answer = messages[-1]["content"] + tokenizer.eos_token
     prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
     answer_ids = tokenizer(answer, add_special_tokens=False)["input_ids"]
     if len(answer_ids) >= max_seq_length:
