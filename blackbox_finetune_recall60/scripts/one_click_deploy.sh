@@ -46,8 +46,8 @@ python -m blackbox_finetune_recall60.gpu --cuda-device "$CUDA_DEVICE"
 if [[ "$MODE" == "diagnose" ]]; then
   exit 0
 fi
-DATA_DIR="${DATA_DIR:-blackbox_finetune_recall60/data_partial_week}"
-VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall60/data_validation_partial_week}"
+DATA_DIR="${DATA_DIR:-blackbox_finetune_recall60/data_no_partial_week}"
+VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall60/data_evaluation_no_partial_week}"
 OUTPUT_DIR="${OUTPUT_DIR:-blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-lora}"
 MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-0.60}"
 TRAIN_SEED="${TRAIN_SEED:-20260560}"
@@ -62,8 +62,8 @@ MIN_LEARNING_RATE="${MIN_LEARNING_RATE:-1e-6}"
 RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
 
 if [[ "$MODE" == "smoke" ]]; then
-  TRAIN_START="20110101"
-  TRAIN_END="20151231"
+  TRAIN_START="20200101"
+  TRAIN_END="20211231"
   VALIDATION_START="20260101"
   VALIDATION_END="20260131"
   POS_LIMIT="${SMOKE_POSITIVE_LIMIT:-12}"
@@ -71,8 +71,8 @@ if [[ "$MODE" == "smoke" ]]; then
   MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-2048}"
   GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 else
-  TRAIN_START="20110101"
-  TRAIN_END="20241231"
+  TRAIN_START="20200101"
+  TRAIN_END="20251231"
   VALIDATION_START="20260101"
   VALIDATION_END="20260430"
   POS_LIMIT="${POSITIVE_LIMIT:-}"

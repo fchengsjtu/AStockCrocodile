@@ -21,19 +21,20 @@ def daily(day, open_, high, low, close, volume=100.0, amount=1000.0):
 
 
 class BlackboxFinetuneRecall60Tests(unittest.TestCase):
-    def test_training_defaults_end_at_2024(self):
+    def test_training_defaults_use_2020_to_2025(self):
         args = build_dataset.build_parser().parse_args([])
 
-        self.assertEqual(args.start_date, "20110101")
-        self.assertEqual(args.end_date, "20241231")
+        self.assertEqual(args.start_date, "20200101")
+        self.assertEqual(args.end_date, "20251231")
         self.assertEqual(args.output_dir, common.DEFAULT_DATA_DIR)
 
-    def test_validation_defaults_match_holdout_period(self):
+    def test_evaluation_defaults_match_2026_holdout_period(self):
         args = build_validation_dataset.build_parser().parse_args([])
 
         self.assertEqual(args.start_date, "20260101")
         self.assertEqual(args.end_date, "20260430")
         self.assertEqual(args.output_dir, common.DEFAULT_VALIDATION_DIR)
+        self.assertIn("no_partial", str(args.output_dir))
 
     def test_compact_window_and_sequence_length_defaults_match_2048_format(self):
         self.assertEqual(common.COMPACT_DAILY_WINDOW, 21)
@@ -42,34 +43,13 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(evaluate.build_parser().parse_args([]).max_seq_length, 2048)
         self.assertEqual(predict_day.build_parser().parse_args(["--date", "20260514"]).max_seq_length, 2048)
 
-    def test_build_partial_weekly_bar_for_monday_to_anchor(self):
-        rows = [
-            daily("20260105", 10.0, 11.0, 9.5, 10.5, 100.0, 1000.0),
-            daily("20260106", 10.5, 12.0, 10.2, 11.5, 200.0, 2200.0),
-            daily("20260107", 11.5, 11.8, 10.8, 11.0, 150.0, 1650.0),
-        ]
-
-        bar = common.build_partial_weekly_bar(rows, date(2026, 1, 7))
-
-        self.assertEqual(bar["date"], "20260107")
-        self.assertEqual(bar["open"], 10.0)
-        self.assertEqual(bar["high"], 12.0)
-        self.assertEqual(bar["low"], 9.5)
-        self.assertEqual(bar["close"], 11.0)
-        self.assertEqual(bar["volume"], 450.0)
-        self.assertEqual(bar["amount"], 4850.0)
-
-    def test_no_partial_weekly_bar_for_friday_anchor(self):
-        rows = [daily("20260109", 10.0, 11.0, 9.5, 10.5)]
-
-        self.assertIsNone(common.build_partial_weekly_bar(rows, date(2026, 1, 9)))
-
-    def test_pick_weekly_window_appends_temporary_week_for_midweek_anchor(self):
+    def test_pick_weekly_window_uses_only_completed_weekly_rows_for_midweek_anchor(self):
         weekly_rows = [
             daily("20251205", 1, 1, 1, 10),
             daily("20251212", 1, 1, 1, 11),
             daily("20251219", 1, 1, 1, 12),
             daily("20251226", 1, 1, 1, 13),
+            daily("20260102", 1, 1, 1, 14),
         ]
         daily_rows = [
             daily("20251229", 14, 15, 13, 14),
@@ -77,15 +57,11 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
             daily("20251231", 15, 17, 14, 16),
         ]
 
-        window = common.pick_weekly_window(weekly_rows, daily_rows, date(2025, 12, 31), 5)
+        window = common.pick_weekly_window(weekly_rows, daily_rows, date(2025, 12, 31), 4)
 
         self.assertIsNotNone(window)
-        self.assertEqual(window[-1]["date"], "20251231")
-        self.assertEqual(window[-1]["open"], 14)
-        self.assertEqual(window[-1]["high"], 17)
-        self.assertEqual(window[-1]["low"], 13)
-        self.assertEqual(window[-1]["close"], 16)
-        self.assertEqual(window[-1]["ma5"], (10 + 11 + 12 + 13 + 16) / 5)
+        self.assertEqual([row["date"] for row in window], ["20251205", "20251212", "20251219", "20251226"])
+        self.assertEqual(window[-1]["close"], 13)
 
     def test_compact_prompt_uses_short_csv_recent_twenty_one_daily_and_thirteen_weekly(self):
         daily_rows = [daily(f"202601{day:02d}", day, day + 1, day - 1, day + 0.5) for day in range(1, 26)]

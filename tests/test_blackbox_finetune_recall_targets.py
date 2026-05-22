@@ -21,8 +21,9 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
 
                 self.assertEqual(common.DEFAULT_MIN_POSITIVE_RECALL, target / 100)
                 self.assertEqual(common.DEFAULT_TRAIN_SEED, 20260500 + target)
-                self.assertEqual(common.DEFAULT_TRAIN_START_DATE, "20110101")
-                expected_train_end = "20241231" if target in (60, 80) else "20251231"
+                expected_train_start = "20200101" if target == 60 else "20110101"
+                self.assertEqual(common.DEFAULT_TRAIN_START_DATE, expected_train_start)
+                expected_train_end = "20251231" if target == 60 else "20241231" if target == 80 else "20251231"
                 self.assertEqual(common.DEFAULT_TRAIN_END_DATE, expected_train_end)
                 self.assertEqual(common.DEFAULT_VALIDATION_START_DATE, "20260101")
                 self.assertEqual(common.DEFAULT_VALIDATION_END_DATE, "20260430")
@@ -38,7 +39,7 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 train_args = train.build_parser().parse_args([])
                 predict_args = predict_day.build_parser().parse_args(["--date", "20260514"])
 
-                self.assertEqual(build_args.start_date, "20110101")
+                self.assertEqual(build_args.start_date, expected_train_start)
                 self.assertEqual(build_args.end_date, expected_train_end)
                 self.assertEqual(validation_args.start_date, "20260101")
                 self.assertEqual(validation_args.end_date, "20260430")
