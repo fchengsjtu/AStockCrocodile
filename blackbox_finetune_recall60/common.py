@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_right
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Sequence
@@ -29,12 +30,39 @@ def _average_close(rows: list[dict], count: int) -> float:
     return sum(float(row.get("close") or 0) for row in rows[-count:]) / count
 
 
-def build_partial_weekly_bar(daily_rows: list[dict], anchor_date: date) -> dict | None:
+def _week_start(value: date) -> date:
+    return value - timedelta(days=value.weekday())
+
+
+def _build_daily_week_map(daily_rows: list[dict]) -> dict[date, list[dict]]:
+    daily_week_map: dict[date, list[dict]] = {}
+    for row in daily_rows:
+        row_date = _row_date(row)
+        daily_week_map.setdefault(_week_start(row_date), []).append(row)
+    return daily_week_map
+
+
+def _pick_window_by_dates(rows: list[dict], row_dates: list[str], anchor_date: date, window: int) -> list[dict] | None:
+    index = bisect_right(row_dates, compact_date(anchor_date))
+    if index < window:
+        return None
+    return rows[index - window : index]
+
+
+def build_partial_weekly_bar(
+    daily_rows: list[dict],
+    anchor_date: date,
+    daily_week_map: dict[date, list[dict]] | None = None,
+) -> dict | None:
     """Build an in-memory Monday-to-anchor weekly bar for Monday-Thursday anchors."""
     if anchor_date.weekday() > 3:
         return None
-    week_start = anchor_date - timedelta(days=anchor_date.weekday())
-    week_rows = [row for row in daily_rows if week_start <= _row_date(row) <= anchor_date]
+    week_start = _week_start(anchor_date)
+    if daily_week_map is None:
+        week_rows = [row for row in daily_rows if week_start <= _row_date(row) <= anchor_date]
+    else:
+        anchor_compact = compact_date(anchor_date)
+        week_rows = [row for row in daily_week_map.get(week_start, []) if row["date"] <= anchor_compact]
     if not week_rows:
         return None
     week_rows = sorted(week_rows, key=_row_date)
@@ -53,9 +81,19 @@ def build_partial_weekly_bar(daily_rows: list[dict], anchor_date: date) -> dict 
     }
 
 
-def pick_weekly_window(weekly_rows: list[dict], daily_rows: list[dict], anchor_date: date, window: int) -> list[dict] | None:
-    weekly = [row for row in weekly_rows if _row_date(row) <= anchor_date]
-    partial = build_partial_weekly_bar(daily_rows, anchor_date)
+def pick_weekly_window(
+    weekly_rows: list[dict],
+    daily_rows: list[dict],
+    anchor_date: date,
+    window: int,
+    weekly_dates: list[str] | None = None,
+    daily_week_map: dict[date, list[dict]] | None = None,
+) -> list[dict] | None:
+    if weekly_dates is None:
+        weekly_dates = [row["date"] for row in weekly_rows]
+    index = bisect_right(weekly_dates, compact_date(anchor_date))
+    weekly = weekly_rows[max(0, index - max(window, 55)) : index]
+    partial = build_partial_weekly_bar(daily_rows, anchor_date, daily_week_map)
     if partial is not None:
         partial_date = _row_date(partial)
         weekly = [row for row in weekly if _row_date(row) < partial_date]
@@ -92,9 +130,19 @@ def materialize_events(
         for scode in batch:
             daily_rows = daily_map.get(scode, [])
             weekly_rows = weekly_map.get(scode, [])
+            daily_dates = [row["date"] for row in daily_rows]
+            weekly_dates = [row["date"] for row in weekly_rows]
+            daily_week_map = _build_daily_week_map(daily_rows)
             for event in by_symbol.get(scode, []):
-                daily = pick_window(daily_rows, event.anchor_date, daily_window)
-                weekly = pick_weekly_window(weekly_rows, daily_rows, event.anchor_date, weekly_window)
+                daily = _pick_window_by_dates(daily_rows, daily_dates, event.anchor_date, daily_window)
+                weekly = pick_weekly_window(
+                    weekly_rows,
+                    daily_rows,
+                    event.anchor_date,
+                    weekly_window,
+                    weekly_dates=weekly_dates,
+                    daily_week_map=daily_week_map,
+                )
                 if daily is None or weekly is None:
                     continue
                 samples.append(
