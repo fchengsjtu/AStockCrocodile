@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import math
 import pickle
@@ -18,6 +19,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from blackbox_finetune_recall55.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_OUTPUT_DIR, DEFAULT_TRAIN_SEED, compact_messages_from_sample, default_max_seq_length
 from blackbox_finetune_recall55.gpu import prepare_rtx3060
 from llm_finetune.common import read_jsonl
+
+
+def default_checkpoint_every() -> int:
+    return 500 if os.environ.get("SAMPLE_MODE", "long").lower() == "short" else 100
 
 TOKEN_CACHE_VERSION = "v7_csv11_21d13w_no_partial_2020_2025"
 
@@ -388,7 +393,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--train-seed", type=int, default=DEFAULT_TRAIN_SEED, help="Target-specific seed for independent LoRA parameters.")
     parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Clip LoRA gradients and skip non-finite updates.")
-    parser.add_argument("--checkpoint-every", type=int, default=1000, help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
+    parser.add_argument("--checkpoint-every", type=int, default=default_checkpoint_every(), help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
     parser.add_argument("--nonfinite-skip-limit", type=int, default=100, help="Abort after this many total non-finite losses or gradients.")

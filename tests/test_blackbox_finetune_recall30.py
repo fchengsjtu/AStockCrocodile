@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from blackbox_finetune_recall30 import build_dataset, build_validation_dataset, common, evaluate, gpu, predict_day, train
 
@@ -50,7 +51,7 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
 
         self.assertEqual(args.learning_rate, 5e-6)
         self.assertEqual(args.max_grad_norm, 0.5)
-        self.assertEqual(args.checkpoint_every, 1000)
+        self.assertEqual(args.checkpoint_every, 100)
         self.assertEqual(args.nonfinite_patience, 20)
         self.assertEqual(args.nonfinite_skip_limit, 100)
         self.assertEqual(args.nonfinite_backoff_every, 10)
@@ -60,6 +61,12 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         self.assertFalse(hasattr(args, "min_seq_length_on_oom"))
         self.assertFalse(hasattr(args, "oom_shrink_factor"))
         self.assertFalse(args.no_auto_resume)
+
+    def test_train_checkpoint_default_follows_sample_mode(self):
+        with patch.dict("os.environ", {"SAMPLE_MODE": "short"}):
+            self.assertEqual(train.build_parser().parse_args([]).checkpoint_every, 500)
+        with patch.dict("os.environ", {"SAMPLE_MODE": "long"}):
+            self.assertEqual(train.build_parser().parse_args([]).checkpoint_every, 100)
 
     def test_format_duration_for_progress_log(self):
         self.assertEqual(train._format_duration(65), "01:05")

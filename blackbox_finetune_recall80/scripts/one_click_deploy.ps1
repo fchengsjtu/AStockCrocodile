@@ -85,7 +85,6 @@ $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "
 $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260580" }
 $LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "2e-5" }
 $MaxGradNorm = if ($env:MAX_GRAD_NORM) { $env:MAX_GRAD_NORM } else { "0.5" }
-$CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { "1000" }
 $OomPatience = if ($env:OOM_PATIENCE) { $env:OOM_PATIENCE } else { "20" }
 $MinSeqLengthOnOom = if ($env:MIN_SEQ_LENGTH_ON_OOM) { $env:MIN_SEQ_LENGTH_ON_OOM } else { "512" }
 $OomShrinkFactor = if ($env:OOM_SHRINK_FACTOR) { $env:OOM_SHRINK_FACTOR } else { "0.5" }
@@ -97,6 +96,8 @@ $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 $SampleMode = if ($env:SAMPLE_MODE) { $env:SAMPLE_MODE } else { "long" }
 $NegativeRatio = if ($env:NEGATIVE_RATIO) { $env:NEGATIVE_RATIO } else { "3.0" }
 $DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } else { "2048" }
+$DefaultCheckpointEvery = if ($SampleMode -eq "short") { "500" } else { "100" }
+$CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { $DefaultCheckpointEvery }
 
 if ($Mode -eq "smoke") {
   $TrainStart = "20110101"
