@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from blackbox_finetune_recall35.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_OUTPUT_DIR, DEFAULT_TRAIN_SEED, compact_messages_from_sample
+from blackbox_finetune_recall35.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_OUTPUT_DIR, DEFAULT_TRAIN_SEED, compact_messages_from_sample, default_max_seq_length
 from blackbox_finetune_recall35.gpu import prepare_rtx3060
 from llm_finetune.common import read_jsonl
 
@@ -381,7 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--max-seq-length", type=int, default=2048)
+    parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH, help="Override token length; default follows sample mode")
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
@@ -411,7 +411,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         base_model=args.base_model,
         data_dir=args.data_dir,
         output_dir=args.output_dir,
-        max_seq_length=args.max_seq_length,
+        max_seq_length=max(64, args.max_seq_length or default_max_seq_length()),
         epochs=args.epochs,
         batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,

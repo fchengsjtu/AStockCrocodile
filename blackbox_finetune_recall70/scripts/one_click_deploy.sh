@@ -60,6 +60,12 @@ NONFINITE_BACKOFF_EVERY="${NONFINITE_BACKOFF_EVERY:-10}"
 LR_BACKOFF_FACTOR="${LR_BACKOFF_FACTOR:-0.5}"
 MIN_LEARNING_RATE="${MIN_LEARNING_RATE:-1e-6}"
 RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
+SAMPLE_MODE="${SAMPLE_MODE:-long}"
+if [[ "$SAMPLE_MODE" == "short" ]]; then
+  DEFAULT_MAX_SEQ_LENGTH=1024
+else
+  DEFAULT_MAX_SEQ_LENGTH=2048
+fi
 
 if [[ "$MODE" == "smoke" ]]; then
   TRAIN_START="20200101"
@@ -68,7 +74,7 @@ if [[ "$MODE" == "smoke" ]]; then
   VALIDATION_END="20260131"
   POS_LIMIT="${SMOKE_POSITIVE_LIMIT:-12}"
   EPOCHS="${EPOCHS:-3}"
-  MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-2048}"
+  MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-$DEFAULT_MAX_SEQ_LENGTH}"
   GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 else
   TRAIN_START="20200101"
@@ -77,12 +83,12 @@ else
   VALIDATION_END="20260430"
   POS_LIMIT="${POSITIVE_LIMIT:-}"
   EPOCHS="${EPOCHS:-1}"
-  MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-2048}"
+  MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-$DEFAULT_MAX_SEQ_LENGTH}"
   GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-8}"
 fi
 
-BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio 3.0)
-VAL_ARGS=(--output-dir "$VALIDATION_DATA_DIR" --start-date "$VALIDATION_START" --end-date "$VALIDATION_END" --negative-ratio 3.0)
+BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio 3.0 --sample-mode "$SAMPLE_MODE")
+VAL_ARGS=(--output-dir "$VALIDATION_DATA_DIR" --start-date "$VALIDATION_START" --end-date "$VALIDATION_END" --negative-ratio 3.0 --sample-mode "$SAMPLE_MODE")
 if [[ -n "$POS_LIMIT" ]]; then
   BUILD_ARGS+=(--positive-limit "$POS_LIMIT")
 fi

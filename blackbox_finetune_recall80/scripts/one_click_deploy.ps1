@@ -94,6 +94,8 @@ $NonfiniteBackoffEvery = if ($env:NONFINITE_BACKOFF_EVERY) { $env:NONFINITE_BACK
 $LrBackoffFactor = if ($env:LR_BACKOFF_FACTOR) { $env:LR_BACKOFF_FACTOR } else { "0.5" }
 $MinLearningRate = if ($env:MIN_LEARNING_RATE) { $env:MIN_LEARNING_RATE } else { "1e-6" }
 $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
+$SampleMode = if ($env:SAMPLE_MODE) { $env:SAMPLE_MODE } else { "long" }
+$DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } else { "2048" }
 
 if ($Mode -eq "smoke") {
   $TrainStart = "20110101"
@@ -102,7 +104,7 @@ if ($Mode -eq "smoke") {
   $ValidationEnd = "20260131"
   $PositiveLimit = if ($env:SMOKE_POSITIVE_LIMIT) { $env:SMOKE_POSITIVE_LIMIT } else { "12" }
   $Epochs = if ($env:EPOCHS) { $env:EPOCHS } else { "3" }
-  $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { "1024" }
+  $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { $DefaultMaxSeqLength }
   $GradSteps = if ($env:GRADIENT_ACCUMULATION_STEPS) { $env:GRADIENT_ACCUMULATION_STEPS } else { "1" }
 } else {
   $TrainStart = "20110101"
@@ -111,15 +113,15 @@ if ($Mode -eq "smoke") {
   $ValidationEnd = "20260430"
   $PositiveLimit = $env:POSITIVE_LIMIT
   $Epochs = if ($env:EPOCHS) { $env:EPOCHS } else { "1" }
-  $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { "1024" }
+  $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { $DefaultMaxSeqLength }
   $GradSteps = if ($env:GRADIENT_ACCUMULATION_STEPS) { $env:GRADIENT_ACCUMULATION_STEPS } else { "8" }
 }
 
-$BuildArgs = @("-m", "blackbox_finetune_recall80.build_dataset", "--output-dir", $DataDir, "--start-date", $TrainStart, "--end-date", $TrainEnd, "--negative-ratio", "3.0")
+$BuildArgs = @("-m", "blackbox_finetune_recall80.build_dataset", "--output-dir", $DataDir, "--start-date", $TrainStart, "--end-date", $TrainEnd, "--negative-ratio", "3.0", "--sample-mode", $SampleMode)
 if ($PositiveLimit) { $BuildArgs += @("--positive-limit", $PositiveLimit) }
 Invoke-DatasetBuildIfNeeded -Dir $DataDir -Label "training" -ForceValue $env:REBUILD_DATASET -CommandArgs $BuildArgs
 
-$ValArgs = @("-m", "blackbox_finetune_recall80.build_validation_dataset", "--output-dir", $ValidationDir, "--start-date", $ValidationStart, "--end-date", $ValidationEnd, "--negative-ratio", "3.0")
+$ValArgs = @("-m", "blackbox_finetune_recall80.build_validation_dataset", "--output-dir", $ValidationDir, "--start-date", $ValidationStart, "--end-date", $ValidationEnd, "--negative-ratio", "3.0", "--sample-mode", $SampleMode)
 if ($Mode -eq "smoke") { $ValArgs += @("--positive-limit", $PositiveLimit) }
 $ForceValidationDataset = if ($env:REBUILD_VALIDATION_DATASET) { $env:REBUILD_VALIDATION_DATASET } else { $env:REBUILD_DATASET }
 Invoke-DatasetBuildIfNeeded -Dir $ValidationDir -Label "validation" -ForceValue $ForceValidationDataset -CommandArgs $ValArgs

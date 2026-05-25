@@ -130,6 +130,13 @@ The old `fingpt_forecaster_qlora/` entry has been retired; its README points bac
 
 The black-box fine-tuning pipeline is in `blackbox_finetune/`. It treats `Qwen/Qwen2.5-0.5B-Instruct` as a trainable classifier rather than a rule generator. Positive samples come from `klinestatistics`. For each positive sample, the input is the `PrevTradeDate` plus the previous 55 daily K-lines and previous 55 weekly K-lines. Negative candidates are trading days outside the positive sample's `PrevTradeDate +/- 3` trading-day window, using the same 55 daily and 55 weekly K-line input format. The default training period is `20110101-20241231`; the default validation period is `20260101-20260430`. Evaluation fails unless positive recall is at least `60%`.
 
+The `blackbox_finetune_recallXX/` pipelines support two compact sample modes:
+
+- `long` default: 13 daily K-lines, 8 weekly K-lines, 5 monthly K-lines, default `MAX_SEQ_LENGTH=2048`. Samples are kept only when all 5 monthly K-lines exist.
+- `short`: 8 daily K-lines and 5 weekly K-lines, default `MAX_SEQ_LENGTH=1024`. Samples are kept only when the latest 5 weekly K-lines exist and each has `ma13`.
+
+Use `SAMPLE_MODE=short` or `SAMPLE_MODE=long` with the recallXX one-click scripts. Set `MAX_SEQ_LENGTH` only when you intentionally want to override the mode default.
+
 Windows one-click smoke run:
 
 ```powershell

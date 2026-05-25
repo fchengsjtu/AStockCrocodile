@@ -16,13 +16,18 @@ if str(PROJECT_ROOT) not in sys.path:
 from blackbox_finetune_recall35.common import (
     DEFAULT_BASE_MODEL,
     DEFAULT_OUTPUT_DIR,
+    DEFAULT_SAMPLE_MODE,
     DEFAULT_WINDOW,
     build_messages,
+    DEFAULT_MAX_SEQ_LENGTH,
+    default_max_seq_length,
     iter_batches,
     load_kline_map,
     mysql_connect,
     parse_date,
+    sample_mode_config,
     pick_weekly_window,
+    pick_monthly_window,
     pick_window,
 )
 from blackbox_finetune_recall35.gpu import prepare_rtx3060
@@ -37,8 +42,10 @@ def predict_day(
     adapter_dir: Path,
     trade_date,
     threshold: float,
-    daily_window: int,
-    weekly_window: int,
+    daily_window: int | None,
+    weekly_window: int | None,
+    monthly_window: int | None,
+    sample_mode: str,
     batch_size: int,
     limit: int | None,
     output: Path | None,
@@ -53,19 +60,25 @@ def predict_day(
         if trade_date is None:
             anchor = latest_trade_date(conn)
         symbols = load_symbols(conn, anchor, anchor)
-        lookback_start = anchor - timedelta(days=max(500, weekly_window * 10, daily_window * 4))
+        config = sample_mode_config(sample_mode)
+        daily_count = daily_window or config["daily"]
+        weekly_count = weekly_window or config["weekly"]
+        monthly_count = config["monthly"] if monthly_window is None else monthly_window
+        lookback_start = anchor - timedelta(days=max(750, monthly_count * 45, weekly_count * 14, daily_count * 5))
         batches = list(iter_batches(symbols, batch_size))
         print(f"blackbox recall35 predict date={anchor} symbols={len(symbols)} batches={len(batches)}", flush=True)
         for batch_index, batch in enumerate(batches, start=1):
             daily_map = load_kline_map(conn, "dkandles", "D", batch, lookback_start, anchor)
             weekly_map = load_kline_map(conn, "wkandles", "W", batch, lookback_start, anchor)
+            monthly_map = load_kline_map(conn, "mkandles", "M", batch, lookback_start, anchor) if monthly_count > 0 else {}
             selected = 0
             for scode in batch:
-                daily = pick_window(daily_map.get(scode, []), anchor, daily_window)
-                weekly = pick_weekly_window(weekly_map.get(scode, []), daily_map.get(scode, []), anchor, weekly_window)
-                if daily is None or weekly is None:
+                daily = pick_window(daily_map.get(scode, []), anchor, daily_count)
+                weekly = pick_weekly_window(weekly_map.get(scode, []), daily_map.get(scode, []), anchor, weekly_count)
+                monthly = pick_monthly_window(monthly_map.get(scode, []), anchor, monthly_count) if monthly_count > 0 else []
+                if daily is None or weekly is None or monthly is None:
                     continue
-                prompt = tokenizer.apply_chat_template(build_messages(scode, anchor, daily, weekly), tokenize=False, add_generation_prompt=True)
+                prompt = tokenizer.apply_chat_template(build_messages(scode, anchor, daily, weekly, monthly, sample_mode=sample_mode), tokenize=False, add_generation_prompt=True)
                 pred = score_prediction(model, tokenizer, prompt, max_seq_length, threshold)
                 if pred["label"] != "positive":
                     continue
@@ -104,12 +117,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--adapter-dir", type=Path, default=DEFAULT_OUTPUT_DIR / "adapter")
     parser.add_argument("--date", dest="trade_date", required=True)
     parser.add_argument("--threshold", type=float, default=0.50)
-    parser.add_argument("--daily-window", type=int, default=DEFAULT_WINDOW)
-    parser.add_argument("--weekly-window", type=int, default=DEFAULT_WINDOW)
+    parser.add_argument("--sample-mode", choices=["short", "long"], default=DEFAULT_SAMPLE_MODE)
+    parser.add_argument("--daily-window", type=int, help="Override daily bars for the selected sample mode")
+    parser.add_argument("--weekly-window", type=int, help="Override weekly bars for the selected sample mode")
+    parser.add_argument("--monthly-window", type=int, help="Override monthly bars for the selected sample mode")
     parser.add_argument("--batch-size", type=int, default=40)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--max-seq-length", type=int, default=2048)
+    parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH, help="Override token length; default follows sample mode")
     parser.add_argument("--save-top-n", type=int, default=5, help="Save top N predictions to MySQL; default saves top 5.")
     parser.add_argument("--no-save-db", action="store_true", help="Do not save top predictions to MySQL.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
@@ -125,12 +140,14 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.adapter_dir,
         args.trade_date,
         args.threshold,
-        max(2, args.daily_window),
-        max(2, args.weekly_window),
+        max(2, args.daily_window) if args.daily_window else None,
+        max(2, args.weekly_window) if args.weekly_window else None,
+        max(0, args.monthly_window) if args.monthly_window is not None else None,
+        args.sample_mode,
         max(1, args.batch_size),
         args.limit,
         args.output,
-        max(64, args.max_seq_length),
+        max(64, args.max_seq_length or default_max_seq_length(args.sample_mode)),
         not args.no_save_db,
         max(0, args.save_top_n),
     )

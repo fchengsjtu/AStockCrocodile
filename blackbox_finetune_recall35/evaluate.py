@@ -17,6 +17,8 @@ from blackbox_finetune_recall35.common import (
     DEFAULT_VALIDATION_DIR,
     compact_messages_from_sample,
     read_jsonl,
+    DEFAULT_MAX_SEQ_LENGTH,
+    default_max_seq_length,
 )
 from blackbox_finetune_recall35.gpu import prepare_rtx3060
 from blackbox_finetune_recall35.inference import load_model, score_prediction
@@ -84,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threshold", type=float, default=0.50)
     parser.add_argument("--min-positive-recall", type=float, default=DEFAULT_MIN_POSITIVE_RECALL)
     parser.add_argument("--max-samples", type=int)
-    parser.add_argument("--max-seq-length", type=int, default=2048)
+    parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH, help="Override token length; default follows sample mode")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
     parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
     return parser
@@ -100,7 +102,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.threshold,
         args.min_positive_recall,
         args.max_samples,
-        max(64, args.max_seq_length),
+        max(64, args.max_seq_length or default_max_seq_length()),
     )
 
 

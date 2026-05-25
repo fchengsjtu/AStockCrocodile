@@ -50,11 +50,12 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertEqual(train_args.cuda_device, "0")
                 expected_learning_rate = 2e-5 if target == 80 else 5e-6
                 self.assertEqual(train_args.learning_rate, expected_learning_rate)
-                expected_max_seq_length = 1024 if target == 80 else 2048
-                self.assertEqual(train_args.max_seq_length, expected_max_seq_length)
-                expected_eval_seq_length = 1024 if target == 80 else 2048
-                self.assertEqual(evaluate_args.max_seq_length, expected_eval_seq_length)
-                self.assertEqual(predict_args.max_seq_length, expected_eval_seq_length)
+                self.assertEqual(build_args.sample_mode, "long")
+                self.assertEqual(validation_args.sample_mode, "long")
+                self.assertEqual(predict_args.sample_mode, "long")
+                self.assertEqual(train_args.max_seq_length, 2048)
+                self.assertEqual(evaluate_args.max_seq_length, 2048)
+                self.assertEqual(predict_args.max_seq_length, 2048)
                 self.assertEqual(train_args.max_grad_norm, 0.5)
                 self.assertEqual(train_args.checkpoint_every, 1000)
                 self.assertEqual(train_args.nonfinite_patience, 20)

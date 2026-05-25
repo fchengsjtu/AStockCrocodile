@@ -19,41 +19,42 @@ DEFAULT_VALIDATION_END_DATE = "20260430"
 DEFAULT_MIN_POSITIVE_RECALL = 0.80
 DEFAULT_TRAIN_SEED = 20260580
 CSV_COLUMNS = "dt/o/h/l/c/v/a/m5/m13/m34/m55"
-COMPACT_DAILY_WINDOW = 21
-COMPACT_WEEKLY_WINDOW = 13
 SYSTEM_PROMPT = "Classify A-share surge. Return JSON."
+SHORT_SAMPLE_MODE = "short"
+LONG_SAMPLE_MODE = "long"
+DEFAULT_SAMPLE_MODE = LONG_SAMPLE_MODE
+SAMPLE_MODES = {
+    SHORT_SAMPLE_MODE: {"daily": 8, "weekly": 5, "monthly": 0, "max_seq_length": 1024},
+    LONG_SAMPLE_MODE: {"daily": 13, "weekly": 8, "monthly": 5, "max_seq_length": 2048},
+}
+COMPACT_DAILY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["daily"]
+COMPACT_WEEKLY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["weekly"]
+COMPACT_MONTHLY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["monthly"]
+DEFAULT_MAX_SEQ_LENGTH = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["max_seq_length"]
+USE_PARTIAL_WEEKLY_BAR = True
+
+
+def normalize_sample_mode(sample_mode: str | None) -> str:
+    mode = (sample_mode or DEFAULT_SAMPLE_MODE).lower().strip()
+    if mode not in SAMPLE_MODES:
+        raise ValueError(f"unsupported sample mode: {sample_mode}; expected one of {sorted(SAMPLE_MODES)}")
+    return mode
+
+
+def sample_mode_config(sample_mode: str | None) -> dict[str, int]:
+    return SAMPLE_MODES[normalize_sample_mode(sample_mode)]
+
+
+def default_max_seq_length(sample_mode: str | None = None) -> int:
+    return sample_mode_config(sample_mode)["max_seq_length"]
 
 
 def label_answer(label: int) -> str:
     return '{"p":1}' if label else '{"p":0}'
 
 
-def _scaled_number(number: float, scale: float, suffix: str, decimals: int) -> str:
-    text = f"{number / scale:.{decimals}f}".rstrip("0").rstrip(".")
-    if text == "-0":
-        text = "0"
-    return f"{text}{suffix}"
-
-
 def _row_date(row: dict) -> date:
     return parse_date(row["date"])
-
-
-def _csv_number(value) -> str:
-    if isinstance(value, str):
-        return value
-    try:
-        number = float(value or 0)
-    except (TypeError, ValueError):
-        return str(value)
-    abs_number = abs(number)
-    if abs_number >= 1_000_000_000:
-        return _scaled_number(number, 1_000_000_000, "b", 2)
-    if abs_number >= 1_000_000:
-        return _scaled_number(number, 1_000_000, "m", 2)
-    if abs_number >= 1000:
-        return _scaled_number(number, 1000, "k", 1)
-    return f"{number:.2f}".rstrip("0").rstrip(".") or "0"
 
 
 def _float_value(value) -> float:
@@ -88,38 +89,61 @@ def _compact_kline_csv(rows: list[dict]) -> str:
                 values.append(_ratio_number(row.get(key), volume_avg))
             elif key == "amount":
                 values.append(_ratio_number(row.get(key), amount_avg))
-            elif key in {"open", "high", "low", "close", "ma5", "ma13", "ma34", "ma55"}:
-                values.append(_ratio_number(row.get(key), close_avg))
             else:
-                values.append(_csv_number(row.get(key)))
+                values.append(_ratio_number(row.get(key), close_avg))
         lines.append(",".join(values))
     return "\n".join(lines)
+
+
+def _has_positive_ma13(rows: list[dict]) -> bool:
+    return all(_float_value(row.get("ma13")) > 0 for row in rows)
 
 
 def build_compact_prompt(
     scode: str,
     anchor_date: date,
-    daily_55: list[dict],
-    weekly_55: list[dict],
-    daily_window: int = COMPACT_DAILY_WINDOW,
-    weekly_window: int = COMPACT_WEEKLY_WINDOW,
+    daily_rows: list[dict],
+    weekly_rows: list[dict],
+    monthly_rows: list[dict] | None = None,
+    sample_mode: str | None = None,
+    daily_window: int | None = None,
+    weekly_window: int | None = None,
+    monthly_window: int | None = None,
 ) -> str:
-    daily_rows = daily_55[-daily_window:] if daily_window > 0 else []
-    weekly_rows = weekly_55[-weekly_window:] if weekly_window > 0 else []
-    return (
-        f"s={scode}\n"
-        f"cols={CSV_COLUMNS}\n"
-        "D\n"
-        f"{_compact_kline_csv(daily_rows)}\n"
-        "W\n"
-        f"{_compact_kline_csv(weekly_rows)}"
-    )
+    mode = normalize_sample_mode(sample_mode)
+    config = sample_mode_config(mode)
+    daily_count = daily_window or config["daily"]
+    weekly_count = weekly_window or config["weekly"]
+    monthly_count = config["monthly"] if monthly_window is None else monthly_window
+    daily = daily_rows[-daily_count:] if daily_count > 0 else []
+    weekly = weekly_rows[-weekly_count:] if weekly_count > 0 else []
+    monthly = (monthly_rows or [])[-monthly_count:] if monthly_count > 0 else []
+    parts = [
+        f"s={scode}",
+        f"mode={mode}",
+        f"cols={CSV_COLUMNS}",
+        "D",
+        _compact_kline_csv(daily),
+        "W",
+        _compact_kline_csv(weekly),
+    ]
+    if monthly_count > 0:
+        parts.extend(["M", _compact_kline_csv(monthly)])
+    return "\n".join(parts)
 
 
-def build_messages(scode: str, anchor_date: date, daily_55: list[dict], weekly_55: list[dict], label: int | None = None) -> list[dict]:
+def build_messages(
+    scode: str,
+    anchor_date: date,
+    daily_rows: list[dict],
+    weekly_rows: list[dict],
+    monthly_rows: list[dict] | None = None,
+    label: int | None = None,
+    sample_mode: str | None = None,
+) -> list[dict]:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": build_compact_prompt(scode, anchor_date, daily_55, weekly_55)},
+        {"role": "user", "content": build_compact_prompt(scode, anchor_date, daily_rows, weekly_rows, monthly_rows, sample_mode)},
     ]
     if label is not None:
         messages.append({"role": "assistant", "content": label_answer(label)})
@@ -145,7 +169,9 @@ def compact_messages_from_sample(row: dict) -> list[dict]:
             parse_date(data["anchor_date"]),
             _rows_from_compact_payload(data["daily_55"]),
             _rows_from_compact_payload(data["weekly_55"]),
+            _rows_from_compact_payload(data.get("monthly_55", [])),
             int(row["metadata"]["label"]) if len(messages) > 2 else None,
+            DEFAULT_SAMPLE_MODE,
         )
     except Exception:
         return messages
@@ -154,7 +180,7 @@ def compact_messages_from_sample(row: dict) -> list[dict]:
 def _average_close(rows: list[dict], count: int) -> float:
     if len(rows) < count:
         return 0.0
-    return sum(float(row.get("close") or 0) for row in rows[-count:]) / count
+    return sum(_float_value(row.get("close")) for row in rows[-count:]) / count
 
 
 def _week_start(value: date) -> date:
@@ -170,6 +196,8 @@ def _build_daily_week_map(daily_rows: list[dict]) -> dict[date, list[dict]]:
 
 
 def _pick_window_by_dates(rows: list[dict], row_dates: list[str], anchor_date: date, window: int) -> list[dict] | None:
+    if window <= 0:
+        return []
     index = bisect_right(row_dates, compact_date(anchor_date))
     if index < window:
         return None
@@ -181,8 +209,7 @@ def build_partial_weekly_bar(
     anchor_date: date,
     daily_week_map: dict[date, list[dict]] | None = None,
 ) -> dict | None:
-    """Build an in-memory Monday-to-anchor weekly bar for Monday-Thursday anchors."""
-    if anchor_date.weekday() > 3:
+    if not USE_PARTIAL_WEEKLY_BAR or anchor_date.weekday() > 3:
         return None
     week_start = _week_start(anchor_date)
     if daily_week_map is None:
@@ -195,12 +222,12 @@ def build_partial_weekly_bar(
     week_rows = sorted(week_rows, key=_row_date)
     return {
         "date": compact_date(anchor_date),
-        "open": float(week_rows[0].get("open") or 0),
-        "high": max(float(row.get("high") or 0) for row in week_rows),
-        "low": min(float(row.get("low") or 0) for row in week_rows),
-        "close": float(week_rows[-1].get("close") or 0),
-        "volume": sum(float(row.get("volume") or 0) for row in week_rows),
-        "amount": sum(float(row.get("amount") or 0) for row in week_rows),
+        "open": _float_value(week_rows[0].get("open")),
+        "high": max(_float_value(row.get("high")) for row in week_rows),
+        "low": min(_float_value(row.get("low")) for row in week_rows),
+        "close": _float_value(week_rows[-1].get("close")),
+        "volume": sum(_float_value(row.get("volume")) for row in week_rows),
+        "amount": sum(_float_value(row.get("amount")) for row in week_rows),
         "ma5": 0.0,
         "ma13": 0.0,
         "ma34": 0.0,
@@ -233,18 +260,41 @@ def pick_weekly_window(
     return weekly[-window:]
 
 
+def pick_monthly_window(monthly_rows: list[dict], anchor_date: date, window: int, monthly_dates: list[str] | None = None) -> list[dict] | None:
+    if window <= 0:
+        return []
+    if monthly_dates is None:
+        monthly_dates = [row["date"] for row in monthly_rows]
+    return _pick_window_by_dates(monthly_rows, monthly_dates, anchor_date, window)
+
+
+def _sample_windows_are_valid(sample_mode: str, weekly: list[dict], monthly: list[dict] | None) -> bool:
+    if sample_mode == SHORT_SAMPLE_MODE:
+        return len(weekly) >= 5 and _has_positive_ma13(weekly[-5:])
+    if sample_mode == LONG_SAMPLE_MODE:
+        return monthly is not None and len(monthly) >= 5
+    return True
+
+
 def materialize_events(
     conn,
     events: Sequence[SampleEvent],
-    daily_window: int,
-    weekly_window: int,
+    daily_window: int | None,
+    weekly_window: int | None,
     batch_size: int,
+    sample_mode: str | None = None,
+    monthly_window: int | None = None,
 ) -> list[dict]:
     if not events:
         return []
+    mode = normalize_sample_mode(sample_mode)
+    config = sample_mode_config(mode)
+    daily_count = daily_window or config["daily"]
+    weekly_count = weekly_window or config["weekly"]
+    monthly_count = config["monthly"] if monthly_window is None else monthly_window
     start_date = min(event.anchor_date for event in events)
     end_date = max(event.anchor_date for event in events)
-    lookback_start = start_date - timedelta(days=max(500, weekly_window * 10, daily_window * 4))
+    lookback_start = start_date - timedelta(days=max(750, monthly_count * 45, weekly_count * 14, daily_count * 5))
     samples: list[dict] = []
     symbols = sorted({event.scode for event in events})
     by_symbol: dict[str, list[SampleEvent]] = {}
@@ -253,38 +303,48 @@ def materialize_events(
     for batch_index, batch in enumerate(iter_batches(symbols, batch_size), start=1):
         daily_map = load_kline_map(conn, "dkandles", "D", batch, lookback_start, end_date)
         weekly_map = load_kline_map(conn, "wkandles", "W", batch, lookback_start, end_date)
+        monthly_map = load_kline_map(conn, "mkandles", "M", batch, lookback_start, end_date) if monthly_count > 0 else {}
         batch_count = 0
         for scode in batch:
             daily_rows = daily_map.get(scode, [])
             weekly_rows = weekly_map.get(scode, [])
+            monthly_rows_all = monthly_map.get(scode, [])
             daily_dates = [row["date"] for row in daily_rows]
             weekly_dates = [row["date"] for row in weekly_rows]
-            daily_week_map = _build_daily_week_map(daily_rows)
+            monthly_dates = [row["date"] for row in monthly_rows_all]
+            daily_week_map = _build_daily_week_map(daily_rows) if USE_PARTIAL_WEEKLY_BAR else None
             for event in by_symbol.get(scode, []):
-                daily = _pick_window_by_dates(daily_rows, daily_dates, event.anchor_date, daily_window)
+                daily = _pick_window_by_dates(daily_rows, daily_dates, event.anchor_date, daily_count)
                 weekly = pick_weekly_window(
                     weekly_rows,
                     daily_rows,
                     event.anchor_date,
-                    weekly_window,
+                    weekly_count,
                     weekly_dates=weekly_dates,
                     daily_week_map=daily_week_map,
                 )
-                if daily is None or weekly is None:
+                monthly = pick_monthly_window(monthly_rows_all, event.anchor_date, monthly_count, monthly_dates) if monthly_count > 0 else []
+                if daily is None or weekly is None or monthly is None:
+                    continue
+                if not _sample_windows_are_valid(mode, weekly, monthly):
                     continue
                 samples.append(
                     {
-                        "messages": build_messages(scode, event.anchor_date, daily, weekly, event.label),
+                        "messages": build_messages(scode, event.anchor_date, daily, weekly, monthly, event.label, mode),
                         "metadata": {
                             "scode": scode,
                             "anchor_date": event.anchor_date.isoformat(),
                             "label": event.label,
                             "source": event.source,
                             "gain_rate": event.gain_rate,
-                            "weekly_partial": event.anchor_date.weekday() <= 3,
+                            "sample_mode": mode,
+                            "daily_window": daily_count,
+                            "weekly_window": weekly_count,
+                            "monthly_window": monthly_count,
+                            "weekly_partial": USE_PARTIAL_WEEKLY_BAR and event.anchor_date.weekday() <= 3,
                         },
                     }
                 )
                 batch_count += 1
-        print(f"materialize batch={batch_index} symbols={len(batch)} samples={batch_count}", flush=True)
+        print(f"materialize batch={batch_index} symbols={len(batch)} samples={batch_count} mode={mode}", flush=True)
     return samples

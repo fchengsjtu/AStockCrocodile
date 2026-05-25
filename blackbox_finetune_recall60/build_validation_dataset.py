@@ -15,7 +15,7 @@ from blackbox_finetune_recall60.common import (
     DEFAULT_VALIDATION_DIR,
     DEFAULT_VALIDATION_END_DATE,
     DEFAULT_VALIDATION_START_DATE,
-    DEFAULT_WINDOW,
+    DEFAULT_SAMPLE_MODE,
     parse_date,
 )
 
@@ -28,8 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-date", default=DEFAULT_VALIDATION_END_DATE)
     parser.add_argument("--positive-limit", type=int)
     parser.add_argument("--negative-ratio", type=float, default=3.0)
-    parser.add_argument("--daily-window", type=int, default=DEFAULT_WINDOW)
-    parser.add_argument("--weekly-window", type=int, default=DEFAULT_WINDOW)
+    parser.add_argument("--sample-mode", choices=["short", "long"], default=DEFAULT_SAMPLE_MODE)
+    parser.add_argument("--daily-window", type=int, help="Override daily bars for the selected sample mode")
+    parser.add_argument("--weekly-window", type=int, help="Override weekly bars for the selected sample mode")
+    parser.add_argument("--monthly-window", type=int, help="Override monthly bars for the selected sample mode")
     parser.add_argument("--batch-size", type=int, default=80)
     return parser
 
@@ -45,9 +47,11 @@ def main(argv: Iterable[str] | None = None) -> None:
         negative_ratio=max(0.0, args.negative_ratio),
         train_ratio=0.01,
         seed=20260518,
-        daily_window=max(2, args.daily_window),
-        weekly_window=max(2, args.weekly_window),
+        daily_window=max(2, args.daily_window) if args.daily_window else None,
+        weekly_window=max(2, args.weekly_window) if args.weekly_window else None,
+        monthly_window=max(0, args.monthly_window) if args.monthly_window is not None else None,
         batch_size=max(1, args.batch_size),
+        sample_mode=args.sample_mode,
     )
 
 

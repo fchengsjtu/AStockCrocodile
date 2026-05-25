@@ -37,8 +37,12 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertIn("no_partial", str(args.output_dir))
 
     def test_compact_window_and_sequence_length_defaults_match_2048_format(self):
-        self.assertEqual(common.COMPACT_DAILY_WINDOW, 21)
-        self.assertEqual(common.COMPACT_WEEKLY_WINDOW, 13)
+        self.assertEqual(common.COMPACT_DAILY_WINDOW, 13)
+        self.assertEqual(common.COMPACT_WEEKLY_WINDOW, 8)
+        self.assertEqual(common.COMPACT_MONTHLY_WINDOW, 5)
+        self.assertEqual(common.sample_mode_config("short")["daily"], 8)
+        self.assertEqual(common.sample_mode_config("short")["weekly"], 5)
+        self.assertEqual(common.default_max_seq_length("short"), 1024)
         self.assertEqual(train.build_parser().parse_args([]).max_seq_length, 2048)
         self.assertEqual(evaluate.build_parser().parse_args([]).max_seq_length, 2048)
         self.assertEqual(predict_day.build_parser().parse_args(["--date", "20260514"]).max_seq_length, 2048)
@@ -63,23 +67,28 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual([row["date"] for row in window], ["20251205", "20251212", "20251219", "20251226"])
         self.assertEqual(window[-1]["close"], 13)
 
-    def test_compact_prompt_uses_short_csv_recent_twenty_one_daily_and_thirteen_weekly(self):
+    def test_compact_prompt_uses_short_csv_recent_thirteen_daily_eight_weekly_and_five_monthly(self):
         daily_rows = [daily(f"202601{day:02d}", day, day + 1, day - 1, day + 0.5) for day in range(1, 26)]
         weekly_rows = [daily(f"2025{week:02d}01", week, week + 1, week - 1, week + 0.5) for week in range(1, 16)]
+        monthly_rows = [daily(f"2025{month:02d}28", month, month + 1, month - 1, month + 0.5) for month in range(1, 8)]
 
-        prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows)
+        prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows, monthly_rows)
 
         self.assertIn("cols=dt/o/h/l/c/v/a/m5/m13/m34/m55", prompt)
         self.assertEqual(prompt.splitlines().count("D"), 1)
         self.assertEqual(prompt.splitlines().count("W"), 1)
+        self.assertEqual(prompt.splitlines().count("M"), 1)
         daily_section = prompt.split("D\n", 1)[1].split("\nW\n", 1)[0].splitlines()
-        weekly_section = prompt.split("\nW\n", 1)[1].splitlines()
-        self.assertEqual(len(daily_section), 21)
-        self.assertEqual(len(weekly_section), 13)
+        weekly_section = prompt.split("\nW\n", 1)[1].split("\nM\n", 1)[0].splitlines()
+        monthly_section = prompt.split("\nM\n", 1)[1].splitlines()
+        self.assertEqual(len(daily_section), 13)
+        self.assertEqual(len(weekly_section), 8)
+        self.assertEqual(len(monthly_section), 5)
         self.assertTrue(daily_section[0].startswith("1,"))
-        self.assertTrue(daily_section[-1].startswith("21,"))
+        self.assertTrue(daily_section[-1].startswith("13,"))
         self.assertTrue(weekly_section[0].startswith("1,"))
-        self.assertTrue(weekly_section[-1].startswith("13,"))
+        self.assertTrue(weekly_section[-1].startswith("8,"))
+        self.assertTrue(monthly_section[-1].startswith("5,"))
         self.assertNotIn("260101", prompt)
         self.assertNotIn("260102", prompt)
         self.assertNotIn("260103", prompt)
@@ -100,12 +109,22 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
             daily("20260109", 2, 3, 1, 2, volume=30, amount=150),
         ]
 
-        prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows, daily_window=2, weekly_window=2)
+        prompt = common.build_compact_prompt("000001", date(2026, 1, 10), daily_rows, weekly_rows, daily_window=2, weekly_window=2, monthly_window=0)
 
         self.assertIn("D\n1,0.5,1,0.5,1,0.67,0.5", prompt)
         self.assertIn("2,1,1.5,0.5,1,1.33,1.5", prompt)
         self.assertIn("W\n1,0.5,1,0.5,1,0.5,0.5", prompt)
         self.assertIn("2,1,1.5,0.5,1,1.5,1.5", prompt)
+
+    def test_sample_modes_require_weekly_ma13_or_monthly_rows(self):
+        weekly_without_ma13 = [daily(f"202512{day:02d}", 1, 1, 1, 1) for day in range(1, 6)]
+        weekly_with_ma13 = [dict(row, ma13=1.0) for row in weekly_without_ma13]
+        monthly_rows = [daily(f"2025{month:02d}28", 1, 1, 1, 1) for month in range(1, 6)]
+
+        self.assertFalse(common._sample_windows_are_valid("short", weekly_without_ma13, []))
+        self.assertTrue(common._sample_windows_are_valid("short", weekly_with_ma13, []))
+        self.assertFalse(common._sample_windows_are_valid("long", weekly_with_ma13, monthly_rows[:4]))
+        self.assertTrue(common._sample_windows_are_valid("long", weekly_with_ma13, monthly_rows))
 
 
 if __name__ == "__main__":
