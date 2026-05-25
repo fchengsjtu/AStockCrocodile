@@ -61,6 +61,7 @@ LR_BACKOFF_FACTOR="${LR_BACKOFF_FACTOR:-0.5}"
 MIN_LEARNING_RATE="${MIN_LEARNING_RATE:-1e-6}"
 RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
 SAMPLE_MODE="${SAMPLE_MODE:-long}"
+NEGATIVE_RATIO="${NEGATIVE_RATIO:-3.0}"
 if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_MAX_SEQ_LENGTH=1024
 else
@@ -87,8 +88,8 @@ else
   GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-8}"
 fi
 
-BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio 3.0 --sample-mode "$SAMPLE_MODE")
-VAL_ARGS=(--output-dir "$VALIDATION_DATA_DIR" --start-date "$VALIDATION_START" --end-date "$VALIDATION_END" --negative-ratio 3.0 --sample-mode "$SAMPLE_MODE")
+BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio "$NEGATIVE_RATIO" --sample-mode "$SAMPLE_MODE")
+VAL_ARGS=(--output-dir "$VALIDATION_DATA_DIR" --start-date "$VALIDATION_START" --end-date "$VALIDATION_END" --negative-ratio "$NEGATIVE_RATIO" --sample-mode "$SAMPLE_MODE")
 if [[ -n "$POS_LIMIT" ]]; then
   BUILD_ARGS+=(--positive-limit "$POS_LIMIT")
 fi

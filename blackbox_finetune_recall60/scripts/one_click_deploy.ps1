@@ -93,6 +93,7 @@ $LrBackoffFactor = if ($env:LR_BACKOFF_FACTOR) { $env:LR_BACKOFF_FACTOR } else {
 $MinLearningRate = if ($env:MIN_LEARNING_RATE) { $env:MIN_LEARNING_RATE } else { "1e-6" }
 $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 $SampleMode = if ($env:SAMPLE_MODE) { $env:SAMPLE_MODE } else { "long" }
+$NegativeRatio = if ($env:NEGATIVE_RATIO) { $env:NEGATIVE_RATIO } else { "3.0" }
 $DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } else { "2048" }
 
 if ($Mode -eq "smoke") {
@@ -115,11 +116,11 @@ if ($Mode -eq "smoke") {
   $GradSteps = if ($env:GRADIENT_ACCUMULATION_STEPS) { $env:GRADIENT_ACCUMULATION_STEPS } else { "8" }
 }
 
-$BuildArgs = @("-m", "blackbox_finetune_recall60.build_dataset", "--output-dir", $DataDir, "--start-date", $TrainStart, "--end-date", $TrainEnd, "--negative-ratio", "3.0", "--sample-mode", $SampleMode)
+$BuildArgs = @("-m", "blackbox_finetune_recall60.build_dataset", "--output-dir", $DataDir, "--start-date", $TrainStart, "--end-date", $TrainEnd, "--negative-ratio", $NegativeRatio, "--sample-mode", $SampleMode)
 if ($PositiveLimit) { $BuildArgs += @("--positive-limit", $PositiveLimit) }
 Invoke-DatasetBuildIfNeeded -Dir $DataDir -Label "training" -ForceValue $env:REBUILD_DATASET -CommandArgs $BuildArgs
 
-$ValArgs = @("-m", "blackbox_finetune_recall60.build_validation_dataset", "--output-dir", $ValidationDir, "--start-date", $ValidationStart, "--end-date", $ValidationEnd, "--negative-ratio", "3.0", "--sample-mode", $SampleMode)
+$ValArgs = @("-m", "blackbox_finetune_recall60.build_validation_dataset", "--output-dir", $ValidationDir, "--start-date", $ValidationStart, "--end-date", $ValidationEnd, "--negative-ratio", $NegativeRatio, "--sample-mode", $SampleMode)
 if ($Mode -eq "smoke") { $ValArgs += @("--positive-limit", $PositiveLimit) }
 $ForceValidationDataset = if ($env:REBUILD_VALIDATION_DATASET) { $env:REBUILD_VALIDATION_DATASET } else { $env:REBUILD_DATASET }
 Invoke-DatasetBuildIfNeeded -Dir $ValidationDir -Label "validation" -ForceValue $ForceValidationDataset -CommandArgs $ValArgs

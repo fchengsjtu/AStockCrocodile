@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -114,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--start-date", default=DEFAULT_TRAIN_START_DATE)
     parser.add_argument("--end-date", default=DEFAULT_TRAIN_END_DATE)
     parser.add_argument("--positive-limit", type=int)
-    parser.add_argument("--negative-ratio", type=float, default=3.0)
+    parser.add_argument("--negative-ratio", type=float, default=float(os.environ.get("NEGATIVE_RATIO", "3.0")))
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--sample-mode", choices=["short", "long"], default=DEFAULT_SAMPLE_MODE)

@@ -1,5 +1,6 @@
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from blackbox_finetune_recall60 import build_dataset, build_validation_dataset, common, evaluate, predict_day, train
 
@@ -27,6 +28,15 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.start_date, "20200101")
         self.assertEqual(args.end_date, "20251231")
         self.assertEqual(args.output_dir, common.DEFAULT_DATA_DIR)
+        self.assertEqual(args.negative_ratio, 3.0)
+
+    def test_negative_ratio_default_can_come_from_environment(self):
+        with patch.dict("os.environ", {"NEGATIVE_RATIO": "2.5"}):
+            build_args = build_dataset.build_parser().parse_args([])
+            validation_args = build_validation_dataset.build_parser().parse_args([])
+
+        self.assertEqual(build_args.negative_ratio, 2.5)
+        self.assertEqual(validation_args.negative_ratio, 2.5)
 
     def test_evaluation_defaults_match_2026_holdout_period(self):
         args = build_validation_dataset.build_parser().parse_args([])

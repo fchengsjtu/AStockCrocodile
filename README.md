@@ -137,6 +137,14 @@ The `blackbox_finetune_recallXX/` pipelines support two compact sample modes:
 
 Use `SAMPLE_MODE=short` or `SAMPLE_MODE=long` with the recallXX one-click scripts. Set `MAX_SEQ_LENGTH` only when you intentionally want to override the mode default.
 
+Set `NEGATIVE_RATIO` to control the negative-sample multiplier. The default is `3.0`, meaning three negative samples per positive sample.
+
+```powershell
+$env:SAMPLE_MODE="short"
+$env:NEGATIVE_RATIO="2.5"
+powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall60\scripts\one_click_deploy.ps1 full
+```
+
 Windows one-click smoke run:
 
 ```powershell
