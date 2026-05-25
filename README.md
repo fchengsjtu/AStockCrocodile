@@ -4,7 +4,7 @@ A-share daily K-line crawler. The current version fetches forward-adjusted (`qfq
 
 It no longer writes CSV files during crawling, and only `daily` K-line import is supported.
 
-## Environment
+## Environment Variables
 
 Create `env.txt` in the project root. The program reads this file automatically before connecting to MySQL.
 
@@ -16,17 +16,74 @@ $env:MYSQL_PASSWORD='your-mysql-password'
 $env:MYSQL_DATABASE='emstocks'
 ```
 
-Optional values:
+`env.txt` is ignored by git because it contains credentials. The parser also accepts normal `NAME=value` lines and the PowerShell-style `$env:NAME='value'` lines used on Windows.
+
+All project-level environment variables are collected here:
+
+| Variable | Used by | Default | Purpose |
+| --- | --- | --- | --- |
+| `MYSQL_HOST` | crawler, importers, strategy/backtest tools | `127.0.0.1` in most tools | MySQL host. In WSL, use `WSL_MYSQL_HOST` if Windows MySQL is not reachable as `127.0.0.1`. |
+| `MYSQL_PORT` | MySQL tools | `3306` | MySQL port. |
+| `MYSQL_USER` | MySQL tools | varies by script | MySQL user. |
+| `MYSQL_PASSWORD` | MySQL tools | empty | MySQL password. |
+| `MYSQL_DATABASE` | MySQL tools | `emstocks` | MySQL database. |
+| `WSL_MYSQL_HOST` | WSL/Linux MySQL helpers | auto-detected Windows host | Override MySQL host from WSL. |
+| `DKANDLES_KTYPE` | `a_share_crawler.py` | `D` | Daily K-line `KType` written to `dkandles`. |
+| `MKANDLES_KTYPE` | `mysql_importer/import_daily_to_mysql.py` | `M` | Importer `KType` when importing monthly rows. |
+| `LOCAL_LLM_BASE_URL` | local LLM pattern tools | `http://127.0.0.1:1234/v1` | OpenAI-compatible local LLM base URL. |
+| `LOCAL_LLM_MODEL` | local LLM pattern tools | local DeepSeek/Qwen default | Local model name. |
+| `LOCAL_LLM_API_KEY` | local LLM pattern tools | `local` | API key placeholder for local OpenAI-compatible servers. |
+| `LOCAL_LLM_TIMEOUT` | local LLM pattern tools | `600` | LLM request timeout in seconds. |
+| `LOCAL_LLM_MAX_TOKENS` | local LLM pattern tools | `2048` | Max response tokens for LLM calls. |
+| `LOCAL_LLM_RESPONSE_FORMAT` | local LLM pattern tools | off | Enable JSON response-format request when the local server supports it. |
+| `DEEPSEEK_BASE_URL` | local LLM pattern tools | fallback only | Backward-compatible alias when `LOCAL_LLM_BASE_URL` is unset. |
+| `DEEPSEEK_MODEL` | local LLM pattern tools | fallback only | Backward-compatible alias when `LOCAL_LLM_MODEL` is unset. |
+| `PYTHON_BIN` | one-click scripts | `python`/`python3` or `.venv` Python | Python executable used to create or run a venv. |
+| `VENV_DIR` | one-click scripts | script-specific `.venv-*` path | Virtual environment directory. |
+| `BASE_MODEL` | fine-tuning one-click scripts | `Qwen/Qwen2.5-0.5B-Instruct` | HuggingFace-format base model or local model directory. |
+| `DATA_DIR` | fine-tuning one-click scripts | script-specific `data` path | Training dataset directory. |
+| `VALIDATION_DATA_DIR` | blackbox one-click scripts | script-specific validation data path | Validation/evaluation dataset directory. |
+| `OUTPUT_DIR` | fine-tuning one-click scripts | script-specific `runs/...` path | Adapter/checkpoint output directory. |
+| `CUDA_DEVICE` | blackbox recallXX scripts | `0` | CUDA device id, normally the RTX 3060. |
+| `CUDA_VISIBLE_DEVICES` | GPU tools | set from `CUDA_DEVICE` | CUDA visibility binding. Usually do not set directly. |
+| `PYTORCH_CUDA_ALLOC_CONF` | GPU tools | `expandable_segments:True` on Linux scripts | PyTorch CUDA allocator tuning. |
+| `TORCH_CUDA_INDEX` | Windows recallXX scripts | `https://download.pytorch.org/whl/cu121` | CUDA PyTorch wheel index if the script needs to install GPU PyTorch. |
+| `SAMPLE_MODE` | `blackbox_finetune_recallXX` | `long` | `short`: 8日K+5周K, `MAX_SEQ_LENGTH=1024`; `long`: 13日K+8周K+5月K, `MAX_SEQ_LENGTH=2048`. |
+| `MAX_SEQ_LENGTH` | fine-tuning scripts | mode/script-specific | Override token length. For recallXX, omit unless intentionally overriding `SAMPLE_MODE` default. |
+| `NEGATIVE_RATIO` | dataset builders | recallXX default `3.0`; older fine-tune default `1.0` | Negative samples per positive sample. |
+| `POSITIVE_LIMIT` | one-click full mode | empty | Limit positive samples in full dataset builds. Empty means no limit. |
+| `SMOKE_POSITIVE_LIMIT` | one-click smoke mode | script-specific, often `12` or `200` | Limit positive samples for smoke runs. |
+| `DATA_BATCH_SIZE` | `llm_finetune` dataset script | `30` | Dataset materialization batch size. |
+| `REBUILD_DATASET` | recallXX one-click scripts | off | Force rebuilding cached training datasets. |
+| `REBUILD_VALIDATION_DATASET` | recallXX one-click scripts | falls back to `REBUILD_DATASET` | Force rebuilding cached validation datasets. |
+| `REBUILD_TOKEN_CACHE` | recallXX one-click scripts | off | Force re-tokenization instead of using tokenized cache. |
+| `NO_AUTO_RESUME` | recallXX one-click scripts | off | Disable automatic resume from latest checkpoint. |
+| `RESUME_ADAPTER_DIR` | recallXX one-click scripts | empty | Explicit adapter checkpoint directory to resume from. |
+| `CHECKPOINT_EVERY` | recallXX one-click scripts/trainers | `500` for `SAMPLE_MODE=short`, `100` for `long` | Save adapter checkpoint every N optimizer updates. |
+| `EPOCHS` | fine-tuning one-click scripts | smoke/full script-specific | Training epochs. |
+| `BATCH_SIZE` | `llm_finetune` one-click scripts | `1` | Per-device batch size. |
+| `GRADIENT_ACCUMULATION_STEPS` | fine-tuning one-click scripts | smoke/full script-specific | Gradient accumulation steps. |
+| `LEARNING_RATE` | fine-tuning one-click scripts | recall60-style `5e-6`, recall80 `2e-5`, older tools vary | Training learning rate. |
+| `TRAIN_SEED` | recallXX one-click scripts | `20260500 + recall target` | Target-specific training seed. |
+| `MAX_GRAD_NORM` | recallXX one-click scripts | `0.5` | Gradient clipping norm. |
+| `OOM_PATIENCE` | recallXX one-click scripts | `20` | Abort after this many consecutive CUDA OOM skips. |
+| `MIN_SEQ_LENGTH_ON_OOM` | recall80 train script | `512` | Smallest sequence length allowed by automatic OOM shrinking. |
+| `OOM_SHRINK_FACTOR` | recall80 train script | `0.5` | Sequence-length multiplier after repeated OOM. |
+| `NONFINITE_SKIP_LIMIT` | recallXX one-click scripts | `100` | Abort after this many non-finite losses/gradients. |
+| `NONFINITE_BACKOFF_EVERY` | recallXX one-click scripts | `10` | Reduce LR after every N non-finite skips. |
+| `LR_BACKOFF_FACTOR` | recallXX one-click scripts | `0.5` | Learning-rate multiplier during non-finite backoff. |
+| `MIN_LEARNING_RATE` | recallXX one-click scripts | `1e-6` | Lower bound for automatic LR backoff. |
+| `MIN_POSITIVE_RECALL` | blackbox recall scripts | recall target, e.g. `0.60` | Required true-positive recall during evaluation. |
+| `MIN_SUCCESS_RATE` | `llm_finetune` one-click scripts | `0.20` | Required selected-positive success rate. |
+| `EVAL_MAX_SAMPLES` | `llm_finetune` one-click scripts | `200` | Max evaluation samples for one-click evaluation. |
 
 ```powershell
-$env:MYSQL_PORT='3306'
-$env:DKANDLES_KTYPE='D'
+# Example overrides
+$env:SAMPLE_MODE='short'
+$env:NEGATIVE_RATIO='3.0'
+$env:CHECKPOINT_EVERY='500'
 $env:LOCAL_LLM_BASE_URL='http://127.0.0.1:1234/v1'
-$env:LOCAL_LLM_MODEL='deepseek-r1-distill-qwen-14b'
-$env:LOCAL_LLM_API_KEY='local'
 ```
-
-`env.txt` is ignored by git because it contains credentials.
 
 ## Install
 
@@ -137,13 +194,7 @@ The `blackbox_finetune_recallXX/` pipelines support two compact sample modes:
 
 Use `SAMPLE_MODE=short` or `SAMPLE_MODE=long` with the recallXX one-click scripts. Set `MAX_SEQ_LENGTH` only when you intentionally want to override the mode default.
 
-Set `NEGATIVE_RATIO` to control the negative-sample multiplier. The default is `3.0`, meaning three negative samples per positive sample.
-
-```powershell
-$env:SAMPLE_MODE="short"
-$env:NEGATIVE_RATIO="2.5"
-powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall60\scripts\one_click_deploy.ps1 full
-```
+Set `NEGATIVE_RATIO` to control the negative-sample multiplier. The default is `3.0`, meaning three negative samples per positive sample. All recallXX environment overrides are listed in [Environment Variables](#environment-variables).
 
 Windows one-click smoke run:
 
@@ -373,7 +424,7 @@ EOF
 chmod 600 env.txt
 ```
 
-The parser also accepts the PowerShell-style `$env:NAME='value'` lines used on Windows.
+See [Environment Variables](#environment-variables) for the complete `env.txt` format and supported values.
 
 ### 5. Verify the environment
 
@@ -793,13 +844,7 @@ python .\llm_surge_pattern_miner.py --test-start-date 20260101 --test-end-date 2
 
 `llm_surge_pattern_miner.py` first summarizes the positive-sample feature distribution before `20260101`, asks the local OpenAI-compatible model to propose diverse candidate patterns using exact feature tokens, then validates those patterns on all test-set candidate dates from `20260101` through `20260430`. Retained patterns for success-rate thresholds `25%`, `30%`, `35%`, `40%`, `45%`, and `50%` are written to `surgepatterns`.
 
-For the local model server, set these values in the environment or in `env.txt`:
-
-```powershell
-$env:LOCAL_LLM_BASE_URL='http://127.0.0.1:1234/v1'
-$env:LOCAL_LLM_MODEL='deepseek-r1-distill-qwen-14b'
-$env:LOCAL_LLM_API_KEY='local'
-```
+For the local model server, configure `LOCAL_LLM_BASE_URL`, `LOCAL_LLM_MODEL`, and `LOCAL_LLM_API_KEY` as described in [Environment Variables](#environment-variables).
 
 Useful options:
 
@@ -838,12 +883,7 @@ Useful options:
 - `--max-training-batches 10`: limit LLM calls for a trial run; `0` means use all training batches.
 - `--output data\blackbox_patterns.csv`: also write retained patterns to CSV.
 
-For slow local models, set these optional values in `env.txt`:
-
-```powershell
-$env:LOCAL_LLM_TIMEOUT='600'
-$env:LOCAL_LLM_MAX_TOKENS='2048'
-```
+For slow local models, tune `LOCAL_LLM_TIMEOUT` and `LOCAL_LLM_MAX_TOKENS`; both are listed in [Environment Variables](#environment-variables).
 
 Use saved LLM/DeepSeek patterns for future stock selection:
 
