@@ -13,12 +13,12 @@ if str(PROJECT_ROOT) not in sys.path:
 from blackbox_finetune_recall75.common import (
     DEFAULT_BASE_MODEL,
     DEFAULT_MIN_POSITIVE_RECALL,
-    DEFAULT_OUTPUT_DIR,
     DEFAULT_VALIDATION_DIR,
     compact_messages_from_sample,
     read_jsonl,
     DEFAULT_MAX_SEQ_LENGTH,
     default_max_seq_length,
+    default_output_dir,
 )
 from blackbox_finetune_recall75.gpu import prepare_rtx3060
 from blackbox_finetune_recall75.inference import load_model, score_prediction
@@ -81,7 +81,7 @@ def evaluate_dataset(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate recall75 black-box fine-tuned classifier")
     parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
-    parser.add_argument("--adapter-dir", type=Path, default=DEFAULT_OUTPUT_DIR / "adapter")
+    parser.add_argument("--adapter-dir", type=Path, default=default_output_dir() / "adapter")
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_VALIDATION_DIR)
     parser.add_argument("--threshold", type=float, default=0.50)
     parser.add_argument("--min-positive-recall", type=float, default=DEFAULT_MIN_POSITIVE_RECALL)

@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from blackbox_finetune_recall70.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_OUTPUT_DIR, DEFAULT_TRAIN_SEED, compact_messages_from_sample, default_max_seq_length
+from blackbox_finetune_recall70.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_TRAIN_SEED, compact_messages_from_sample, default_max_seq_length, default_output_dir
 from blackbox_finetune_recall70.gpu import prepare_rtx3060
 from llm_finetune.common import read_jsonl
 
@@ -385,7 +385,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Fine-tune Qwen2.5 for recall70 black-box stock classification")
     parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--output-dir", type=Path, default=default_output_dir())
     parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH, help="Override token length; default follows sample mode")
     parser.add_argument("--epochs", type=float, default=1.0)
     parser.add_argument("--batch-size", type=int, default=1)

@@ -68,6 +68,14 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         with patch.dict("os.environ", {"SAMPLE_MODE": "long"}):
             self.assertEqual(train.build_parser().parse_args([]).checkpoint_every, 100)
 
+    def test_output_dir_default_follows_sample_mode(self):
+        with patch.dict("os.environ", {"SAMPLE_MODE": "short"}):
+            self.assertIn("recall30-short-lora", str(train.build_parser().parse_args([]).output_dir))
+            self.assertIn("recall30-short-lora", str(evaluate.build_parser().parse_args([]).adapter_dir))
+            self.assertIn("recall30-short-lora", str(predict_day.build_parser().parse_args(["--date", "20260514"]).adapter_dir))
+        with patch.dict("os.environ", {"SAMPLE_MODE": "long"}):
+            self.assertIn("recall30-long-lora", str(train.build_parser().parse_args([]).output_dir))
+
     def test_format_duration_for_progress_log(self):
         self.assertEqual(train._format_duration(65), "01:05")
         self.assertEqual(train._format_duration(3661), "01:01:01")

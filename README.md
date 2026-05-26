@@ -43,7 +43,7 @@ All project-level environment variables are collected here:
 | `BASE_MODEL` | fine-tuning one-click scripts | `Qwen/Qwen2.5-0.5B-Instruct` | HuggingFace-format base model or local model directory. |
 | `DATA_DIR` | fine-tuning one-click scripts | script-specific `data` path | Training dataset directory. |
 | `VALIDATION_DATA_DIR` | blackbox one-click scripts | script-specific validation data path | Validation/evaluation dataset directory. |
-| `OUTPUT_DIR` | fine-tuning one-click scripts | script-specific `runs/...` path | Adapter/checkpoint output directory. |
+| `OUTPUT_DIR` | fine-tuning one-click scripts | script-specific `runs/...` path | Adapter/checkpoint output directory. For recallXX scripts, default is split by `SAMPLE_MODE`: `...-short-lora` or `...-long-lora`. |
 | `CUDA_DEVICE` | blackbox recallXX scripts | `0` | CUDA device id, normally the RTX 3060. |
 | `CUDA_VISIBLE_DEVICES` | GPU tools | set from `CUDA_DEVICE` | CUDA visibility binding. Usually do not set directly. |
 | `PYTORCH_CUDA_ALLOC_CONF` | GPU tools | `expandable_segments:True` on Linux scripts | PyTorch CUDA allocator tuning. |

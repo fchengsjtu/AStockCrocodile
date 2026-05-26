@@ -108,7 +108,8 @@ def build_blackbox_signals(conn, config: PortfolioBacktestConfig) -> pd.DataFram
                 f"and the blackbox requirements into the active environment."
             ) from exc
         raise
-    adapter_dir = modules.common.DEFAULT_OUTPUT_DIR / "adapter"
+    output_dir = modules.common.default_output_dir() if hasattr(modules.common, "default_output_dir") else modules.common.DEFAULT_OUTPUT_DIR
+    adapter_dir = output_dir / "adapter"
     model, tokenizer = modules.inference.load_model(modules.common.DEFAULT_BASE_MODEL, adapter_dir)
 
     trade_dates = load_trade_dates(conn, config.start_date, config.end_date, config.ktype)

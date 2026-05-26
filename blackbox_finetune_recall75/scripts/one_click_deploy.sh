@@ -48,7 +48,6 @@ if [[ "$MODE" == "diagnose" ]]; then
 fi
 DATA_DIR="${DATA_DIR:-blackbox_finetune_recall75/data_no_partial_week}"
 VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall75/data_evaluation_no_partial_week}"
-OUTPUT_DIR="${OUTPUT_DIR:-blackbox_finetune_recall75/runs/qwen2.5-0.5b-blackbox-recall75-lora}"
 MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-0.60}"
 TRAIN_SEED="${TRAIN_SEED:-20260560}"
 LEARNING_RATE="${LEARNING_RATE:-5e-6}"
@@ -60,6 +59,12 @@ LR_BACKOFF_FACTOR="${LR_BACKOFF_FACTOR:-0.5}"
 MIN_LEARNING_RATE="${MIN_LEARNING_RATE:-1e-6}"
 RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
 SAMPLE_MODE="${SAMPLE_MODE:-long}"
+if [[ "$SAMPLE_MODE" == "short" ]]; then
+  DEFAULT_OUTPUT_DIR="blackbox_finetune_recall75/runs/qwen2.5-0.5b-blackbox-recall75-short-lora"
+else
+  DEFAULT_OUTPUT_DIR="blackbox_finetune_recall75/runs/qwen2.5-0.5b-blackbox-recall75-long-lora"
+fi
+OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
 NEGATIVE_RATIO="${NEGATIVE_RATIO:-3.0}"
 if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_MAX_SEQ_LENGTH=1024

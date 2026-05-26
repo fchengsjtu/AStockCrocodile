@@ -30,6 +30,8 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertIn(package, str(common.DEFAULT_DATA_DIR))
                 self.assertIn(package, str(common.DEFAULT_VALIDATION_DIR))
                 self.assertIn(package, str(common.DEFAULT_OUTPUT_DIR))
+                self.assertIn(f"recall{target}-long-lora", str(common.default_output_dir("long")))
+                self.assertIn(f"recall{target}-short-lora", str(common.default_output_dir("short")))
                 output_dirs.add(str(common.DEFAULT_OUTPUT_DIR))
                 train_seeds.add(common.DEFAULT_TRAIN_SEED)
 

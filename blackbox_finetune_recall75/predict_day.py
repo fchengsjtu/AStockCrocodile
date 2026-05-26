@@ -15,12 +15,12 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from blackbox_finetune_recall75.common import (
     DEFAULT_BASE_MODEL,
-    DEFAULT_OUTPUT_DIR,
     DEFAULT_SAMPLE_MODE,
     DEFAULT_WINDOW,
     build_messages,
     DEFAULT_MAX_SEQ_LENGTH,
     default_max_seq_length,
+    default_output_dir,
     iter_batches,
     load_kline_map,
     mysql_connect,
@@ -114,7 +114,7 @@ def predict_day(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Predict one trading day with recall75 black-box model")
     parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
-    parser.add_argument("--adapter-dir", type=Path, default=DEFAULT_OUTPUT_DIR / "adapter")
+    parser.add_argument("--adapter-dir", type=Path, default=default_output_dir() / "adapter")
     parser.add_argument("--date", dest="trade_date", required=True)
     parser.add_argument("--threshold", type=float, default=0.50)
     parser.add_argument("--sample-mode", choices=["short", "long"], default=DEFAULT_SAMPLE_MODE)

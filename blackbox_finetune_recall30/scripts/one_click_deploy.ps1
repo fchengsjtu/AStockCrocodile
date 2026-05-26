@@ -80,7 +80,6 @@ if ($Mode -eq "diagnose") {
 
 $DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall30/data_no_partial_week" }
 $ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall30/data_evaluation_no_partial_week" }
-$OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { "blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-lora" }
 $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.60" }
 $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260560" }
 $LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "5e-6" }
@@ -92,6 +91,8 @@ $LrBackoffFactor = if ($env:LR_BACKOFF_FACTOR) { $env:LR_BACKOFF_FACTOR } else {
 $MinLearningRate = if ($env:MIN_LEARNING_RATE) { $env:MIN_LEARNING_RATE } else { "1e-6" }
 $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 $SampleMode = if ($env:SAMPLE_MODE) { $env:SAMPLE_MODE } else { "long" }
+$DefaultOutputDir = if ($SampleMode -eq "short") { "blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-short-lora" } else { "blackbox_finetune_recall30/runs/qwen2.5-0.5b-blackbox-recall30-long-lora" }
+$OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { $DefaultOutputDir }
 $NegativeRatio = if ($env:NEGATIVE_RATIO) { $env:NEGATIVE_RATIO } else { "3.0" }
 $DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } else { "2048" }
 $DefaultCheckpointEvery = if ($SampleMode -eq "short") { "500" } else { "100" }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from bisect import bisect_right
+import os
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Sequence
@@ -11,7 +12,9 @@ from llm_finetune.common import compact_date, iter_batches, load_kline_map, pars
 
 DEFAULT_DATA_DIR = Path("blackbox_finetune_recall30") / "data_no_partial_week"
 DEFAULT_VALIDATION_DIR = Path("blackbox_finetune_recall30") / "data_evaluation_no_partial_week"
-DEFAULT_OUTPUT_DIR = Path("blackbox_finetune_recall30") / "runs" / "qwen2.5-0.5b-blackbox-recall30-lora"
+DEFAULT_OUTPUT_DIR_SHORT = Path("blackbox_finetune_recall30") / "runs" / "qwen2.5-0.5b-blackbox-recall30-short-lora"
+DEFAULT_OUTPUT_DIR_LONG = Path("blackbox_finetune_recall30") / "runs" / "qwen2.5-0.5b-blackbox-recall30-long-lora"
+DEFAULT_OUTPUT_DIR = DEFAULT_OUTPUT_DIR_LONG
 DEFAULT_TRAIN_START_DATE = "20200101"
 DEFAULT_TRAIN_END_DATE = "20251231"
 DEFAULT_VALIDATION_START_DATE = "20260101"
@@ -47,6 +50,11 @@ def sample_mode_config(sample_mode: str | None) -> dict[str, int]:
 
 def default_max_seq_length(sample_mode: str | None = None) -> int:
     return sample_mode_config(sample_mode)["max_seq_length"]
+
+
+def default_output_dir(sample_mode: str | None = None) -> Path:
+    return DEFAULT_OUTPUT_DIR_SHORT if normalize_sample_mode(sample_mode or os.environ.get("SAMPLE_MODE")) == SHORT_SAMPLE_MODE else DEFAULT_OUTPUT_DIR_LONG
+
 
 
 def label_answer(label: int) -> str:
