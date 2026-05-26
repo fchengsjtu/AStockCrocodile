@@ -43,7 +43,8 @@ $action = New-ScheduledTaskAction `
   -Argument $argument `
   -WorkingDirectory $ProjectDir
 $trigger = New-ScheduledTaskTrigger `
-  -Daily `
+  -Weekly `
+  -DaysOfWeek Tuesday, Wednesday, Thursday, Friday, Saturday `
   -At $At
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
@@ -56,9 +57,9 @@ Register-ScheduledTask `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
-  -Description "Run recall80 stock prediction daily at $At for the previous calendar day." `
+  -Description "Run recall80 stock prediction Tuesday through Saturday at $At for the previous calendar day." `
   -Force | Out-Null
 
-Write-Host "Installed scheduled task '$TaskName' to run daily at $At."
+Write-Host "Installed scheduled task '$TaskName' to run Tuesday-Saturday at $At."
 Write-Host "The task predicts the previous calendar day by default. Pass -TradeDate only for a fixed-date override."
 Write-Host "The task first requires validation positive_recall >= $RequirePositiveRecall at threshold=$Threshold, then runs prediction."
