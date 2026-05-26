@@ -67,7 +67,7 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
 
         self.assertEqual(args.learning_rate, 5e-6)
         self.assertEqual(args.max_grad_norm, 0.5)
-        self.assertEqual(args.checkpoint_every, 100)
+        self.assertEqual(args.checkpoint_every, 500)
         self.assertEqual(args.nonfinite_patience, 20)
         self.assertEqual(args.nonfinite_skip_limit, 100)
         self.assertEqual(args.nonfinite_backoff_every, 10)
@@ -82,7 +82,7 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         with patch.dict("os.environ", {"SAMPLE_MODE": "short"}):
             self.assertEqual(train.build_parser().parse_args([]).checkpoint_every, 500)
         with patch.dict("os.environ", {"SAMPLE_MODE": "long"}):
-            self.assertEqual(train.build_parser().parse_args([]).checkpoint_every, 100)
+            self.assertEqual(train.build_parser().parse_args([]).checkpoint_every, 500)
 
     def test_output_dir_default_follows_sample_mode(self):
         with patch.dict("os.environ", {"SAMPLE_MODE": "short"}):

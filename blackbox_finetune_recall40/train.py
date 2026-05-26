@@ -22,7 +22,7 @@ from llm_finetune.common import read_jsonl
 
 
 def default_checkpoint_every() -> int:
-    return 500 if os.environ.get("SAMPLE_MODE", "long").lower() == "short" else 100
+    return 500
 
 TOKEN_CACHE_VERSION = "v7_csv11_21d13w_no_partial_2020_2025"
 

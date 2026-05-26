@@ -95,7 +95,7 @@ $DefaultOutputDir = if ($SampleMode -eq "short") { "blackbox_finetune_recall50/r
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { $DefaultOutputDir }
 $NegativeRatio = if ($env:NEGATIVE_RATIO) { $env:NEGATIVE_RATIO } else { "3.0" }
 $DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } else { "2048" }
-$DefaultCheckpointEvery = if ($SampleMode -eq "short") { "500" } else { "100" }
+$DefaultCheckpointEvery = "500"
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { $DefaultCheckpointEvery }
 
 if ($Mode -eq "smoke") {

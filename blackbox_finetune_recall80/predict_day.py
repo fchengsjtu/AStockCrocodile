@@ -26,6 +26,8 @@ from blackbox_finetune_recall80.common import (
     mysql_connect,
     parse_date,
     sample_mode_config,
+    pick_weekly_window,
+    pick_monthly_window,
     pick_window,
 )
 from blackbox_finetune_recall80.gpu import prepare_rtx3060
@@ -71,11 +73,16 @@ def predict_day(
             monthly_map = load_kline_map(conn, "mkandles", "M", batch, lookback_start, anchor) if monthly_count > 0 else {}
             selected = 0
             for scode in batch:
-                daily = pick_window(daily_map.get(scode, []), anchor, daily_window)
-                weekly = pick_window(weekly_map.get(scode, []), anchor, weekly_window)
-                if daily is None or weekly is None:
+                daily = pick_window(daily_map.get(scode, []), anchor, daily_count)
+                weekly = pick_weekly_window(weekly_map.get(scode, []), daily_map.get(scode, []), anchor, weekly_count)
+                monthly = pick_monthly_window(monthly_map.get(scode, []), anchor, monthly_count) if monthly_count > 0 else []
+                if daily is None or weekly is None or monthly is None:
                     continue
-                prompt = tokenizer.apply_chat_template(build_messages(scode, anchor, daily, weekly), tokenize=False, add_generation_prompt=True)
+                prompt = tokenizer.apply_chat_template(
+                    build_messages(scode, anchor, daily, weekly, monthly, sample_mode=sample_mode),
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
                 pred = score_prediction(model, tokenizer, prompt, max_seq_length, threshold)
                 if pred["label"] != "positive":
                     continue

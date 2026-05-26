@@ -65,7 +65,7 @@ All project-level environment variables are collected here:
 | `REBUILD_TOKEN_CACHE` | recallXX one-click scripts | off | Force re-tokenization instead of using tokenized cache. |
 | `NO_AUTO_RESUME` | recallXX one-click scripts | off | Disable automatic resume from latest checkpoint. |
 | `RESUME_ADAPTER_DIR` | recallXX one-click scripts | empty | Explicit adapter checkpoint directory to resume from. |
-| `CHECKPOINT_EVERY` | recallXX one-click scripts/trainers | `500` for `SAMPLE_MODE=short`, `100` for `long` | Save adapter checkpoint every N optimizer updates. |
+| `CHECKPOINT_EVERY` | recallXX one-click scripts/trainers | `500` | Save adapter checkpoint every N optimizer updates. Applies to both `SAMPLE_MODE=short` and `SAMPLE_MODE=long` unless overridden. |
 | `EPOCHS` | fine-tuning one-click scripts | smoke/full script-specific | Training epochs. |
 | `BATCH_SIZE` | `llm_finetune` one-click scripts | `1` | Per-device batch size. |
 | `GRADIENT_ACCUMULATION_STEPS` | fine-tuning one-click scripts | smoke/full script-specific | Gradient accumulation steps. |
@@ -733,6 +733,15 @@ Run portfolio backtest with a trained black-box model. Use the black-box virtual
   --blackbox-cuda-device 0 `
   --limit-per-day 5
 ```
+
+Schedule one high-confidence recall80 prediction run for 2026-05-28 05:00 local time:
+
+```powershell
+cd D:\Documents\StockInfoCrawler
+powershell -ExecutionPolicy Bypass -File .\install_recall80_prediction_20260528_task.ps1
+```
+
+The scheduled task runs `run_recall80_prediction_20260528.ps1`, uses `SAMPLE_MODE=long`, `MAX_SEQ_LENGTH=2048`, and `--threshold 0.90`. Before prediction, it runs `blackbox_finetune_recall80.evaluate` against `blackbox_finetune_recall80\data_evaluation_no_partial_week` and requires `positive_recall >= 0.90`; if the validation gate fails, prediction is not written. When the gate passes, the script saves the top 5 predictions to MySQL and also writes `data\blackbox_recall80_predictions_20260528_threshold90.csv`. Future realized accuracy still needs tracking/backtest verification after the holding period.
 
 Black-box `predict_day` saves the top 5 ranked predictions to MySQL table `blackbox_predictions` by default, including the strategy name:
 
