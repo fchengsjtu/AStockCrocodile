@@ -1,6 +1,6 @@
 param(
   [string]$TaskName = "AStockCrocodile Daily After Close",
-  [string]$At = "16:00",
+  [string]$At = "17:00",
   [string]$ScriptPath = ""
 )
 
@@ -18,7 +18,7 @@ $action = New-ScheduledTaskAction `
   -Execute "powershell.exe" `
   -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`"" `
   -WorkingDirectory $ProjectDir
-$trigger = New-ScheduledTaskTrigger -Daily -At $At
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At $At
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
   -DontStopIfGoingOnBatteries `
@@ -30,7 +30,7 @@ Register-ScheduledTask `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
-  -Description "Run AStockCrocodile daily K-line crawl, derived K-lines, blackbox predictions, and portfolio tracking." `
+  -Description "Run AStockCrocodile daily K-line crawl and generate weekly/monthly K-lines when due." `
   -Force | Out-Null
 
-Write-Host "Installed scheduled task '$TaskName' to run daily at $At."
+Write-Host "Installed scheduled task '$TaskName' to run Monday-Friday at $At."

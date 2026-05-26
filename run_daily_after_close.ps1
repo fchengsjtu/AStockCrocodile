@@ -1,31 +1,7 @@
 param(
   [string]$TradeDate = (Get-Date -Format "yyyyMMdd"),
   [string]$MainPython = "",
-  [string]$BlackboxPython = "",
-  [string[]]$Strategies = @(
-    "blackbox_finetune_recall30",
-    "blackbox_finetune_recall35",
-    "blackbox_finetune_recall40",
-    "blackbox_finetune_recall45",
-    "blackbox_finetune_recall50",
-    "blackbox_finetune_recall55",
-    "blackbox_finetune_recall60",
-    "blackbox_finetune_recall65",
-    "blackbox_finetune_recall70",
-    "blackbox_finetune_recall75",
-    "blackbox_finetune_recall80"
-  ),
-  [double]$BlackboxThreshold = 0.50,
-  [int]$BlackboxMaxSeqLength = 512,
-  [int]$BlackboxTopN = 5,
-  [string]$CudaDevice = "0",
-  [int]$CrawlerWorkers = 8,
-  [int]$BatchSize = 80,
-  [switch]$SkipExrights,
-  [switch]$SkipKlineCrawl,
-  [switch]$SkipDerivedKlines,
-  [switch]$SkipPredictions,
-  [switch]$SkipTracking
+  [int]$CrawlerWorkers = 8
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,7 +31,7 @@ function Resolve-Python {
   if ($cmd) {
     return $cmd.Source
   }
-  throw "No Python executable found. Pass -MainPython or -BlackboxPython explicitly."
+  throw "No Python executable found. Pass -MainPython explicitly."
 }
 
 function Invoke-Step {
@@ -73,16 +49,6 @@ function Invoke-Step {
   }
 }
 
-function Test-AdapterReady {
-  param([string]$Strategy)
-  $adapter = Join-Path $ProjectDir "$Strategy\runs\qwen2.5-0.5b-$($Strategy -replace '^blackbox_finetune_', 'blackbox-')-lora\adapter\adapter_config.json"
-  if (Test-Path $adapter) {
-    return $true
-  }
-  $fallback = Join-Path $ProjectDir "$Strategy\runs\qwen2.5-0.5b-blackbox-$($Strategy -replace '^blackbox_finetune_', '')-lora\adapter\adapter_config.json"
-  return (Test-Path $fallback)
-}
-
 function Get-TradeDateValue {
   return [datetime]::ParseExact($TradeDate, "yyyyMMdd", $null)
 }
@@ -97,88 +63,34 @@ function Test-MonthlyDue {
 }
 
 $MainPythonExe = Resolve-Python -Requested $MainPython -Candidates @(".\.venv\Scripts\python.exe")
-$BlackboxPythonExe = Resolve-Python -Requested $BlackboxPython -Candidates @(".\.venv-blackbox-finetune-recall30\Scripts\python.exe", $MainPythonExe)
 
 Write-Host "ProjectDir=$ProjectDir"
 Write-Host "TradeDate=$TradeDate"
 Write-Host "MainPython=$MainPythonExe"
-Write-Host "BlackboxPython=$BlackboxPythonExe"
 Write-Host "LogFile=$LogFile"
 
 try {
-  if (-not $SkipExrights) {
-    Invoke-Step "crawl exrights and refresh changed qfq K-lines" $MainPythonExe @(
-      ".\a_share_crawler.py", "exrights",
-      "--end-date", $TradeDate,
-      "--workers", [string]$CrawlerWorkers
-    )
+  Invoke-Step "crawl daily K-lines" $MainPythonExe @(
+    ".\a_share_crawler.py", "run",
+    "--mode", "incremental",
+    "--period", "daily",
+    "--end-date", $TradeDate,
+    "--workers", [string]$CrawlerWorkers
+  )
+
+  if (Test-WeeklyDue) {
+    Invoke-Step "generate weekly K-lines" $MainPythonExe @(".\a_share_crawler.py", "generate", "--period", "weekly")
   } else {
-    Write-Host "Skip exrights crawl."
+    Write-Host "Skip weekly K-line generation: trade date is not Friday."
   }
 
-  if (-not $SkipKlineCrawl) {
-    Invoke-Step "crawl daily K-lines" $MainPythonExe @(
-      ".\a_share_crawler.py", "run",
-      "--mode", "incremental",
-      "--period", "daily",
-      "--end-date", $TradeDate,
-      "--workers", [string]$CrawlerWorkers
-    )
+  if (Test-MonthlyDue) {
+    Invoke-Step "generate monthly K-lines" $MainPythonExe @(".\a_share_crawler.py", "generate", "--period", "monthly")
+  } else {
+    Write-Host "Skip monthly K-line generation: trade date is not the last trading day of the month."
   }
 
-  if (-not $SkipDerivedKlines) {
-    if (Test-WeeklyDue) {
-      Invoke-Step "generate weekly K-lines" $MainPythonExe @(".\a_share_crawler.py", "generate", "--period", "weekly")
-    } else {
-      Write-Host "Skip weekly K-line generation: today is not Friday."
-    }
-    if (Test-MonthlyDue) {
-      Invoke-Step "generate monthly K-lines" $MainPythonExe @(".\a_share_crawler.py", "generate", "--period", "monthly")
-    } else {
-      Write-Host "Skip monthly K-line generation: today is not the last trading day of the month."
-    }
-  }
-
-  if (-not $SkipPredictions) {
-    foreach ($strategy in $Strategies) {
-      if (-not (Test-Path (Join-Path $ProjectDir $strategy))) {
-        Write-Host "Skip ${strategy}: directory does not exist."
-        continue
-      }
-      if (-not (Test-AdapterReady $strategy)) {
-        Write-Host "Skip ${strategy}: trained adapter not found."
-        continue
-      }
-      Invoke-Step "predict $strategy top $BlackboxTopN" $BlackboxPythonExe @(
-        "-m", "$strategy.predict_day",
-        "--date", $TradeDate,
-        "--threshold", [string]$BlackboxThreshold,
-        "--max-seq-length", [string]$BlackboxMaxSeqLength,
-        "--cuda-device", $CudaDevice,
-        "--save-top-n", [string]$BlackboxTopN,
-        "--limit", [string]$BlackboxTopN
-      )
-    }
-  }
-
-  if (-not $SkipTracking) {
-    foreach ($strategy in $Strategies) {
-      if (-not (Test-Path (Join-Path $ProjectDir $strategy))) {
-        continue
-      }
-      if (-not (Test-AdapterReady $strategy)) {
-        Write-Host "Skip tracking ${strategy}: trained adapter not found."
-        continue
-      }
-      Invoke-Step "track portfolio $strategy" $BlackboxPythonExe @(
-        "-m", "portfolio_backtest.track_blackbox",
-        "--strategy-name", $strategy,
-        "--batch-size", [string]$BatchSize
-      )
-    }
-  }
-
-  Write-Host "Daily after-close workflow completed."
+  Write-Host "Daily after-close K-line workflow completed."
 }
 finally {
   Stop-Transcript | Out-Null
