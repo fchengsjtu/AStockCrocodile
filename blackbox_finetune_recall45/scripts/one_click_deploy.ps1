@@ -157,10 +157,10 @@ $LrBackoffFactor = if ($env:LR_BACKOFF_FACTOR) { $env:LR_BACKOFF_FACTOR } else {
 $MinLearningRate = if ($env:MIN_LEARNING_RATE) { $env:MIN_LEARNING_RATE } else { "1e-6" }
 $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 $SampleMode = if ($env:SAMPLE_MODE) { $env:SAMPLE_MODE } else { "long" }
-$DefaultOutputDir = if ($SampleMode -eq "short") { "blackbox_finetune_recall45/runs/qwen2.5-0.5b-blackbox-recall45-short-lora" } elseif ($SampleMode -eq "xlong") { "blackbox_finetune_recall45/runs/qwen2.5-0.5b-blackbox-recall45-xlong-lora" } else { "blackbox_finetune_recall45/runs/qwen2.5-0.5b-blackbox-recall45-long-lora" }
+$DefaultOutputDir = if ($SampleMode -eq "short") { "blackbox_finetune_recall45/runs/qwen2.5-0.5b-blackbox-recall45-short-lora" } elseif ($SampleMode -eq "xlong") { "blackbox_finetune_recall45/runs/qwen2.5-0.5b-blackbox-recall45-xlong-lora" } elseif ($SampleMode -eq "xxlong") { "blackbox_finetune_recall45/runs/qwen2.5-0.5b-blackbox-recall45-xxlong-lora" } else { "blackbox_finetune_recall45/runs/qwen2.5-0.5b-blackbox-recall45-long-lora" }
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { $DefaultOutputDir }
 $NegativeRatio = if ($env:NEGATIVE_RATIO) { $env:NEGATIVE_RATIO } else { "3.0" }
-$DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } elseif ($SampleMode -eq "xlong") { "3072" } else { "2048" }
+$DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } elseif ($SampleMode -eq "xlong") { "3072" } elseif ($SampleMode -eq "xxlong") { "4096" } else { "2048" }
 $DefaultCheckpointEvery = "500"
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { $DefaultCheckpointEvery }
 

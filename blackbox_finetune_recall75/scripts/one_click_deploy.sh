@@ -63,6 +63,8 @@ if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_OUTPUT_DIR="blackbox_finetune_recall75/runs/qwen2.5-0.5b-blackbox-recall75-short-lora"
 elif [[ "$SAMPLE_MODE" == "xlong" ]]; then
   DEFAULT_OUTPUT_DIR="blackbox_finetune_recall75/runs/qwen2.5-0.5b-blackbox-recall75-xlong-lora"
+elif [[ "$SAMPLE_MODE" == "xxlong" ]]; then
+  DEFAULT_OUTPUT_DIR="blackbox_finetune_recall75/runs/qwen2.5-0.5b-blackbox-recall75-xxlong-lora"
 else
   DEFAULT_OUTPUT_DIR="blackbox_finetune_recall75/runs/qwen2.5-0.5b-blackbox-recall75-long-lora"
 fi
@@ -73,6 +75,9 @@ if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_CHECKPOINT_EVERY=500
 elif [[ "$SAMPLE_MODE" == "xlong" ]]; then
   DEFAULT_MAX_SEQ_LENGTH=3072
+  DEFAULT_CHECKPOINT_EVERY=500
+elif [[ "$SAMPLE_MODE" == "xxlong" ]]; then
+  DEFAULT_MAX_SEQ_LENGTH=4096
   DEFAULT_CHECKPOINT_EVERY=500
 else
   DEFAULT_MAX_SEQ_LENGTH=2048

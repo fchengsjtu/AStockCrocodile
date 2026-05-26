@@ -43,12 +43,12 @@ All project-level environment variables are collected here:
 | `BASE_MODEL` | fine-tuning one-click scripts | `Qwen/Qwen2.5-0.5B-Instruct` | HuggingFace-format base model or local model directory. |
 | `DATA_DIR` | fine-tuning one-click scripts | script-specific `data` path | Training dataset directory. |
 | `VALIDATION_DATA_DIR` | blackbox one-click scripts | script-specific validation data path | Validation/evaluation dataset directory. |
-| `OUTPUT_DIR` | fine-tuning one-click scripts | script-specific `runs/...` path | Adapter/checkpoint output directory. For recallXX scripts, default is split by `SAMPLE_MODE`: `...-short-lora`, `...-long-lora`, or `...-xlong-lora`. |
+| `OUTPUT_DIR` | fine-tuning one-click scripts | script-specific `runs/...` path | Adapter/checkpoint output directory. For recallXX scripts, default is split by `SAMPLE_MODE`: `...-short-lora`, `...-long-lora`, `...-xlong-lora`, or `...-xxlong-lora`. |
 | `CUDA_DEVICE` | blackbox recallXX scripts | `0` | CUDA device id, normally the RTX 3060. |
 | `CUDA_VISIBLE_DEVICES` | GPU tools | set from `CUDA_DEVICE` | CUDA visibility binding. Usually do not set directly. |
 | `PYTORCH_CUDA_ALLOC_CONF` | GPU tools | `expandable_segments:True` on Linux scripts | PyTorch CUDA allocator tuning. |
 | `TORCH_CUDA_INDEX` | Windows recallXX scripts | `https://download.pytorch.org/whl/cu121` | CUDA PyTorch wheel index if the script needs to install GPU PyTorch. |
-| `SAMPLE_MODE` | `blackbox_finetune_recallXX` | `long` | `short`: 8日K+5周K, `MAX_SEQ_LENGTH=1024`; `long`: 13日K+8周K+5月K, `MAX_SEQ_LENGTH=2048`; `xlong`: 21日K+13周K+8月K, `MAX_SEQ_LENGTH=3072`. |
+| `SAMPLE_MODE` | `blackbox_finetune_recallXX` | `long` | `short`: 8日K+5周K, `MAX_SEQ_LENGTH=1024`; `long`: 13日K+8周K+5月K, `MAX_SEQ_LENGTH=2048`; `xlong`: 21日K+13周K+8月K, `MAX_SEQ_LENGTH=3072`; `xxlong`: 34日K+21周K+13月K, `MAX_SEQ_LENGTH=4096`. |
 | `MAX_SEQ_LENGTH` | fine-tuning scripts | mode/script-specific | Override token length. For recallXX, omit unless intentionally overriding `SAMPLE_MODE` default. |
 | `NEGATIVE_RATIO` | dataset builders | recallXX default `3.0`; older fine-tune default `1.0` | Negative samples per positive sample. |
 | `TRAIN_START_DATE` | recallXX dataset builders and one-click scripts | target/mode-specific | Training sample start date, format `YYYYMMDD`. |
@@ -198,10 +198,13 @@ The `blackbox_finetune_recallXX/` pipelines support two compact sample modes:
 - `long` default: 13 daily K-lines, 8 weekly K-lines, 5 monthly K-lines, default `MAX_SEQ_LENGTH=2048`. Samples are kept only when all 5 monthly K-lines exist.
 - `short`: 8 daily K-lines and 5 weekly K-lines, default `MAX_SEQ_LENGTH=1024`. Samples are kept only when the latest 5 weekly K-lines exist and each has `ma13`.
 - `xlong`: 21 daily K-lines, 13 weekly K-lines, 8 monthly K-lines, default `MAX_SEQ_LENGTH=3072`. Samples are kept only when all 8 monthly K-lines exist.
+- `xxlong`: 34 daily K-lines, 21 weekly K-lines, 13 monthly K-lines, default `MAX_SEQ_LENGTH=4096`. Samples are kept only when all 13 monthly K-lines exist.
 
-Use `SAMPLE_MODE=short`, `SAMPLE_MODE=long`, or `SAMPLE_MODE=xlong` with the recallXX one-click scripts. Set `MAX_SEQ_LENGTH` only when you intentionally want to override the mode default.
+Use `SAMPLE_MODE=short`, `SAMPLE_MODE=long`, `SAMPLE_MODE=xlong`, or `SAMPLE_MODE=xxlong` with the recallXX one-click scripts. Set `MAX_SEQ_LENGTH` only when you intentionally want to override the mode default.
 
 The `xlong` encoding was checked with 1000 materialized samples from `20240101-20251231` using the Qwen2.5-0.5B tokenizer. Full chat prompt length averaged about `2180` tokens and maxed at `2242`, so the default `MAX_SEQ_LENGTH=3072` has enough room for the current compact CSV prompt format.
+
+The `xxlong` encoding was checked with the same tokenizer and sample range. Full chat prompt length averaged about `3513` tokens and maxed at `3588`, so it needs the default `MAX_SEQ_LENGTH=4096`; `3072` is not enough for this window.
 
 Set `NEGATIVE_RATIO` to control the negative-sample multiplier. The default is `3.0`, meaning three negative samples per positive sample. All recallXX environment overrides are listed in [Environment Variables](#environment-variables).
 

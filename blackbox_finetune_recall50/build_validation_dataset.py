@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-date", default=os.environ.get("VALIDATION_END_DATE") or os.environ.get("TEST_END_DATE", DEFAULT_VALIDATION_END_DATE))
     parser.add_argument("--positive-limit", type=int)
     parser.add_argument("--negative-ratio", type=float, default=float(os.environ.get("NEGATIVE_RATIO", "3.0")))
-    parser.add_argument("--sample-mode", choices=["short", "long", "xlong"], default=DEFAULT_SAMPLE_MODE)
+    parser.add_argument("--sample-mode", choices=["short", "long", "xlong", "xxlong"], default=DEFAULT_SAMPLE_MODE)
     parser.add_argument("--daily-window", type=int, help="Override daily bars for the selected sample mode")
     parser.add_argument("--weekly-window", type=int, help="Override weekly bars for the selected sample mode")
     parser.add_argument("--monthly-window", type=int, help="Override monthly bars for the selected sample mode")

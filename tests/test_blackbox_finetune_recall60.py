@@ -55,6 +55,8 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(common.default_max_seq_length("short"), 1024)
         self.assertEqual(common.sample_mode_config("xlong"), {"daily": 21, "weekly": 13, "monthly": 8, "max_seq_length": 3072})
         self.assertEqual(common.default_max_seq_length("xlong"), 3072)
+        self.assertEqual(common.sample_mode_config("xxlong"), {"daily": 34, "weekly": 21, "monthly": 13, "max_seq_length": 4096})
+        self.assertEqual(common.default_max_seq_length("xxlong"), 4096)
         self.assertEqual(train.build_parser().parse_args([]).max_seq_length, 2048)
         self.assertEqual(evaluate.build_parser().parse_args([]).max_seq_length, 2048)
         self.assertEqual(predict_day.build_parser().parse_args(["--date", "20260514"]).max_seq_length, 2048)

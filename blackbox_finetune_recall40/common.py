@@ -15,6 +15,7 @@ DEFAULT_VALIDATION_DIR = Path("blackbox_finetune_recall40") / "data_evaluation_n
 DEFAULT_OUTPUT_DIR_SHORT = Path("blackbox_finetune_recall40") / "runs" / "qwen2.5-0.5b-blackbox-recall40-short-lora"
 DEFAULT_OUTPUT_DIR_LONG = Path("blackbox_finetune_recall40") / "runs" / "qwen2.5-0.5b-blackbox-recall40-long-lora"
 DEFAULT_OUTPUT_DIR_XLONG = Path("blackbox_finetune_recall40") / "runs" / "qwen2.5-0.5b-blackbox-recall40-xlong-lora"
+DEFAULT_OUTPUT_DIR_XXLONG = Path("blackbox_finetune_recall40") / "runs" / "qwen2.5-0.5b-blackbox-recall40-xxlong-lora"
 DEFAULT_OUTPUT_DIR = DEFAULT_OUTPUT_DIR_LONG
 DEFAULT_TRAIN_START_DATE = "20200101"
 DEFAULT_TRAIN_END_DATE = "20251231"
@@ -27,11 +28,13 @@ SYSTEM_PROMPT = "Classify A-share surge. Return JSON."
 SHORT_SAMPLE_MODE = "short"
 LONG_SAMPLE_MODE = "long"
 XLONG_SAMPLE_MODE = "xlong"
+XXLONG_SAMPLE_MODE = "xxlong"
 DEFAULT_SAMPLE_MODE = LONG_SAMPLE_MODE
 SAMPLE_MODES = {
     SHORT_SAMPLE_MODE: {"daily": 8, "weekly": 5, "monthly": 0, "max_seq_length": 1024},
     LONG_SAMPLE_MODE: {"daily": 13, "weekly": 8, "monthly": 5, "max_seq_length": 2048},
     XLONG_SAMPLE_MODE: {"daily": 21, "weekly": 13, "monthly": 8, "max_seq_length": 3072},
+    XXLONG_SAMPLE_MODE: {"daily": 34, "weekly": 21, "monthly": 13, "max_seq_length": 4096},
 }
 COMPACT_DAILY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["daily"]
 COMPACT_WEEKLY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["weekly"]
@@ -61,6 +64,8 @@ def default_output_dir(sample_mode: str | None = None) -> Path:
         return DEFAULT_OUTPUT_DIR_SHORT
     if mode == XLONG_SAMPLE_MODE:
         return DEFAULT_OUTPUT_DIR_XLONG
+    if mode == XXLONG_SAMPLE_MODE:
+        return DEFAULT_OUTPUT_DIR_XXLONG
     return DEFAULT_OUTPUT_DIR_LONG
 
 
@@ -287,8 +292,10 @@ def pick_monthly_window(monthly_rows: list[dict], anchor_date: date, window: int
 def _sample_windows_are_valid(sample_mode: str, weekly: list[dict], monthly: list[dict] | None) -> bool:
     if sample_mode == SHORT_SAMPLE_MODE:
         return len(weekly) >= 5 and _has_positive_ma13(weekly[-5:])
-    if sample_mode == LONG_SAMPLE_MODE:
-        return monthly is not None and len(monthly) >= 5
+    config = sample_mode_config(sample_mode)
+    monthly_required = config.get("monthly", 0)
+    if monthly_required > 0:
+        return monthly is not None and len(monthly) >= monthly_required
     return True
 
 
