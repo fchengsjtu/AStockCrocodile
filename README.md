@@ -202,6 +202,13 @@ Use `SAMPLE_MODE=short` or `SAMPLE_MODE=long` with the recallXX one-click script
 
 Set `NEGATIVE_RATIO` to control the negative-sample multiplier. The default is `3.0`, meaning three negative samples per positive sample. All recallXX environment overrides are listed in [Environment Variables](#environment-variables).
 
+The recallXX one-click scripts print only project-related environment variables after the CUDA check. They do not print unrelated system variables such as `Path` or `APPDATA`. Dataset and token cache reuse follows these rules:
+
+- If `train.jsonl` and `test.jsonl` already exist under `DATA_DIR`, the training dataset is reused unless `REBUILD_DATASET=1/true/yes` is set.
+- If validation files already exist under `VALIDATION_DATA_DIR`, the validation dataset is reused unless `REBUILD_VALIDATION_DATASET=1/true/yes` or `REBUILD_DATASET=1/true/yes` is set.
+- Tokenized samples are reused when `train.jsonl`, `BASE_MODEL`, and `MAX_SEQ_LENGTH` are unchanged. Rebuilding `train.jsonl` changes its timestamp/size fingerprint, so tokenization is rebuilt too.
+- `REBUILD_TOKEN_CACHE=1/true/yes` forces tokenization rebuild even when the tokenized cache exists.
+
 Windows one-click smoke run:
 
 ```powershell

@@ -47,20 +47,76 @@ function Invoke-DatasetBuildIfNeeded {
     [string]$ForceValue,
     [string[]]$CommandArgs
   )
-  if ((Test-DatasetReady $Dir) -and -not (Test-EnvFlag $ForceValue)) {
-    Write-Host "Using cached $Label dataset in $Dir; set REBUILD_DATASET=1 to rebuild all datasets."
-    return
+  if (Test-DatasetReady $Dir) {
+    if (Test-EnvFlag $ForceValue) {
+      Write-Host "Rebuilding cached $Label dataset in $Dir because the rebuild flag is set."
+    } else {
+      Write-Host "Using cached $Label dataset in $Dir; set REBUILD_DATASET=1 to rebuild all datasets."
+      return
+    }
   }
   Invoke-Step @CommandArgs
 }
 
 function Write-EnvironmentSnapshot {
+  $ProjectEnvNames = @(
+    "PYTHON_BIN",
+    "VENV_DIR",
+    "BASE_MODEL",
+    "DATA_DIR",
+    "VALIDATION_DATA_DIR",
+    "OUTPUT_DIR",
+    "CUDA_DEVICE",
+    "CUDA_VISIBLE_DEVICES",
+    "PYTORCH_CUDA_ALLOC_CONF",
+    "TORCH_CUDA_INDEX",
+    "SAMPLE_MODE",
+    "MAX_SEQ_LENGTH",
+    "NEGATIVE_RATIO",
+    "TRAIN_START_DATE",
+    "TRAIN_END_DATE",
+    "VALIDATION_START_DATE",
+    "VALIDATION_END_DATE",
+    "TEST_START_DATE",
+    "TEST_END_DATE",
+    "POSITIVE_LIMIT",
+    "SMOKE_POSITIVE_LIMIT",
+    "MIN_POSITIVE_RECALL",
+    "REBUILD_DATASET",
+    "REBUILD_VALIDATION_DATASET",
+    "REBUILD_TOKEN_CACHE",
+    "NO_AUTO_RESUME",
+    "RESUME_ADAPTER_DIR",
+    "CHECKPOINT_EVERY",
+    "EPOCHS",
+    "GRADIENT_ACCUMULATION_STEPS",
+    "LEARNING_RATE",
+    "TRAIN_SEED",
+    "MAX_GRAD_NORM",
+    "OOM_PATIENCE",
+    "MIN_SEQ_LENGTH_ON_OOM",
+    "OOM_SHRINK_FACTOR",
+    "NONFINITE_SKIP_LIMIT",
+    "NONFINITE_BACKOFF_EVERY",
+    "LR_BACKOFF_FACTOR",
+    "MIN_LEARNING_RATE",
+    "HF_HOME",
+    "HF_ENDPOINT",
+    "HF_TOKEN"
+  )
   Write-Host ""
-  Write-Host "==== Current environment variables ===="
-  Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
-    Write-Host ("{0}={1}" -f $_.Name, $_.Value)
+  Write-Host "==== Project environment variables ===="
+  foreach ($name in $ProjectEnvNames) {
+    $value = [Environment]::GetEnvironmentVariable($name, "Process")
+    if ($null -eq $value -or $value -eq "") {
+      $value = "<unset>"
+    }
+    Write-Host ("{0}={1}" -f $name, $value)
   }
-  Write-Host "==== End environment variables ===="
+  if ([Environment]::GetEnvironmentVariable("LEARING_RATE", "Process")) {
+    Write-Warning "LEARING_RATE is ignored. Did you mean LEARNING_RATE?"
+  }
+  Write-Host "==== End project environment variables ===="
   Write-Host ""
 }
 
