@@ -33,6 +33,12 @@ class LlmFinetuneTests(unittest.TestCase):
         self.assertEqual(len(window), 55)
         self.assertEqual(window[-1]["date"], "20260301")
 
+    def test_kline_query_accepts_monthly_table(self):
+        sql, params = common.kline_query("mkandles", "M", ["000001"], date(2026, 1, 1), date(2026, 1, 31))
+
+        self.assertIn("FROM mkandles", sql)
+        self.assertEqual(params[0], "M")
+
     def test_messages_include_supervised_json_label(self):
         kline = [{"date": "20260101", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 10, "amount": 20}]
 

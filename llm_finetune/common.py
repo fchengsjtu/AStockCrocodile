@@ -172,7 +172,7 @@ def write_jsonl(path: Path, rows: Iterable[dict]) -> int:
 
 
 def kline_query(table: str, ktype: str, scodes: Sequence[str], start_date: date, end_date: date) -> tuple[str, list]:
-    if table not in {"dkandles", "wkandles"}:
+    if table not in {"dkandles", "wkandles", "mkandles"}:
         raise ValueError(f"unsupported table: {table}")
     placeholders = ",".join(["%s"] * len(scodes))
     sql = f"""
