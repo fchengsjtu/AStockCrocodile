@@ -1,5 +1,5 @@
 param(
-  [string]$TradeDate = "20260527",
+  [string]$TradeDate = "",
   [double]$Threshold = 0.80,
   [int]$Limit = 20,
   [int]$SaveTopN = 20,
@@ -19,6 +19,10 @@ $ErrorActionPreference = "Stop"
 
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ProjectDir
+
+if (-not $TradeDate) {
+  $TradeDate = (Get-Date).Date.AddDays(-1).ToString("yyyyMMdd")
+}
 
 $LogDir = Join-Path $ProjectDir "logs"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -54,21 +58,24 @@ try {
   )
 
   if (-not $AdapterDir) {
-    $AdapterDir = if ($SampleMode -eq "short") {
-      "blackbox_finetune_recall80\runs\qwen2.5-0.5b-blackbox-recall80-short-lora\adapter"
-    } else {
-      "blackbox_finetune_recall80\runs\qwen2.5-0.5b-blackbox-recall80-long-lora\adapter"
+    $AdapterDir = switch ($SampleMode) {
+      "short" { "blackbox_finetune_recall80\runs\qwen2.5-0.5b-blackbox-recall80-short-lora\adapter" }
+      "xlong" { "blackbox_finetune_recall80\runs\qwen2.5-0.5b-blackbox-recall80-xlong-lora\adapter" }
+      "xxlong" { "blackbox_finetune_recall80\runs\qwen2.5-0.5b-blackbox-recall80-xxlong-lora\adapter" }
+      default { "blackbox_finetune_recall80\runs\qwen2.5-0.5b-blackbox-recall80-long-lora\adapter" }
     }
   }
   if (-not (Test-Path (Join-Path $AdapterDir "adapter_config.json"))) {
     throw "Trained recall80 adapter not found: $AdapterDir"
   }
   if (-not $Output) {
-    $Output = "data\blackbox_recall80_predictions_${TradeDate}_threshold90.csv"
+    $ThresholdTag = [int][Math]::Round($Threshold * 100)
+    $Output = "data\blackbox_recall80_predictions_${TradeDate}_threshold${ThresholdTag}.csv"
   }
 
   Write-Host "ProjectDir=$ProjectDir"
   Write-Host "TradeDate=$TradeDate"
+  Write-Host "TradeDateSource=$(if ($PSBoundParameters.ContainsKey('TradeDate') -and $PSBoundParameters['TradeDate']) { 'explicit' } else { 'previous calendar day' })"
   Write-Host "Threshold=$Threshold"
   Write-Host "RequirePositiveRecall=$RequirePositiveRecall"
   Write-Host "ValidationDataDir=$ValidationDataDir"

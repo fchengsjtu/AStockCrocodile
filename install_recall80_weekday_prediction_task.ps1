@@ -1,14 +1,14 @@
 param(
-  [string]$TaskName = "AStockCrocodile Recall80 Prediction 20260528 0500",
-  [datetime]$At = [datetime]"2026-05-28T05:00:00",
+  [string]$TaskName = "AStockCrocodile Recall80 Previous Day Prediction",
+  [string]$At = "05:00",
   [string]$ScriptPath = "",
-  [string]$TradeDate = "20260528",
-  [double]$Threshold = 0.90,
-  [int]$Limit = 5,
-  [int]$SaveTopN = 5,
+  [string]$TradeDate = "",
+  [double]$Threshold = 0.80,
+  [int]$Limit = 20,
+  [int]$SaveTopN = 20,
   [string]$SampleMode = "long",
   [int]$MaxSeqLength = 2048,
-  [double]$RequirePositiveRecall = 0.90,
+  [double]$RequirePositiveRecall = 0.80,
   [string]$CudaDevice = "0"
 )
 
@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 
 $ProjectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $ScriptPath) {
-  $ScriptPath = Join-Path $ProjectDir "run_recall80_prediction_20260528.ps1"
+  $ScriptPath = Join-Path $ProjectDir "run_recall80_previous_day_prediction.ps1"
 }
 if (-not (Test-Path $ScriptPath)) {
   throw "Prediction script not found: $ScriptPath"
@@ -26,7 +26,6 @@ $argument = @(
   "-NoProfile",
   "-ExecutionPolicy", "Bypass",
   "-File", "`"$ScriptPath`"",
-  "-TradeDate", $TradeDate,
   "-Threshold", $Threshold,
   "-Limit", $Limit,
   "-SaveTopN", $SaveTopN,
@@ -35,12 +34,18 @@ $argument = @(
   "-RequirePositiveRecall", $RequirePositiveRecall,
   "-CudaDevice", $CudaDevice
 ) -join " "
+if ($TradeDate) {
+  $argument = "$argument -TradeDate $TradeDate"
+}
 
 $action = New-ScheduledTaskAction `
   -Execute "powershell.exe" `
   -Argument $argument `
   -WorkingDirectory $ProjectDir
-$trigger = New-ScheduledTaskTrigger -Once -At $At
+$trigger = New-ScheduledTaskTrigger `
+  -Weekly `
+  -DaysOfWeek Tuesday, Wednesday, Thursday, Friday, Saturday `
+  -At $At
 $settings = New-ScheduledTaskSettingsSet `
   -AllowStartIfOnBatteries `
   -DontStopIfGoingOnBatteries `
@@ -52,8 +57,9 @@ Register-ScheduledTask `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
-  -Description "Run recall80 high-confidence stock prediction once at 2026-05-28 05:00 local time." `
+  -Description "Run recall80 stock prediction Tuesday through Saturday at $At for the previous calendar day." `
   -Force | Out-Null
 
-Write-Host "Installed scheduled task '$TaskName' to run once at $($At.ToString('yyyy-MM-dd HH:mm:ss'))."
+Write-Host "Installed scheduled task '$TaskName' to run Tuesday-Saturday at $At."
+Write-Host "The task predicts the previous calendar day by default. Pass -TradeDate only for a fixed-date override."
 Write-Host "The task first requires validation positive_recall >= $RequirePositiveRecall at threshold=$Threshold, then runs prediction."

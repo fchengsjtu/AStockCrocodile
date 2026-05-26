@@ -747,14 +747,14 @@ Run portfolio backtest with a trained black-box model. Use the black-box virtual
   --limit-per-day 5
 ```
 
-Schedule one high-confidence recall80 prediction run for 2026-05-28 05:00 local time:
+Schedule recall80 prediction for the previous calendar day, running Tuesday through Saturday at 05:00 local time:
 
 ```powershell
 cd D:\Documents\StockInfoCrawler
-powershell -ExecutionPolicy Bypass -File .\install_recall80_prediction_20260528_task.ps1
+powershell -ExecutionPolicy Bypass -File .\install_recall80_weekday_prediction_task.ps1
 ```
 
-The scheduled task runs `run_recall80_prediction_20260528.ps1`, uses `SAMPLE_MODE=long`, `MAX_SEQ_LENGTH=2048`, and `--threshold 0.90`. Before prediction, it runs `blackbox_finetune_recall80.evaluate` against `blackbox_finetune_recall80\data_evaluation_no_partial_week` and requires `positive_recall >= 0.90`; if the validation gate fails, prediction is not written. When the gate passes, the script saves the top 5 predictions to MySQL and also writes `data\blackbox_recall80_predictions_20260528_threshold90.csv`. Future realized accuracy still needs tracking/backtest verification after the holding period.
+The scheduled task runs `run_recall80_previous_day_prediction.ps1`. Because it runs after midnight, the prediction date defaults to the previous calendar day: Tuesday 05:00 predicts Monday, Wednesday 05:00 predicts Tuesday, and Saturday 05:00 predicts Friday. The default task uses `SAMPLE_MODE=long`, `MAX_SEQ_LENGTH=2048`, and `threshold=0.80`. Before prediction, it runs `blackbox_finetune_recall80.evaluate` against `blackbox_finetune_recall80\data_evaluation_no_partial_week` and requires `positive_recall >= 0.80`; if the validation gate fails, prediction is not written. When the gate passes, the script saves the top 20 predictions to MySQL and also writes a dated CSV under `data\`.
 
 Black-box `predict_day` saves the top 5 ranked predictions to MySQL table `blackbox_predictions` by default, including the strategy name:
 
