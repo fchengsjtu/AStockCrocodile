@@ -54,6 +54,15 @@ function Invoke-DatasetBuildIfNeeded {
   Invoke-Step @CommandArgs
 }
 
+function Write-EnvironmentSnapshot {
+  Write-Host ""
+  Write-Host "==== Current environment variables ===="
+  Get-ChildItem Env: | Sort-Object Name | ForEach-Object {
+    Write-Host ("{0}={1}" -f $_.Name, $_.Value)
+  }
+  Write-Host "==== End environment variables ===="
+  Write-Host ""
+}
 $Mode = if ($args.Count -gt 0) { $args[0] } else { "smoke" }
 $PythonBin = if ($env:PYTHON_BIN) { $env:PYTHON_BIN } elseif (Test-Path ".\.venv\Scripts\python.exe") { ".\.venv\Scripts\python.exe" } else { "python" }
 $VenvDir = if ($env:VENV_DIR) { $env:VENV_DIR } else { ".\.venv-blackbox-finetune-recall35" }
@@ -74,6 +83,7 @@ if (!(Test-TorchCuda)) {
   Install-CudaTorch
 }
 Invoke-Step -m blackbox_finetune_recall35.gpu --cuda-device $CudaDevice
+Write-EnvironmentSnapshot
 if ($Mode -eq "diagnose") {
   exit 0
 }
