@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--adapter-dir", type=Path, default=default_output_dir() / "adapter")
     parser.add_argument("--date", dest="trade_date", required=True)
     parser.add_argument("--threshold", type=float, default=0.50)
-    parser.add_argument("--sample-mode", choices=["short", "long"], default=DEFAULT_SAMPLE_MODE)
+    parser.add_argument("--sample-mode", choices=["short", "long", "xlong"], default=DEFAULT_SAMPLE_MODE)
     parser.add_argument("--daily-window", type=int, help="Override daily bars for the selected sample mode")
     parser.add_argument("--weekly-window", type=int, help="Override weekly bars for the selected sample mode")
     parser.add_argument("--monthly-window", type=int, help="Override monthly bars for the selected sample mode")

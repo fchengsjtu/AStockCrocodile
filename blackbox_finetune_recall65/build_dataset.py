@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--negative-ratio", type=float, default=float(os.environ.get("NEGATIVE_RATIO", "3.0")))
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--sample-mode", choices=["short", "long"], default=DEFAULT_SAMPLE_MODE)
+    parser.add_argument("--sample-mode", choices=["short", "long", "xlong"], default=DEFAULT_SAMPLE_MODE)
     parser.add_argument("--daily-window", type=int, help="Override daily bars for the selected sample mode")
     parser.add_argument("--weekly-window", type=int, help="Override weekly bars for the selected sample mode")
     parser.add_argument("--monthly-window", type=int, help="Override monthly bars for the selected sample mode")

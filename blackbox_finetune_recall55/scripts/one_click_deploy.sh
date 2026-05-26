@@ -61,6 +61,8 @@ RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
 SAMPLE_MODE="${SAMPLE_MODE:-long}"
 if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_OUTPUT_DIR="blackbox_finetune_recall55/runs/qwen2.5-0.5b-blackbox-recall55-short-lora"
+elif [[ "$SAMPLE_MODE" == "xlong" ]]; then
+  DEFAULT_OUTPUT_DIR="blackbox_finetune_recall55/runs/qwen2.5-0.5b-blackbox-recall55-xlong-lora"
 else
   DEFAULT_OUTPUT_DIR="blackbox_finetune_recall55/runs/qwen2.5-0.5b-blackbox-recall55-long-lora"
 fi
@@ -68,6 +70,9 @@ OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
 NEGATIVE_RATIO="${NEGATIVE_RATIO:-3.0}"
 if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_MAX_SEQ_LENGTH=1024
+  DEFAULT_CHECKPOINT_EVERY=500
+elif [[ "$SAMPLE_MODE" == "xlong" ]]; then
+  DEFAULT_MAX_SEQ_LENGTH=3072
   DEFAULT_CHECKPOINT_EVERY=500
 else
   DEFAULT_MAX_SEQ_LENGTH=2048

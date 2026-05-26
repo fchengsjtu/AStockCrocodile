@@ -14,6 +14,7 @@ DEFAULT_DATA_DIR = Path("blackbox_finetune_recall45") / "data_no_partial_week"
 DEFAULT_VALIDATION_DIR = Path("blackbox_finetune_recall45") / "data_evaluation_no_partial_week"
 DEFAULT_OUTPUT_DIR_SHORT = Path("blackbox_finetune_recall45") / "runs" / "qwen2.5-0.5b-blackbox-recall45-short-lora"
 DEFAULT_OUTPUT_DIR_LONG = Path("blackbox_finetune_recall45") / "runs" / "qwen2.5-0.5b-blackbox-recall45-long-lora"
+DEFAULT_OUTPUT_DIR_XLONG = Path("blackbox_finetune_recall45") / "runs" / "qwen2.5-0.5b-blackbox-recall45-xlong-lora"
 DEFAULT_OUTPUT_DIR = DEFAULT_OUTPUT_DIR_LONG
 DEFAULT_TRAIN_START_DATE = "20200101"
 DEFAULT_TRAIN_END_DATE = "20251231"
@@ -25,10 +26,12 @@ CSV_COLUMNS = "dt/o/h/l/c/v/a/m5/m13/m34/m55"
 SYSTEM_PROMPT = "Classify A-share surge. Return JSON."
 SHORT_SAMPLE_MODE = "short"
 LONG_SAMPLE_MODE = "long"
+XLONG_SAMPLE_MODE = "xlong"
 DEFAULT_SAMPLE_MODE = LONG_SAMPLE_MODE
 SAMPLE_MODES = {
     SHORT_SAMPLE_MODE: {"daily": 8, "weekly": 5, "monthly": 0, "max_seq_length": 1024},
     LONG_SAMPLE_MODE: {"daily": 13, "weekly": 8, "monthly": 5, "max_seq_length": 2048},
+    XLONG_SAMPLE_MODE: {"daily": 21, "weekly": 13, "monthly": 8, "max_seq_length": 3072},
 }
 COMPACT_DAILY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["daily"]
 COMPACT_WEEKLY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["weekly"]
@@ -53,7 +56,12 @@ def default_max_seq_length(sample_mode: str | None = None) -> int:
 
 
 def default_output_dir(sample_mode: str | None = None) -> Path:
-    return DEFAULT_OUTPUT_DIR_SHORT if normalize_sample_mode(sample_mode or os.environ.get("SAMPLE_MODE")) == SHORT_SAMPLE_MODE else DEFAULT_OUTPUT_DIR_LONG
+    mode = normalize_sample_mode(sample_mode or os.environ.get("SAMPLE_MODE"))
+    if mode == SHORT_SAMPLE_MODE:
+        return DEFAULT_OUTPUT_DIR_SHORT
+    if mode == XLONG_SAMPLE_MODE:
+        return DEFAULT_OUTPUT_DIR_XLONG
+    return DEFAULT_OUTPUT_DIR_LONG
 
 
 
