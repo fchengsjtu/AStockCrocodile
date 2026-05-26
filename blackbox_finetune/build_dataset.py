@@ -25,6 +25,10 @@ from blackbox_finetune.common import (
 from goal_pattern_search import stable_rank
 
 DEFAULT_SEED = 20260517
+POSITIVE_COOLDOWN_TRADING_DAYS = 20
+NEGATIVE_EXCLUSION_TRADING_DAYS = 20
+TRADING_DATE_LOOKAROUND_CALENDAR_DAYS = 90
+TRADING_DATE_SYMBOL_BATCH_SIZE = 500
 
 
 def load_positive_events(conn, stat_type: str, start_date: date, end_date: date, limit: int | None = None) -> list[SampleEvent]:
@@ -38,13 +42,64 @@ def load_positive_events(conn, stat_type: str, start_date: date, end_date: date,
         ORDER BY SCode, PrevTradeDate
     """
     params: list = [stat_type, start_date, end_date]
-    if limit and limit > 0:
-        sql += " LIMIT %s"
-        params.append(limit)
     with conn.cursor() as cur:
         cur.execute(sql, params)
         rows = cur.fetchall()
-    return [SampleEvent(str(row[0]), parse_date(row[1]), 1, "positive", float(row[2] or 0)) for row in rows]
+    events = [SampleEvent(str(row[0]), parse_date(row[1]), 1, "positive", float(row[2] or 0)) for row in rows]
+    events = apply_positive_cooldown(conn, events, POSITIVE_COOLDOWN_TRADING_DAYS)
+    return events[:limit] if limit and limit > 0 else events
+
+
+def load_trading_dates_for_symbols_batched(
+    conn,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    batch_size: int = TRADING_DATE_SYMBOL_BATCH_SIZE,
+) -> dict[str, list[date]]:
+    result: dict[str, list[date]] = {}
+    for start in range(0, len(symbols), batch_size):
+        batch = symbols[start : start + batch_size]
+        batch_dates = load_trading_dates_for_symbols(conn, batch, start_date, end_date)
+        for scode, dates in batch_dates.items():
+            result.setdefault(scode, []).extend(dates)
+    return result
+
+
+def apply_positive_cooldown(
+    conn,
+    events: list[SampleEvent],
+    cooldown_trading_days: int = POSITIVE_COOLDOWN_TRADING_DAYS,
+) -> list[SampleEvent]:
+    if cooldown_trading_days <= 0 or not events:
+        return events
+    by_symbol: dict[str, list[SampleEvent]] = {}
+    for event in sorted(events, key=lambda item: (item.scode, item.anchor_date)):
+        by_symbol.setdefault(event.scode, []).append(event)
+    min_date = min(event.anchor_date for event in events) - timedelta(days=TRADING_DATE_LOOKAROUND_CALENDAR_DAYS)
+    max_date = max(event.anchor_date for event in events) + timedelta(days=TRADING_DATE_LOOKAROUND_CALENDAR_DAYS)
+    trading_dates = load_trading_dates_for_symbols_batched(conn, sorted(by_symbol), min_date, max_date)
+    kept: list[SampleEvent] = []
+    for scode, symbol_events in by_symbol.items():
+        dates = trading_dates.get(scode, [])
+        index = {trade_date: idx for idx, trade_date in enumerate(dates)}
+        last_kept_idx: int | None = None
+        last_kept_date: date | None = None
+        for event in symbol_events:
+            idx = index.get(event.anchor_date)
+            if idx is None:
+                if last_kept_date is not None and (event.anchor_date - last_kept_date).days <= cooldown_trading_days:
+                    continue
+                kept.append(event)
+                last_kept_date = event.anchor_date
+                last_kept_idx = None
+                continue
+            if last_kept_idx is not None and idx - last_kept_idx <= cooldown_trading_days:
+                continue
+            kept.append(event)
+            last_kept_idx = idx
+            last_kept_date = event.anchor_date
+    return kept
 
 
 def load_excluded_positive_windows(conn, stat_type: str, start_date: date, end_date: date, padding_days: int = 10) -> dict[str, set[date]]:
@@ -92,7 +147,8 @@ def excluded_dates_by_symbol(conn, positive_windows: dict[str, set[date]], start
     symbols = sorted(positive_windows)
     for start in range(0, len(symbols), batch_size):
         batch = symbols[start : start + batch_size]
-        date_map = load_trading_dates_for_symbols(conn, batch, start_date - timedelta(days=20), end_date + timedelta(days=20))
+        padding_days = max(20, buffer * 3 + 10)
+        date_map = load_trading_dates_for_symbols(conn, batch, start_date - timedelta(days=padding_days), end_date + timedelta(days=padding_days))
         for scode in batch:
             dates = date_map.get(scode, [])
             index = {trade_date: idx for idx, trade_date in enumerate(dates)}
@@ -115,8 +171,8 @@ def load_negative_events(
     seed: int,
     batch_size: int,
 ) -> list[SampleEvent]:
-    positive_windows = load_excluded_positive_windows(conn, stat_type, start_date, end_date)
-    excluded = excluded_dates_by_symbol(conn, positive_windows, start_date, end_date, 3, batch_size)
+    positive_windows = load_excluded_positive_windows(conn, stat_type, start_date, end_date, NEGATIVE_EXCLUSION_TRADING_DAYS * 3 + 10)
+    excluded = excluded_dates_by_symbol(conn, positive_windows, start_date, end_date, NEGATIVE_EXCLUSION_TRADING_DAYS, batch_size)
     scan_limit = max(limit * 30, 5000)
     sql = """
         SELECT SCode, DATE(KTime)
@@ -150,8 +206,8 @@ def load_random_negative_events(
     seed: int,
     batch_size: int,
 ) -> list[SampleEvent]:
-    positive_windows = load_excluded_positive_windows(conn, stat_type, start_date, end_date)
-    excluded = excluded_dates_by_symbol(conn, positive_windows, start_date, end_date, 3, batch_size)
+    positive_windows = load_excluded_positive_windows(conn, stat_type, start_date, end_date, NEGATIVE_EXCLUSION_TRADING_DAYS * 3 + 10)
+    excluded = excluded_dates_by_symbol(conn, positive_windows, start_date, end_date, NEGATIVE_EXCLUSION_TRADING_DAYS, batch_size)
     candidates: list[SampleEvent] = []
     seen: set[tuple[str, date]] = set()
     scan_limit = max(limit * 3, limit + 1000, 5000)

@@ -2,6 +2,8 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
+from blackbox_finetune import build_dataset as base_build_dataset
+from blackbox_finetune.common import SampleEvent
 from blackbox_finetune_recall60 import build_dataset, build_validation_dataset, common, evaluate, predict_day, train
 
 
@@ -37,6 +39,29 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
 
         self.assertEqual(build_args.negative_ratio, 2.5)
         self.assertEqual(validation_args.negative_ratio, 2.5)
+
+    def test_positive_samples_use_twenty_trading_day_cooldown(self):
+        trade_dates = [date(2026, 1, day) for day in range(1, 32)]
+        events = [
+            SampleEvent("000001", date(2026, 1, 1), 1, "positive", 1.0),
+            SampleEvent("000001", date(2026, 1, 10), 1, "positive", 2.0),
+            SampleEvent("000001", date(2026, 1, 22), 1, "positive", 3.0),
+            SampleEvent("000002", date(2026, 1, 10), 1, "positive", 4.0),
+        ]
+
+        with patch.object(
+            base_build_dataset,
+            "load_trading_dates_for_symbols_batched",
+            return_value={"000001": trade_dates, "000002": trade_dates},
+        ):
+            kept = base_build_dataset.apply_positive_cooldown(None, events, 20)
+
+        self.assertEqual([(event.scode, event.anchor_date) for event in kept], [
+            ("000001", date(2026, 1, 1)),
+            ("000001", date(2026, 1, 22)),
+            ("000002", date(2026, 1, 10)),
+        ])
+        self.assertEqual(base_build_dataset.NEGATIVE_EXCLUSION_TRADING_DAYS, 20)
 
     def test_evaluation_defaults_match_2026_holdout_period(self):
         args = build_validation_dataset.build_parser().parse_args([])

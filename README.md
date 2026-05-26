@@ -191,7 +191,7 @@ The old `fingpt_forecaster_qlora/` entry has been retired; its README points bac
 
 ## Black-Box Qwen Fine-Tuning
 
-The black-box fine-tuning pipeline is in `blackbox_finetune/`. It treats `Qwen/Qwen2.5-0.5B-Instruct` as a trainable classifier rather than a rule generator. Positive samples come from `klinestatistics`. For each positive sample, the input is the `PrevTradeDate` plus the previous 55 daily K-lines and previous 55 weekly K-lines. Negative candidates are trading days outside the positive sample's `PrevTradeDate +/- 3` trading-day window, using the same 55 daily and 55 weekly K-line input format. The default training period is `20110101-20241231`; the default validation period is `20260101-20260430`. Evaluation fails unless positive recall is at least `60%`.
+The black-box fine-tuning pipeline is in `blackbox_finetune/`. It treats `Qwen/Qwen2.5-0.5B-Instruct` as a trainable classifier rather than a rule generator. Positive samples come from `klinestatistics`. For each positive sample, the input is the `PrevTradeDate` plus the previous 55 daily K-lines and previous 55 weekly K-lines. Positive samples are deduplicated per stock with a 20-trading-day cooldown, keeping the earliest signal in each cluster. Negative candidates are trading days outside each positive sample's `PrevTradeDate +/- 20` trading-day window, using the same K-line input format. The default training period is `20110101-20241231`; the default validation period is `20260101-20260430`. Evaluation fails unless positive recall is at least `60%`.
 
 The `blackbox_finetune_recallXX/` pipelines support two compact sample modes:
 
