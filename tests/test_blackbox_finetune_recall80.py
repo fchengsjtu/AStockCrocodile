@@ -25,19 +25,19 @@ def weekly(day, close):
 
 
 class BlackboxFinetuneRecall80Tests(unittest.TestCase):
-    def test_training_defaults_match_partial_week_task(self):
+    def test_training_defaults_match_no_partial_week_task(self):
         args = build_dataset.build_parser().parse_args([])
 
         self.assertEqual(args.start_date, "20110101")
         self.assertEqual(args.end_date, "20241231")
-        self.assertEqual(str(args.output_dir), "blackbox_finetune_recall80\\data_partial_week")
+        self.assertEqual(str(args.output_dir), "blackbox_finetune_recall80\\data_no_partial_week")
 
     def test_validation_defaults_match_holdout_period(self):
         args = build_validation_dataset.build_parser().parse_args([])
 
         self.assertEqual(args.start_date, "20260101")
         self.assertEqual(args.end_date, "20260430")
-        self.assertEqual(str(args.output_dir), "blackbox_finetune_recall80\\data_validation_partial_week")
+        self.assertEqual(str(args.output_dir), "blackbox_finetune_recall80\\data_evaluation_no_partial_week")
 
     def test_tokenization_uses_compact_csv_scheme_with_sample_modes(self):
         self.assertEqual(common.COMPACT_DAILY_WINDOW, 13)
@@ -66,7 +66,7 @@ class BlackboxFinetuneRecall80Tests(unittest.TestCase):
         self.assertIn("W\n1,0.5,1,0.5,1,0.5,0.5", prompt)
         self.assertIn("2,1,1.5,0.5,1,1.5,1.5", prompt)
 
-    def test_pick_weekly_window_appends_temporary_week_for_midweek_anchor(self):
+    def test_pick_weekly_window_uses_only_completed_weekly_rows_for_midweek_anchor(self):
         first_week = date(2025, 3, 21)
         weekly_rows = [weekly((first_week + timedelta(days=7 * i)).strftime("%Y%m%d"), 10 + i) for i in range(55)]
         daily_rows = [
@@ -79,13 +79,8 @@ class BlackboxFinetuneRecall80Tests(unittest.TestCase):
 
         self.assertIsNotNone(picked)
         self.assertEqual(len(picked), 55)
-        self.assertEqual(picked[-1]["date"], "20260408")
-        self.assertEqual(picked[-1]["open"], 20)
-        self.assertEqual(picked[-1]["high"], 25)
-        self.assertEqual(picked[-1]["low"], 19)
-        self.assertEqual(picked[-1]["close"], 24)
-        self.assertEqual(picked[-1]["volume"], 350)
-        self.assertEqual(picked[-1]["amount"], 3500)
+        self.assertEqual(picked[-1]["date"], "20260403")
+        self.assertNotEqual(picked[-1]["date"], "20260408")
 
 
 if __name__ == "__main__":

@@ -46,11 +46,11 @@ python -m blackbox_finetune_recall80.gpu --cuda-device "$CUDA_DEVICE"
 if [[ "$MODE" == "diagnose" ]]; then
   exit 0
 fi
-DATA_DIR="${DATA_DIR:-blackbox_finetune_recall80/data}"
-VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall80/data_validation}"
+DATA_DIR="${DATA_DIR:-blackbox_finetune_recall80/data_no_partial_week}"
+VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall80/data_evaluation_no_partial_week}"
 MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-0.80}"
 TRAIN_SEED="${TRAIN_SEED:-20260580}"
-LEARNING_RATE="${LEARNING_RATE:-1e-5}"
+LEARNING_RATE="${LEARNING_RATE:-2e-5}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-0.5}"
 OOM_PATIENCE="${OOM_PATIENCE:-20}"
 NONFINITE_SKIP_LIMIT="${NONFINITE_SKIP_LIMIT:-100}"
@@ -86,7 +86,7 @@ if [[ "$MODE" == "smoke" ]]; then
   GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 else
   TRAIN_START="20110101"
-  TRAIN_END="20251231"
+  TRAIN_END="20241231"
   VALIDATION_START="20260101"
   VALIDATION_END="20260430"
   POS_LIMIT="${POSITIVE_LIMIT:-}"

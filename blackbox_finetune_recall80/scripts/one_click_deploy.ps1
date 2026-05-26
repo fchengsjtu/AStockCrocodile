@@ -78,8 +78,8 @@ if ($Mode -eq "diagnose") {
   exit 0
 }
 
-$DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall80/data_partial_week" }
-$ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall80/data_validation_partial_week" }
+$DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall80/data_no_partial_week" }
+$ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall80/data_evaluation_no_partial_week" }
 $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.80" }
 $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260580" }
 $LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "2e-5" }

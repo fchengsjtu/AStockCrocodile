@@ -10,8 +10,8 @@ from blackbox_finetune.common import *  # noqa: F401,F403
 from blackbox_finetune.common import DEFAULT_BASE_MODEL, DEFAULT_STAT_TYPE, DEFAULT_WINDOW, SampleEvent
 from llm_finetune.common import compact_date, iter_batches, load_kline_map, parse_date
 
-DEFAULT_DATA_DIR = Path("blackbox_finetune_recall80") / "data_partial_week"
-DEFAULT_VALIDATION_DIR = Path("blackbox_finetune_recall80") / "data_validation_partial_week"
+DEFAULT_DATA_DIR = Path("blackbox_finetune_recall80") / "data_no_partial_week"
+DEFAULT_VALIDATION_DIR = Path("blackbox_finetune_recall80") / "data_evaluation_no_partial_week"
 DEFAULT_OUTPUT_DIR_SHORT = Path("blackbox_finetune_recall80") / "runs" / "qwen2.5-0.5b-blackbox-recall80-short-lora"
 DEFAULT_OUTPUT_DIR_LONG = Path("blackbox_finetune_recall80") / "runs" / "qwen2.5-0.5b-blackbox-recall80-long-lora"
 DEFAULT_OUTPUT_DIR = DEFAULT_OUTPUT_DIR_LONG
@@ -34,7 +34,7 @@ COMPACT_DAILY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["daily"]
 COMPACT_WEEKLY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["weekly"]
 COMPACT_MONTHLY_WINDOW = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["monthly"]
 DEFAULT_MAX_SEQ_LENGTH = SAMPLE_MODES[DEFAULT_SAMPLE_MODE]["max_seq_length"]
-USE_PARTIAL_WEEKLY_BAR = True
+USE_PARTIAL_WEEKLY_BAR = False
 
 
 def normalize_sample_mode(sample_mode: str | None) -> str:
