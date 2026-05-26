@@ -23,6 +23,22 @@ class BlackboxFinetuneRecall30Tests(unittest.TestCase):
         self.assertEqual(args.end_date, "20260430")
         self.assertEqual(args.output_dir, common.DEFAULT_VALIDATION_DIR)
 
+    def test_dataset_dates_can_come_from_environment(self):
+        with patch.dict("os.environ", {"TRAIN_START_DATE": "20210101", "TRAIN_END_DATE": "20211231"}):
+            args = build_dataset.build_parser().parse_args([])
+            self.assertEqual(args.start_date, "20210101")
+            self.assertEqual(args.end_date, "20211231")
+
+    def test_validation_dates_can_come_from_environment_aliases(self):
+        with patch.dict("os.environ", {"TEST_START_DATE": "20260201", "TEST_END_DATE": "20260228"}):
+            args = build_validation_dataset.build_parser().parse_args([])
+            self.assertEqual(args.start_date, "20260201")
+            self.assertEqual(args.end_date, "20260228")
+        with patch.dict("os.environ", {"VALIDATION_START_DATE": "20260301", "VALIDATION_END_DATE": "20260331", "TEST_START_DATE": "20260201", "TEST_END_DATE": "20260228"}):
+            args = build_validation_dataset.build_parser().parse_args([])
+            self.assertEqual(args.start_date, "20260301")
+            self.assertEqual(args.end_date, "20260331")
+
     def test_evaluate_default_positive_recall_target_is_30_percent(self):
         parser = evaluate.build_parser()
         args = parser.parse_args([])

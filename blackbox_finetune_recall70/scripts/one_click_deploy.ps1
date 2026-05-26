@@ -99,19 +99,27 @@ $DefaultCheckpointEvery = if ($SampleMode -eq "short") { "500" } else { "100" }
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { $DefaultCheckpointEvery }
 
 if ($Mode -eq "smoke") {
-  $TrainStart = "20200101"
-  $TrainEnd = "20211231"
-  $ValidationStart = "20260101"
-  $ValidationEnd = "20260131"
+  $DefaultTrainStart = "20200101"
+  $DefaultTrainEnd = "20211231"
+  $DefaultValidationStart = "20260101"
+  $DefaultValidationEnd = "20260131"
+  $TrainStart = if ($env:TRAIN_START_DATE) { $env:TRAIN_START_DATE } else { $DefaultTrainStart }
+  $TrainEnd = if ($env:TRAIN_END_DATE) { $env:TRAIN_END_DATE } else { $DefaultTrainEnd }
+  $ValidationStart = if ($env:VALIDATION_START_DATE) { $env:VALIDATION_START_DATE } elseif ($env:TEST_START_DATE) { $env:TEST_START_DATE } else { $DefaultValidationStart }
+  $ValidationEnd = if ($env:VALIDATION_END_DATE) { $env:VALIDATION_END_DATE } elseif ($env:TEST_END_DATE) { $env:TEST_END_DATE } else { $DefaultValidationEnd }
   $PositiveLimit = if ($env:SMOKE_POSITIVE_LIMIT) { $env:SMOKE_POSITIVE_LIMIT } else { "12" }
   $Epochs = if ($env:EPOCHS) { $env:EPOCHS } else { "3" }
   $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { $DefaultMaxSeqLength }
   $GradSteps = if ($env:GRADIENT_ACCUMULATION_STEPS) { $env:GRADIENT_ACCUMULATION_STEPS } else { "1" }
 } else {
-  $TrainStart = "20200101"
-  $TrainEnd = "20251231"
-  $ValidationStart = "20260101"
-  $ValidationEnd = "20260430"
+  $DefaultTrainStart = "20200101"
+  $DefaultTrainEnd = "20251231"
+  $DefaultValidationStart = "20260101"
+  $DefaultValidationEnd = "20260430"
+  $TrainStart = if ($env:TRAIN_START_DATE) { $env:TRAIN_START_DATE } else { $DefaultTrainStart }
+  $TrainEnd = if ($env:TRAIN_END_DATE) { $env:TRAIN_END_DATE } else { $DefaultTrainEnd }
+  $ValidationStart = if ($env:VALIDATION_START_DATE) { $env:VALIDATION_START_DATE } elseif ($env:TEST_START_DATE) { $env:TEST_START_DATE } else { $DefaultValidationStart }
+  $ValidationEnd = if ($env:VALIDATION_END_DATE) { $env:VALIDATION_END_DATE } elseif ($env:TEST_END_DATE) { $env:TEST_END_DATE } else { $DefaultValidationEnd }
   $PositiveLimit = $env:POSITIVE_LIMIT
   $Epochs = if ($env:EPOCHS) { $env:EPOCHS } else { "1" }
   $MaxSeqLength = if ($env:MAX_SEQ_LENGTH) { $env:MAX_SEQ_LENGTH } else { $DefaultMaxSeqLength }

@@ -51,6 +51,12 @@ All project-level environment variables are collected here:
 | `SAMPLE_MODE` | `blackbox_finetune_recallXX` | `long` | `short`: 8日K+5周K, `MAX_SEQ_LENGTH=1024`; `long`: 13日K+8周K+5月K, `MAX_SEQ_LENGTH=2048`. |
 | `MAX_SEQ_LENGTH` | fine-tuning scripts | mode/script-specific | Override token length. For recallXX, omit unless intentionally overriding `SAMPLE_MODE` default. |
 | `NEGATIVE_RATIO` | dataset builders | recallXX default `3.0`; older fine-tune default `1.0` | Negative samples per positive sample. |
+| `TRAIN_START_DATE` | recallXX dataset builders and one-click scripts | target/mode-specific | Training sample start date, format `YYYYMMDD`. |
+| `TRAIN_END_DATE` | recallXX dataset builders and one-click scripts | target/mode-specific | Training sample end date, format `YYYYMMDD`. |
+| `VALIDATION_START_DATE` | recallXX validation builders and one-click scripts | target/mode-specific | Validation/test sample start date, format `YYYYMMDD`. Takes priority over `TEST_START_DATE`. |
+| `VALIDATION_END_DATE` | recallXX validation builders and one-click scripts | target/mode-specific | Validation/test sample end date, format `YYYYMMDD`. Takes priority over `TEST_END_DATE`. |
+| `TEST_START_DATE` | recallXX validation builders and one-click scripts | unset | Alias for validation/test sample start date when `VALIDATION_START_DATE` is unset. |
+| `TEST_END_DATE` | recallXX validation builders and one-click scripts | unset | Alias for validation/test sample end date when `VALIDATION_END_DATE` is unset. |
 | `POSITIVE_LIMIT` | one-click full mode | empty | Limit positive samples in full dataset builds. Empty means no limit. |
 | `SMOKE_POSITIVE_LIMIT` | one-click smoke mode | script-specific, often `12` or `200` | Limit positive samples for smoke runs. |
 | `DATA_BATCH_SIZE` | `llm_finetune` dataset script | `30` | Dataset materialization batch size. |
