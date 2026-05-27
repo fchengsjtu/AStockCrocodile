@@ -145,8 +145,6 @@ if ($Mode -eq "diagnose") {
   exit 0
 }
 
-$DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { "blackbox_finetune_recall80/data_no_partial_week" }
-$ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { "blackbox_finetune_recall80/data_evaluation_no_partial_week" }
 $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.80" }
 $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260580" }
 $LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "2e-5" }
@@ -160,6 +158,10 @@ $LrBackoffFactor = if ($env:LR_BACKOFF_FACTOR) { $env:LR_BACKOFF_FACTOR } else {
 $MinLearningRate = if ($env:MIN_LEARNING_RATE) { $env:MIN_LEARNING_RATE } else { "1e-6" }
 $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 $SampleMode = if ($env:SAMPLE_MODE) { $env:SAMPLE_MODE } else { "long" }
+$DefaultDataDir = "blackbox_finetune_recall80/data_no_partial_week_$SampleMode"
+$DefaultValidationDir = "blackbox_finetune_recall80/data_evaluation_no_partial_week_$SampleMode"
+$DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { $DefaultDataDir }
+$ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { $DefaultValidationDir }
 $DefaultOutputDir = if ($SampleMode -eq "short") { "blackbox_finetune_recall80/runs/qwen2.5-0.5b-blackbox-recall80-short-lora" } elseif ($SampleMode -eq "xlong") { "blackbox_finetune_recall80/runs/qwen2.5-0.5b-blackbox-recall80-xlong-lora" } elseif ($SampleMode -eq "xxlong") { "blackbox_finetune_recall80/runs/qwen2.5-0.5b-blackbox-recall80-xxlong-lora" } else { "blackbox_finetune_recall80/runs/qwen2.5-0.5b-blackbox-recall80-long-lora" }
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { $DefaultOutputDir }
 $NegativeRatio = if ($env:NEGATIVE_RATIO) { $env:NEGATIVE_RATIO } else { "3.0" }

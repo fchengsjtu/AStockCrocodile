@@ -29,7 +29,7 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
 
         self.assertEqual(args.start_date, "20200101")
         self.assertEqual(args.end_date, "20251231")
-        self.assertEqual(args.output_dir, common.DEFAULT_DATA_DIR)
+        self.assertEqual(args.output_dir, common.default_data_dir("long"))
         self.assertEqual(args.negative_ratio, 3.0)
 
     def test_negative_ratio_default_can_come_from_environment(self):
@@ -68,8 +68,8 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
 
         self.assertEqual(args.start_date, "20260101")
         self.assertEqual(args.end_date, "20260430")
-        self.assertEqual(args.output_dir, common.DEFAULT_VALIDATION_DIR)
-        self.assertIn("no_partial", str(args.output_dir))
+        self.assertEqual(args.output_dir, common.default_validation_dir("long"))
+        self.assertIn("no_partial_week_long", str(args.output_dir))
 
     def test_compact_window_and_sequence_length_defaults_match_2048_format(self):
         self.assertEqual(common.COMPACT_DAILY_WINDOW, 13)
@@ -78,6 +78,11 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(common.sample_mode_config("short")["daily"], 8)
         self.assertEqual(common.sample_mode_config("short")["weekly"], 5)
         self.assertEqual(common.default_max_seq_length("short"), 1024)
+        self.assertIn("data_no_partial_week_short", str(common.default_data_dir("short")))
+        self.assertIn("data_no_partial_week_long", str(common.default_data_dir("long")))
+        self.assertIn("data_no_partial_week_xlong", str(common.default_data_dir("xlong")))
+        self.assertIn("data_no_partial_week_xxlong", str(common.default_data_dir("xxlong")))
+        self.assertIn("data_evaluation_no_partial_week_short", str(common.default_validation_dir("short")))
         self.assertEqual(common.sample_mode_config("xlong"), {"daily": 21, "weekly": 13, "monthly": 8, "max_seq_length": 3072})
         self.assertEqual(common.default_max_seq_length("xlong"), 3072)
         self.assertEqual(common.sample_mode_config("xxlong"), {"daily": 34, "weekly": 21, "monthly": 13, "max_seq_length": 4096})

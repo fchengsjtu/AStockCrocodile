@@ -10,8 +10,6 @@ from blackbox_finetune.common import *  # noqa: F401,F403
 from blackbox_finetune.common import DEFAULT_BASE_MODEL, DEFAULT_STAT_TYPE, DEFAULT_WINDOW, SampleEvent
 from llm_finetune.common import compact_date, iter_batches, load_kline_map, parse_date
 
-DEFAULT_DATA_DIR = Path("blackbox_finetune_recall45") / "data_no_partial_week"
-DEFAULT_VALIDATION_DIR = Path("blackbox_finetune_recall45") / "data_evaluation_no_partial_week"
 DEFAULT_OUTPUT_DIR_SHORT = Path("blackbox_finetune_recall45") / "runs" / "qwen2.5-0.5b-blackbox-recall45-short-lora"
 DEFAULT_OUTPUT_DIR_LONG = Path("blackbox_finetune_recall45") / "runs" / "qwen2.5-0.5b-blackbox-recall45-long-lora"
 DEFAULT_OUTPUT_DIR_XLONG = Path("blackbox_finetune_recall45") / "runs" / "qwen2.5-0.5b-blackbox-recall45-xlong-lora"
@@ -57,6 +55,18 @@ def sample_mode_config(sample_mode: str | None) -> dict[str, int]:
 def default_max_seq_length(sample_mode: str | None = None) -> int:
     return sample_mode_config(sample_mode)["max_seq_length"]
 
+def default_data_dir(sample_mode: str | None = None) -> Path:
+    mode = normalize_sample_mode(sample_mode or os.environ.get("SAMPLE_MODE"))
+    return Path("blackbox_finetune_recall45") / f"data_no_partial_week_{mode}"
+
+
+def default_validation_dir(sample_mode: str | None = None) -> Path:
+    mode = normalize_sample_mode(sample_mode or os.environ.get("SAMPLE_MODE"))
+    return Path("blackbox_finetune_recall45") / f"data_evaluation_no_partial_week_{mode}"
+
+
+DEFAULT_DATA_DIR = default_data_dir(os.environ.get("SAMPLE_MODE"))
+DEFAULT_VALIDATION_DIR = default_validation_dir(os.environ.get("SAMPLE_MODE"))
 
 def default_output_dir(sample_mode: str | None = None) -> Path:
     mode = normalize_sample_mode(sample_mode or os.environ.get("SAMPLE_MODE"))

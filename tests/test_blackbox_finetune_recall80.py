@@ -30,14 +30,14 @@ class BlackboxFinetuneRecall80Tests(unittest.TestCase):
 
         self.assertEqual(args.start_date, "20110101")
         self.assertEqual(args.end_date, "20241231")
-        self.assertEqual(str(args.output_dir), "blackbox_finetune_recall80\\data_no_partial_week")
+        self.assertEqual(args.output_dir, common.default_data_dir("long"))
 
     def test_validation_defaults_match_holdout_period(self):
         args = build_validation_dataset.build_parser().parse_args([])
 
         self.assertEqual(args.start_date, "20260101")
         self.assertEqual(args.end_date, "20260430")
-        self.assertEqual(str(args.output_dir), "blackbox_finetune_recall80\\data_evaluation_no_partial_week")
+        self.assertEqual(args.output_dir, common.default_validation_dir("long"))
 
     def test_tokenization_uses_compact_csv_scheme_with_sample_modes(self):
         self.assertEqual(common.COMPACT_DAILY_WINDOW, 13)

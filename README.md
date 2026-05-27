@@ -41,8 +41,8 @@ All project-level environment variables are collected here:
 | `PYTHON_BIN` | one-click scripts | `python`/`python3` or `.venv` Python | Python executable used to create or run a venv. |
 | `VENV_DIR` | one-click scripts | script-specific `.venv-*` path | Virtual environment directory. |
 | `BASE_MODEL` | fine-tuning one-click scripts | `Qwen/Qwen2.5-0.5B-Instruct` | HuggingFace-format base model or local model directory. |
-| `DATA_DIR` | fine-tuning one-click scripts | script-specific `data` path | Training dataset directory. |
-| `VALIDATION_DATA_DIR` | blackbox one-click scripts | script-specific validation data path | Validation/evaluation dataset directory. |
+| `DATA_DIR` | fine-tuning one-click scripts | mode-specific path | Training dataset directory. For recallXX scripts, the default includes `SAMPLE_MODE`, such as `data_no_partial_week_long` or `data_no_partial_week_xlong`. |
+| `VALIDATION_DATA_DIR` | blackbox one-click scripts | mode-specific path | Validation/evaluation dataset directory. For recallXX scripts, the default includes `SAMPLE_MODE`, such as `data_evaluation_no_partial_week_long`. |
 | `OUTPUT_DIR` | fine-tuning one-click scripts | script-specific `runs/...` path | Adapter/checkpoint output directory. For recallXX scripts, default is split by `SAMPLE_MODE`: `...-short-lora`, `...-long-lora`, `...-xlong-lora`, or `...-xxlong-lora`. |
 | `CUDA_DEVICE` | blackbox recallXX scripts | `0` | CUDA device id, normally the RTX 3060. |
 | `CUDA_VISIBLE_DEVICES` | GPU tools | set from `CUDA_DEVICE` | CUDA visibility binding. Usually do not set directly. |
@@ -212,6 +212,7 @@ The recallXX one-click scripts print only project-related environment variables 
 
 - If `train.jsonl` and `test.jsonl` already exist under `DATA_DIR`, the training dataset is reused unless `REBUILD_DATASET=1/true/yes` is set.
 - If validation files already exist under `VALIDATION_DATA_DIR`, the validation dataset is reused unless `REBUILD_VALIDATION_DATASET=1/true/yes` or `REBUILD_DATASET=1/true/yes` is set.
+- By default, recallXX datasets are separated by sample mode: `data_no_partial_week_short`, `data_no_partial_week_long`, `data_no_partial_week_xlong`, and `data_no_partial_week_xxlong`, with matching `data_evaluation_no_partial_week_*` validation directories.
 - Tokenized samples are reused when `train.jsonl`, `BASE_MODEL`, and `MAX_SEQ_LENGTH` are unchanged. Rebuilding `train.jsonl` changes its timestamp/size fingerprint, so tokenization is rebuilt too.
 - `REBUILD_TOKEN_CACHE=1/true/yes` forces tokenization rebuild even when the tokenized cache exists.
 
@@ -754,7 +755,7 @@ cd D:\Documents\StockInfoCrawler
 powershell -ExecutionPolicy Bypass -File .\install_recall80_weekday_prediction_task.ps1
 ```
 
-The scheduled task runs `run_recall80_previous_day_prediction.ps1`. Because it runs after midnight, the prediction date defaults to the previous calendar day: Tuesday 05:00 predicts Monday, Wednesday 05:00 predicts Tuesday, and Saturday 05:00 predicts Friday. The default task uses `SAMPLE_MODE=long`, `MAX_SEQ_LENGTH=2048`, and `threshold=0.80`. Before prediction, it runs `blackbox_finetune_recall80.evaluate` against `blackbox_finetune_recall80\data_evaluation_no_partial_week` and requires `positive_recall >= 0.80`; if the validation gate fails, prediction is not written. When the gate passes, the script saves the top 20 predictions to MySQL and also writes a dated CSV under `data\`.
+The scheduled task runs `run_recall80_previous_day_prediction.ps1`. Because it runs after midnight, the prediction date defaults to the previous calendar day: Tuesday 08:00 predicts Monday, Wednesday 08:00 predicts Tuesday, and Saturday 08:00 predicts Friday. The default task uses `SAMPLE_MODE=long`, `MAX_SEQ_LENGTH=2048`, and `threshold=0.80`. Before prediction, it runs `blackbox_finetune_recall80.evaluate` against `blackbox_finetune_recall80\data_evaluation_no_partial_week_long` and requires `positive_recall >= 0.80`; if the validation gate fails, prediction is not written. When the gate passes, the script saves the top 20 predictions to MySQL and also writes a dated CSV under `data\`.
 
 Black-box `predict_day` saves the top 5 ranked predictions to MySQL table `blackbox_predictions` by default, including the strategy name:
 

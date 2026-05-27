@@ -46,8 +46,6 @@ python -m blackbox_finetune_recall35.gpu --cuda-device "$CUDA_DEVICE"
 if [[ "$MODE" == "diagnose" ]]; then
   exit 0
 fi
-DATA_DIR="${DATA_DIR:-blackbox_finetune_recall35/data_no_partial_week}"
-VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-blackbox_finetune_recall35/data_evaluation_no_partial_week}"
 MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-0.60}"
 TRAIN_SEED="${TRAIN_SEED:-20260560}"
 LEARNING_RATE="${LEARNING_RATE:-5e-6}"
@@ -59,6 +57,10 @@ LR_BACKOFF_FACTOR="${LR_BACKOFF_FACTOR:-0.5}"
 MIN_LEARNING_RATE="${MIN_LEARNING_RATE:-1e-6}"
 RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
 SAMPLE_MODE="${SAMPLE_MODE:-long}"
+DEFAULT_DATA_DIR="blackbox_finetune_recall35/data_no_partial_week_$SAMPLE_MODE"
+DEFAULT_VALIDATION_DATA_DIR="blackbox_finetune_recall35/data_evaluation_no_partial_week_$SAMPLE_MODE"
+DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"
+VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-$DEFAULT_VALIDATION_DATA_DIR}"
 if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_OUTPUT_DIR="blackbox_finetune_recall35/runs/qwen2.5-0.5b-blackbox-recall35-short-lora"
 elif [[ "$SAMPLE_MODE" == "xlong" ]]; then
