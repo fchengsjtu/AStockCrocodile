@@ -196,6 +196,56 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         with patch.dict("os.environ", {"SAMPLE_BOTTOM_BAND_RATIO": "0.10"}):
             self.assertFalse(common._is_close_in_bottom_band(anchor_daily, rows))
 
+    def test_delisted_stock_name_filter(self):
+        self.assertTrue(common._looks_delisted_stock_name("\u9000\u5e02\u6d77\u6da6"))
+        self.assertTrue(common._looks_delisted_stock_name("\u6d77\u6da6\u9000"))
+        self.assertTrue(common._looks_delisted_stock_name("PT\u6c34\u4ed9"))
+        self.assertFalse(common._looks_delisted_stock_name("\u5e73\u5b89\u94f6\u884c"))
+
+    def test_abnormal_symbol_filter_marks_delisted_and_long_suspended(self):
+        class FakeCursor:
+            def __init__(self, responses):
+                self.responses = responses
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, *_args, **_kwargs):
+                return None
+
+            def fetchall(self):
+                return self.responses.pop(0)
+
+        class FakeConn:
+            def __init__(self, responses):
+                self.responses = responses
+
+            def cursor(self):
+                return FakeCursor(self.responses)
+
+        recent_dates = [(date(2026, 5, day),) for day in range(20, 9, -1)]
+        conn = FakeConn(
+            [
+                recent_dates,
+                [
+                    ("000001", "\u5e73\u5b89\u94f6\u884c"),
+                    ("000002", "\u9000\u5e02\u6d77\u6da6"),
+                    ("000003", "\u6b63\u5e38\u80a1"),
+                ],
+                [
+                    ("000001", date(2026, 5, 20)),
+                    ("000002", date(2026, 5, 20)),
+                    ("000003", date(2026, 4, 20)),
+                ],
+            ]
+        )
+
+        abnormal = common.load_abnormal_symbols(conn, ["000001", "000002", "000003"], date(2026, 5, 20))
+
+        self.assertEqual(abnormal, {"000002", "000003"})
 
 if __name__ == "__main__":
     unittest.main()

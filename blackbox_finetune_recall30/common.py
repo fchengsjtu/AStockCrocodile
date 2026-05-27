@@ -336,6 +336,69 @@ def _sample_windows_are_valid(sample_mode: str, weekly: list[dict], monthly: lis
         return _is_close_in_bottom_band(daily, monthly)
     return _is_close_in_bottom_band(daily, weekly)
 
+DELISTED_NAME_MARKERS = ("\u9000\u5e02",)
+DELISTED_NAME_PREFIXES = ("\u9000", "PT")
+DELISTED_NAME_SUFFIXES = ("\u9000",)
+
+
+def _looks_delisted_stock_name(name) -> bool:
+    text = str(name or "").strip().upper()
+    if not text:
+        return False
+    return (
+        any(marker in text for marker in DELISTED_NAME_MARKERS)
+        or any(text.startswith(prefix) for prefix in DELISTED_NAME_PREFIXES)
+        or any(text.endswith(suffix) for suffix in DELISTED_NAME_SUFFIXES)
+    )
+
+def _recent_market_cutoff_date(conn, anchor_date: date, max_missing_trading_days: int) -> date | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT DATE(KTime)
+            FROM dkandles
+            WHERE KType = 'D' AND KTime <= %s
+            ORDER BY DATE(KTime) DESC
+            LIMIT %s
+            """,
+            (anchor_date + timedelta(days=1), max_missing_trading_days + 1),
+        )
+        rows = cur.fetchall()
+    if len(rows) <= max_missing_trading_days:
+        return None
+    return parse_date(rows[-1][0])
+
+
+def load_abnormal_symbols(conn, symbols: Sequence[str], anchor_date: date, max_missing_trading_days: int = 10) -> set[str]:
+    if not symbols:
+        return set()
+    abnormal: set[str] = set()
+    cutoff_date = _recent_market_cutoff_date(conn, anchor_date, max_missing_trading_days)
+    for batch in iter_batches(list(symbols), 500):
+        placeholders = ",".join(["%s"] * len(batch))
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT SCode, SName FROM stockinfo WHERE SCode IN ({placeholders})", batch)
+            for scode, sname in cur.fetchall():
+                if _looks_delisted_stock_name(sname):
+                    abnormal.add(str(scode))
+        if cutoff_date is not None:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT SCode, MAX(DATE(KTime))
+                    FROM dkandles
+                    WHERE KType = 'D' AND SCode IN ({placeholders}) AND KTime <= %s
+                    GROUP BY SCode
+                    """,
+                    [*batch, anchor_date + timedelta(days=1)],
+                )
+                latest_dates = {str(scode): parse_date(latest_date) for scode, latest_date in cur.fetchall() if latest_date is not None}
+            for scode in batch:
+                latest_date = latest_dates.get(str(scode))
+                if latest_date is None or latest_date < cutoff_date:
+                    abnormal.add(str(scode))
+    return abnormal
+
 
 def materialize_events(
     conn,

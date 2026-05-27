@@ -30,6 +30,7 @@ from blackbox_finetune_recall80.common import (
     pick_monthly_window,
     pick_window,
     _sample_windows_are_valid,
+    load_abnormal_symbols,
 )
 from blackbox_finetune_recall80.gpu import prepare_rtx3060
 from blackbox_finetune_recall80.inference import load_model, score_prediction
@@ -61,6 +62,10 @@ def predict_day(
         if trade_date is None:
             anchor = latest_trade_date(conn)
         symbols = load_symbols(conn, anchor, anchor)
+        abnormal_symbols = load_abnormal_symbols(conn, symbols, anchor)
+        if abnormal_symbols:
+            symbols = [scode for scode in symbols if scode not in abnormal_symbols]
+        print(f"filtered_abnormal={len(abnormal_symbols)} remaining_symbols={len(symbols)}", flush=True)
         config = sample_mode_config(sample_mode)
         daily_count = daily_window or config["daily"]
         weekly_count = weekly_window or config["weekly"]

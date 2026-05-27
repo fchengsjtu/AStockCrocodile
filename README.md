@@ -219,7 +219,7 @@ The recallXX one-click scripts print only project-related environment variables 
 - Tokenized samples are reused when `train.jsonl`, `BASE_MODEL`, and `MAX_SEQ_LENGTH` are unchanged. Rebuilding `train.jsonl` changes its timestamp/size fingerprint, so tokenization is rebuilt too.
 - `REBUILD_TOKEN_CACHE=1/true/yes` forces tokenization rebuild even when the tokenized cache exists.
 
-`predict_day` uses the same `SAMPLE_MODE` window and bottom-band filters before model scoring. Stocks with incomplete weekly/monthly windows or a close outside `SAMPLE_BOTTOM_BAND_RATIO` are skipped without running inference, and each batch prints `skipped_by_sample_rule`.
+`predict_day` uses the same `SAMPLE_MODE` window and bottom-band filters before model scoring. Stocks with incomplete weekly/monthly windows or a close outside `SAMPLE_BOTTOM_BAND_RATIO` are skipped without running inference, and each batch prints `skipped_by_sample_rule`. Prediction also filters abnormal symbols before inference: stocks whose `stockinfo.SName` looks delisted (`退市`, `退`, or `PT`) and stocks whose latest daily K-line is older than the latest market trading-day cutoff by more than 10 trading days are skipped, with the count printed as `filtered_abnormal`.
 
 Windows one-click smoke run:
 

@@ -93,6 +93,7 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
 
                 predict_source = Path(package, "predict_day.py").read_text(encoding="utf-8")
                 self.assertIn("_sample_windows_are_valid", predict_source)
+                self.assertIn("load_abnormal_symbols", predict_source)
                 self.assertIn("skipped_by_sample_rule", predict_source)
 
         self.assertEqual(len(output_dirs), len(TARGETS))
