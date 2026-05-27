@@ -364,7 +364,6 @@ def materialize_events(
                             "daily_window": daily_count,
                             "weekly_window": weekly_count,
                             "monthly_window": monthly_count,
-                            "weekly_partial": USE_PARTIAL_WEEKLY_BAR and event.anchor_date.weekday() <= 3,
                         },
                     }
                 )
