@@ -299,13 +299,31 @@ def pick_monthly_window(monthly_rows: list[dict], anchor_date: date, window: int
     return _pick_window_by_dates(monthly_rows, monthly_dates, anchor_date, window)
 
 
-def _sample_windows_are_valid(sample_mode: str, weekly: list[dict], monthly: list[dict] | None) -> bool:
+def _is_close_in_monthly_bottom_band(daily: list[dict] | None, monthly: list[dict] | None, bottom_ratio: float = 0.10) -> bool:
+    if not daily or not monthly:
+        return False
+    current_close = _float_value(daily[-1].get("close"))
+    monthly_lows = [_float_value(row.get("low")) for row in monthly]
+    monthly_highs = [_float_value(row.get("high")) for row in monthly]
+    low = min(monthly_lows) if monthly_lows else 0.0
+    high = max(monthly_highs) if monthly_highs else 0.0
+    if current_close <= 0 or low <= 0 or high <= 0:
+        return False
+    if high <= low:
+        return current_close <= low
+    bottom_threshold = low + (high - low) * bottom_ratio
+    return current_close <= bottom_threshold
+
+
+def _sample_windows_are_valid(sample_mode: str, weekly: list[dict], monthly: list[dict] | None, daily: list[dict] | None = None) -> bool:
     if sample_mode == SHORT_SAMPLE_MODE:
         return len(weekly) >= 5 and _has_positive_ma13(weekly[-5:])
     config = sample_mode_config(sample_mode)
     monthly_required = config.get("monthly", 0)
-    if monthly_required > 0:
-        return monthly is not None and len(monthly) >= monthly_required
+    if monthly_required > 0 and (monthly is None or len(monthly) < monthly_required):
+        return False
+    if sample_mode in {XLONG_SAMPLE_MODE, XXLONG_SAMPLE_MODE}:
+        return _is_close_in_monthly_bottom_band(daily, monthly)
     return True
 
 
@@ -359,7 +377,7 @@ def materialize_events(
                 monthly = pick_monthly_window(monthly_rows_all, event.anchor_date, monthly_count, monthly_dates) if monthly_count > 0 else []
                 if daily is None or weekly is None or monthly is None:
                     continue
-                if not _sample_windows_are_valid(mode, weekly, monthly):
+                if not _sample_windows_are_valid(mode, weekly, monthly, daily):
                     continue
                 samples.append(
                     {

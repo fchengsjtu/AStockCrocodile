@@ -197,8 +197,8 @@ The `blackbox_finetune_recallXX/` pipelines support two compact sample modes:
 
 - `long` default: 13 daily K-lines, 8 weekly K-lines, 5 monthly K-lines, default `MAX_SEQ_LENGTH=2048`. Samples are kept only when all 5 monthly K-lines exist.
 - `short`: 8 daily K-lines and 5 weekly K-lines, default `MAX_SEQ_LENGTH=1024`. Samples are kept only when the latest 5 weekly K-lines exist and each has `ma13`.
-- `xlong`: 21 daily K-lines, 13 weekly K-lines, 8 monthly K-lines, default `MAX_SEQ_LENGTH=3072`. Samples are kept only when all 8 monthly K-lines exist.
-- `xxlong`: 34 daily K-lines, 21 weekly K-lines, 13 monthly K-lines, default `MAX_SEQ_LENGTH=4096`. Samples are kept only when all 13 monthly K-lines exist.
+- `xlong`: 21 daily K-lines, 13 weekly K-lines, 8 monthly K-lines, default `MAX_SEQ_LENGTH=3072`. Samples are kept only when all 8 monthly K-lines exist and the anchor daily close is in the bottom 10% of the price range formed by those monthly K-lines.
+- `xxlong`: 34 daily K-lines, 21 weekly K-lines, 13 monthly K-lines, default `MAX_SEQ_LENGTH=4096`. Samples are kept only when all 13 monthly K-lines exist and the anchor daily close is in the bottom 10% of the price range formed by those monthly K-lines.
 
 Use `SAMPLE_MODE=short`, `SAMPLE_MODE=long`, `SAMPLE_MODE=xlong`, or `SAMPLE_MODE=xxlong` with the recallXX one-click scripts. Set `MAX_SEQ_LENGTH` only when you intentionally want to override the mode default.
 
