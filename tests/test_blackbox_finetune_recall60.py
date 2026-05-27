@@ -164,23 +164,37 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         weekly_without_ma13 = [daily(f"202512{day:02d}", 1, 1, 1, 1) for day in range(1, 6)]
         weekly_with_ma13 = [dict(row, ma13=1.0) for row in weekly_without_ma13]
         monthly_rows = [daily(f"2025{month:02d}28", 1, 1, 1, 1) for month in range(1, 6)]
+        anchor_daily = [daily("20260101", 1, 1, 1, 1)]
 
-        self.assertFalse(common._sample_windows_are_valid("short", weekly_without_ma13, []))
-        self.assertTrue(common._sample_windows_are_valid("short", weekly_with_ma13, []))
-        self.assertFalse(common._sample_windows_are_valid("long", weekly_with_ma13, monthly_rows[:4]))
-        self.assertTrue(common._sample_windows_are_valid("long", weekly_with_ma13, monthly_rows))
+        self.assertFalse(common._sample_windows_are_valid("short", weekly_without_ma13, [], anchor_daily))
+        self.assertTrue(common._sample_windows_are_valid("short", weekly_with_ma13, [], anchor_daily))
+        self.assertFalse(common._sample_windows_are_valid("long", weekly_with_ma13, monthly_rows[:4], anchor_daily))
+        self.assertTrue(common._sample_windows_are_valid("long", weekly_with_ma13, monthly_rows, anchor_daily))
 
-    def test_xlong_and_xxlong_require_anchor_close_in_bottom_ten_percent_of_monthly_range(self):
-        weekly_rows = [dict(daily(f"202512{day:02d}", 1, 1, 1, 1), ma13=1.0) for day in range(1, 22)]
+    def test_sample_modes_require_anchor_close_in_configured_bottom_band(self):
+        weekly_rows = [dict(daily(f"202512{day:02d}", 10, 100, 10, 50), ma13=1.0) for day in range(1, 22)]
         monthly_rows = [daily(f"2025{month:02d}28", 10, 100, 10, 50) for month in range(1, 14)]
         low_daily = [daily("20260101", 18, 19, 17, 19)]
         high_daily = [daily("20260101", 30, 31, 29, 30)]
 
+        self.assertTrue(common._sample_windows_are_valid("short", weekly_rows, [], low_daily))
+        self.assertFalse(common._sample_windows_are_valid("short", weekly_rows, [], high_daily))
+        self.assertTrue(common._sample_windows_are_valid("long", weekly_rows, monthly_rows[:5], low_daily))
+        self.assertFalse(common._sample_windows_are_valid("long", weekly_rows, monthly_rows[:5], high_daily))
         self.assertTrue(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:8], low_daily))
         self.assertTrue(common._sample_windows_are_valid("xxlong", weekly_rows, monthly_rows, low_daily))
         self.assertFalse(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:8], high_daily))
         self.assertFalse(common._sample_windows_are_valid("xxlong", weekly_rows, monthly_rows, high_daily))
         self.assertFalse(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:7], low_daily))
+
+    def test_bottom_band_ratio_can_come_from_environment(self):
+        rows = [daily("20251231", 10, 100, 10, 50)]
+        anchor_daily = [daily("20260101", 54, 55, 53, 55)]
+
+        with patch.dict("os.environ", {"SAMPLE_BOTTOM_BAND_RATIO": "0.50"}):
+            self.assertTrue(common._is_close_in_bottom_band(anchor_daily, rows))
+        with patch.dict("os.environ", {"SAMPLE_BOTTOM_BAND_RATIO": "0.10"}):
+            self.assertFalse(common._is_close_in_bottom_band(anchor_daily, rows))
 
 
 if __name__ == "__main__":

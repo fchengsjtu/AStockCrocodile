@@ -51,6 +51,7 @@ All project-level environment variables are collected here:
 | `SAMPLE_MODE` | `blackbox_finetune_recallXX` | `long` | `short`: 8日K+5周K, `MAX_SEQ_LENGTH=1024`; `long`: 13日K+8周K+5月K, `MAX_SEQ_LENGTH=2048`; `xlong`: 21日K+13周K+8月K, `MAX_SEQ_LENGTH=3072`; `xxlong`: 34日K+21周K+13月K, `MAX_SEQ_LENGTH=4096`. |
 | `MAX_SEQ_LENGTH` | fine-tuning scripts | mode/script-specific | Override token length. For recallXX, omit unless intentionally overriding `SAMPLE_MODE` default. |
 | `NEGATIVE_RATIO` | dataset builders | recallXX default `3.0`; older fine-tune default `1.0` | Negative samples per positive sample. |
+| `SAMPLE_BOTTOM_BAND_RATIO` | recallXX dataset builders | `0.10` | Bottom-band filter ratio. `short`/`long` require anchor daily close in the bottom band of the weekly K-line range; `xlong`/`xxlong` use the monthly K-line range. |
 | `TRAIN_START_DATE` | recallXX dataset builders and one-click scripts | target/mode-specific | Training sample start date, format `YYYYMMDD`. |
 | `TRAIN_END_DATE` | recallXX dataset builders and one-click scripts | target/mode-specific | Training sample end date, format `YYYYMMDD`. |
 | `VALIDATION_START_DATE` | recallXX validation builders and one-click scripts | target/mode-specific | Validation/test sample start date, format `YYYYMMDD`. Takes priority over `TEST_START_DATE`. |
@@ -87,6 +88,7 @@ All project-level environment variables are collected here:
 # Example overrides
 $env:SAMPLE_MODE='short'
 $env:NEGATIVE_RATIO='3.0'
+$env:SAMPLE_BOTTOM_BAND_RATIO='0.10'
 $env:CHECKPOINT_EVERY='500'
 $env:LOCAL_LLM_BASE_URL='http://127.0.0.1:1234/v1'
 ```
@@ -195,12 +197,13 @@ The black-box fine-tuning pipeline is in `blackbox_finetune/`. It treats `Qwen/Q
 
 The `blackbox_finetune_recallXX/` pipelines support two compact sample modes:
 
-- `long` default: 13 daily K-lines, 8 weekly K-lines, 5 monthly K-lines, default `MAX_SEQ_LENGTH=2048`. Samples are kept only when all 5 monthly K-lines exist.
-- `short`: 8 daily K-lines and 5 weekly K-lines, default `MAX_SEQ_LENGTH=1024`. Samples are kept only when the latest 5 weekly K-lines exist and each has `ma13`.
-- `xlong`: 21 daily K-lines, 13 weekly K-lines, 8 monthly K-lines, default `MAX_SEQ_LENGTH=3072`. Samples are kept only when all 8 monthly K-lines exist and the anchor daily close is in the bottom 10% of the price range formed by those monthly K-lines.
-- `xxlong`: 34 daily K-lines, 21 weekly K-lines, 13 monthly K-lines, default `MAX_SEQ_LENGTH=4096`. Samples are kept only when all 13 monthly K-lines exist and the anchor daily close is in the bottom 10% of the price range formed by those monthly K-lines.
+- `long` default: 13 daily K-lines, 8 weekly K-lines, 5 monthly K-lines, default `MAX_SEQ_LENGTH=2048`. Samples are kept only when all 5 monthly K-lines exist and the anchor daily close is in the bottom band of the weekly K-line price range.
+- `short`: 8 daily K-lines and 5 weekly K-lines, default `MAX_SEQ_LENGTH=1024`. Samples are kept only when the latest 5 weekly K-lines exist, each has `ma13`, and the anchor daily close is in the bottom band of the weekly K-line price range.
+- `xlong`: 21 daily K-lines, 13 weekly K-lines, 8 monthly K-lines, default `MAX_SEQ_LENGTH=3072`. Samples are kept only when all 8 monthly K-lines exist and the anchor daily close is in the bottom band of the monthly K-line price range.
+- `xxlong`: 34 daily K-lines, 21 weekly K-lines, 13 monthly K-lines, default `MAX_SEQ_LENGTH=4096`. Samples are kept only when all 13 monthly K-lines exist and the anchor daily close is in the bottom band of the monthly K-line price range.
 
 Use `SAMPLE_MODE=short`, `SAMPLE_MODE=long`, `SAMPLE_MODE=xlong`, or `SAMPLE_MODE=xxlong` with the recallXX one-click scripts. Set `MAX_SEQ_LENGTH` only when you intentionally want to override the mode default.
+Set `SAMPLE_BOTTOM_BAND_RATIO` to control the bottom-band filter. The default is `0.10`, meaning bottom 10% of the relevant weekly or monthly price range.
 
 The `xlong` encoding was checked with 1000 materialized samples from `20240101-20251231` using the Qwen2.5-0.5B tokenizer. Full chat prompt length averaged about `2180` tokens and maxed at `2242`, so the default `MAX_SEQ_LENGTH=3072` has enough room for the current compact CSV prompt format.
 

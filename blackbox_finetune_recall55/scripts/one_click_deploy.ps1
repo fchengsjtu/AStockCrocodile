@@ -73,6 +73,7 @@ function Write-EnvironmentSnapshot {
     "SAMPLE_MODE",
     "MAX_SEQ_LENGTH",
     "NEGATIVE_RATIO",
+    "SAMPLE_BOTTOM_BAND_RATIO",
     "TRAIN_START_DATE",
     "TRAIN_END_DATE",
     "VALIDATION_START_DATE",

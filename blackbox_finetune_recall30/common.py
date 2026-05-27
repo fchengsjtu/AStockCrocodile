@@ -299,32 +299,42 @@ def pick_monthly_window(monthly_rows: list[dict], anchor_date: date, window: int
     return _pick_window_by_dates(monthly_rows, monthly_dates, anchor_date, window)
 
 
-def _is_close_in_monthly_bottom_band(daily: list[dict] | None, monthly: list[dict] | None, bottom_ratio: float = 0.10) -> bool:
-    if not daily or not monthly:
+def sample_bottom_band_ratio() -> float:
+    raw_value = os.environ.get("SAMPLE_BOTTOM_BAND_RATIO", "0.10")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = 0.10
+    return min(max(value, 0.0), 1.0)
+
+
+def _is_close_in_bottom_band(daily: list[dict] | None, range_rows: list[dict] | None, bottom_ratio: float | None = None) -> bool:
+    if not daily or not range_rows:
         return False
+    ratio = sample_bottom_band_ratio() if bottom_ratio is None else min(max(bottom_ratio, 0.0), 1.0)
     current_close = _float_value(daily[-1].get("close"))
-    monthly_lows = [_float_value(row.get("low")) for row in monthly]
-    monthly_highs = [_float_value(row.get("high")) for row in monthly]
-    low = min(monthly_lows) if monthly_lows else 0.0
-    high = max(monthly_highs) if monthly_highs else 0.0
+    lows = [_float_value(row.get("low")) for row in range_rows]
+    highs = [_float_value(row.get("high")) for row in range_rows]
+    low = min(lows) if lows else 0.0
+    high = max(highs) if highs else 0.0
     if current_close <= 0 or low <= 0 or high <= 0:
         return False
     if high <= low:
         return current_close <= low
-    bottom_threshold = low + (high - low) * bottom_ratio
+    bottom_threshold = low + (high - low) * ratio
     return current_close <= bottom_threshold
 
 
 def _sample_windows_are_valid(sample_mode: str, weekly: list[dict], monthly: list[dict] | None, daily: list[dict] | None = None) -> bool:
     if sample_mode == SHORT_SAMPLE_MODE:
-        return len(weekly) >= 5 and _has_positive_ma13(weekly[-5:])
+        return len(weekly) >= 5 and _has_positive_ma13(weekly[-5:]) and _is_close_in_bottom_band(daily, weekly)
     config = sample_mode_config(sample_mode)
     monthly_required = config.get("monthly", 0)
     if monthly_required > 0 and (monthly is None or len(monthly) < monthly_required):
         return False
     if sample_mode in {XLONG_SAMPLE_MODE, XXLONG_SAMPLE_MODE}:
-        return _is_close_in_monthly_bottom_band(daily, monthly)
-    return True
+        return _is_close_in_bottom_band(daily, monthly)
+    return _is_close_in_bottom_band(daily, weekly)
 
 
 def materialize_events(
