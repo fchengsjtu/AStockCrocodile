@@ -29,6 +29,7 @@ from blackbox_finetune_recall75.common import (
     pick_weekly_window,
     pick_monthly_window,
     pick_window,
+    _sample_windows_are_valid,
 )
 from blackbox_finetune_recall75.gpu import prepare_rtx3060
 from blackbox_finetune_recall75.inference import load_model, score_prediction
@@ -72,11 +73,15 @@ def predict_day(
             weekly_map = load_kline_map(conn, "wkandles", "W", batch, lookback_start, anchor)
             monthly_map = load_kline_map(conn, "mkandles", "M", batch, lookback_start, anchor) if monthly_count > 0 else {}
             selected = 0
+            skipped_by_sample_rule = 0
             for scode in batch:
                 daily = pick_window(daily_map.get(scode, []), anchor, daily_count)
                 weekly = pick_weekly_window(weekly_map.get(scode, []), daily_map.get(scode, []), anchor, weekly_count)
                 monthly = pick_monthly_window(monthly_map.get(scode, []), anchor, monthly_count) if monthly_count > 0 else []
                 if daily is None or weekly is None or monthly is None:
+                    continue
+                if not _sample_windows_are_valid(sample_mode, weekly, monthly, daily):
+                    skipped_by_sample_rule += 1
                     continue
                 prompt = tokenizer.apply_chat_template(build_messages(scode, anchor, daily, weekly, monthly, sample_mode=sample_mode), tokenize=False, add_generation_prompt=True)
                 pred = score_prediction(model, tokenizer, prompt, max_seq_length, threshold)
@@ -92,7 +97,7 @@ def predict_day(
                     }
                 )
                 selected += 1
-            print(f"batch {batch_index}/{len(batches)} selected={selected}", flush=True)
+            print(f"batch {batch_index}/{len(batches)} selected={selected} skipped_by_sample_rule={skipped_by_sample_rule}", flush=True)
     result = pd.DataFrame(rows)
     if not result.empty:
         result = result.sort_values("PositiveProbability", ascending=False)

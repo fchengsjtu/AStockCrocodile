@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 import unittest
 
 
@@ -89,6 +90,10 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertEqual(train_args.lr_backoff_factor, 0.5)
                 self.assertEqual(train_args.min_learning_rate, 1e-6)
                 self.assertEqual(predict_args.cuda_device, "0")
+
+                predict_source = Path(package, "predict_day.py").read_text(encoding="utf-8")
+                self.assertIn("_sample_windows_are_valid", predict_source)
+                self.assertIn("skipped_by_sample_rule", predict_source)
 
         self.assertEqual(len(output_dirs), len(TARGETS))
         self.assertEqual(len(train_seeds), len(TARGETS))
