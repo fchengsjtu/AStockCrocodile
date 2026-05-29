@@ -40,6 +40,13 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(build_args.negative_ratio, 2.5)
         self.assertEqual(validation_args.negative_ratio, 2.5)
 
+    def test_lora_rank_and_dropout_can_come_from_environment(self):
+        with patch.dict("os.environ", {"LORA_RANK": "8", "LORA_DROPOUT": "0.10"}):
+            args = train.build_parser().parse_args([])
+
+        self.assertEqual(args.lora_rank, 8)
+        self.assertEqual(args.lora_dropout, 0.10)
+
     def test_positive_samples_use_twenty_trading_day_cooldown(self):
         trade_dates = [date(2026, 1, day) for day in range(1, 32)]
         events = [

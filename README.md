@@ -73,6 +73,8 @@ All project-level environment variables are collected here:
 | `LEARNING_RATE` | fine-tuning one-click scripts | recall60-style `5e-6`, recall80 `2e-5`, older tools vary | Training learning rate. |
 | `TRAIN_SEED` | recallXX one-click scripts | `20260500 + recall target` | Target-specific training seed. |
 | `MAX_GRAD_NORM` | recallXX one-click scripts | `0.5` | Gradient clipping norm. |
+| `LORA_RANK` | recallXX one-click scripts/trainers | `16` | LoRA rank. Lower values such as `8` or `4` reduce trainable capacity and can reduce overfitting. |
+| `LORA_DROPOUT` | recallXX one-click scripts/trainers | `0.05` | LoRA dropout ratio. Values such as `0.05` or `0.10` can reduce overfitting; `0` disables dropout. |
 | `OOM_PATIENCE` | recallXX one-click scripts | `20` | Abort after this many consecutive CUDA OOM skips. |
 | `MIN_SEQ_LENGTH_ON_OOM` | recall80 train script | `512` | Smallest sequence length allowed by automatic OOM shrinking. |
 | `OOM_SHRINK_FACTOR` | recall80 train script | `0.5` | Sequence-length multiplier after repeated OOM. |

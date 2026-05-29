@@ -50,6 +50,8 @@ MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-0.60}"
 TRAIN_SEED="${TRAIN_SEED:-20260560}"
 LEARNING_RATE="${LEARNING_RATE:-5e-6}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-0.5}"
+LORA_RANK="${LORA_RANK:-16}"
+LORA_DROPOUT="${LORA_DROPOUT:-0.05}"
 OOM_PATIENCE="${OOM_PATIENCE:-20}"
 NONFINITE_SKIP_LIMIT="${NONFINITE_SKIP_LIMIT:-100}"
 NONFINITE_BACKOFF_EVERY="${NONFINITE_BACKOFF_EVERY:-10}"
@@ -126,7 +128,7 @@ fi
 
 run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" python -m blackbox_finetune_recall60.build_dataset "${BUILD_ARGS[@]}"
 run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" python -m blackbox_finetune_recall60.build_validation_dataset "${VAL_ARGS[@]}"
-TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --max-grad-norm "$MAX_GRAD_NORM" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --nonfinite-skip-limit "$NONFINITE_SKIP_LIMIT" --nonfinite-backoff-every "$NONFINITE_BACKOFF_EVERY" --lr-backoff-factor "$LR_BACKOFF_FACTOR" --min-learning-rate "$MIN_LEARNING_RATE" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
+TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --max-grad-norm "$MAX_GRAD_NORM" --lora-rank "$LORA_RANK" --lora-dropout "$LORA_DROPOUT" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --nonfinite-skip-limit "$NONFINITE_SKIP_LIMIT" --nonfinite-backoff-every "$NONFINITE_BACKOFF_EVERY" --lr-backoff-factor "$LR_BACKOFF_FACTOR" --min-learning-rate "$MIN_LEARNING_RATE" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
 if [[ -n "$RESUME_ADAPTER_DIR" ]]; then
   TRAIN_ARGS+=(--resume-adapter-dir "$RESUME_ADAPTER_DIR")
 fi

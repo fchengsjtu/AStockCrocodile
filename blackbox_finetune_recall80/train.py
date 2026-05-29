@@ -18,6 +18,22 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from blackbox_finetune_recall80.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_TRAIN_SEED, compact_messages_from_sample, default_max_seq_length, default_output_dir
 from blackbox_finetune_recall80.gpu import prepare_rtx3060
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
 from llm_finetune.common import read_jsonl
 
 
@@ -164,6 +180,8 @@ def train_recall80_lora(
     learning_rate: float,
     train_seed: int,
     max_grad_norm: float,
+    lora_rank: int,
+    lora_dropout: float,
     checkpoint_every: int,
     resume_adapter_dir: Path | None,
     nonfinite_patience: int,
@@ -206,10 +224,12 @@ def train_recall80_lora(
     model.config.use_cache = False
     if hasattr(model, "gradient_checkpointing_enable"):
         model.gradient_checkpointing_enable()
+    lora_rank = max(1, int(lora_rank))
+    lora_dropout = min(max(float(lora_dropout), 0.0), 1.0)
     lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        lora_dropout=0.05,
+        r=lora_rank,
+        lora_alpha=lora_rank * 2,
+        lora_dropout=lora_dropout,
         bias="none",
         task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
@@ -243,7 +263,7 @@ def train_recall80_lora(
     print(
         f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
-        f"train_seed={train_seed} lr={learning_rate} max_grad_norm={max_grad_norm} "
+        f"train_seed={train_seed} lr={learning_rate} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
         f"max_seq_length={active_max_seq_length} min_seq_length_on_oom={min_seq_length_on_oom}",
         flush=True,
     )
@@ -415,6 +435,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--train-seed", type=int, default=DEFAULT_TRAIN_SEED, help="Target-specific seed for independent LoRA parameters.")
     parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Clip LoRA gradients and skip non-finite updates.")
+    parser.add_argument("--lora-rank", type=int, default=_env_int("LORA_RANK", 16), help="LoRA rank. Lower values reduce trainable capacity and can reduce overfitting.")
+    parser.add_argument("--lora-dropout", type=float, default=_env_float("LORA_DROPOUT", 0.05), help="LoRA dropout in [0, 1]. Higher values can reduce overfitting.")
     parser.add_argument("--checkpoint-every", type=int, default=default_checkpoint_every(), help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
@@ -447,6 +469,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         learning_rate=args.learning_rate,
         train_seed=args.train_seed,
         max_grad_norm=args.max_grad_norm,
+        lora_rank=args.lora_rank,
+        lora_dropout=args.lora_dropout,
         checkpoint_every=args.checkpoint_every,
         resume_adapter_dir=args.resume_adapter_dir,
         nonfinite_patience=args.nonfinite_patience,

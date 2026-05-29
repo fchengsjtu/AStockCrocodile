@@ -94,6 +94,8 @@ function Write-EnvironmentSnapshot {
     "LEARNING_RATE",
     "TRAIN_SEED",
     "MAX_GRAD_NORM",
+    "LORA_RANK",
+    "LORA_DROPOUT",
     "OOM_PATIENCE",
     "MIN_SEQ_LENGTH_ON_OOM",
     "OOM_SHRINK_FACTOR",
@@ -149,6 +151,8 @@ $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "
 $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260560" }
 $LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "5e-6" }
 $MaxGradNorm = if ($env:MAX_GRAD_NORM) { $env:MAX_GRAD_NORM } else { "0.5" }
+$LoraRank = if ($env:LORA_RANK) { $env:LORA_RANK } else { "16" }
+$LoraDropout = if ($env:LORA_DROPOUT) { $env:LORA_DROPOUT } else { "0.05" }
 $OomPatience = if ($env:OOM_PATIENCE) { $env:OOM_PATIENCE } else { "20" }
 $NonfiniteSkipLimit = if ($env:NONFINITE_SKIP_LIMIT) { $env:NONFINITE_SKIP_LIMIT } else { "100" }
 $NonfiniteBackoffEvery = if ($env:NONFINITE_BACKOFF_EVERY) { $env:NONFINITE_BACKOFF_EVERY } else { "10" }
@@ -207,7 +211,7 @@ Invoke-DatasetBuildIfNeeded -Dir $ValidationDir -Label "validation" -ForceValue 
 $TrainArgs = @(
   '-m', 'blackbox_finetune_recall55.train', '--base-model', $BaseModel, '--data-dir', $DataDir, '--output-dir', $OutputDir,
   '--max-seq-length', $MaxSeqLength, '--epochs', $Epochs, '--batch-size', '1', '--gradient-accumulation-steps', $GradSteps,
-  '--learning-rate', $LearningRate, '--max-grad-norm', $MaxGradNorm, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
+  '--learning-rate', $LearningRate, '--max-grad-norm', $MaxGradNorm, '--lora-rank', $LoraRank, '--lora-dropout', $LoraDropout, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
   '--nonfinite-skip-limit', $NonfiniteSkipLimit, '--nonfinite-backoff-every', $NonfiniteBackoffEvery, '--lr-backoff-factor', $LrBackoffFactor,
   '--min-learning-rate', $MinLearningRate,
   '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice, '--no-4bit'
