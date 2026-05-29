@@ -121,8 +121,15 @@ def _evaluate_training_checkpoint(
     was_training = model.training
     model.eval()
     tp = fp = tn = fn = positives = 0
+    eval_total = len(eval_rows)
+    eval_start = time.monotonic()
+    print(
+        f"evaluation start update={update}/{total_updates} "
+        f"progress={progress * 100:.2f}% samples={eval_total} threshold={threshold}",
+        flush=True,
+    )
     try:
-        for row in eval_rows:
+        for index, row in enumerate(eval_rows, start=1):
             messages = compact_messages_from_sample(row)
             prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
             pred = score_prediction(model, tokenizer, prompt, max_seq_length, threshold)
@@ -138,6 +145,20 @@ def _evaluate_training_checkpoint(
                 fn += 1
             else:
                 tn += 1
+            if index == eval_total or index % 100 == 0:
+                elapsed = time.monotonic() - eval_start
+                eval_progress = index / eval_total if eval_total else 1.0
+                remaining = elapsed * (1.0 - eval_progress) / eval_progress if eval_progress > 0 else 0.0
+                running_recall = tp / positives if positives else 0.0
+                running_precision = tp / (tp + fp) if tp + fp else 0.0
+                print(
+                    f"evaluation progress {index}/{eval_total} "
+                    f"({eval_progress * 100:.2f}%) "
+                    f"elapsed={_format_duration(elapsed)} "
+                    f"remaining={_format_duration(remaining)} "
+                    f"positive_recall={running_recall:.4f} precision={running_precision:.4f}",
+                    flush=True,
+                )
     finally:
         if was_training:
             model.train()
