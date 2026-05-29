@@ -67,6 +67,10 @@ All project-level environment variables are collected here:
 | `NO_AUTO_RESUME` | recallXX one-click scripts | off | Disable automatic resume from latest checkpoint. |
 | `RESUME_ADAPTER_DIR` | recallXX one-click scripts | empty | Explicit adapter checkpoint directory to resume from. |
 | `CHECKPOINT_EVERY` | recallXX one-click scripts/trainers | `500` | Save adapter checkpoint every N optimizer updates. Applies to both `SAMPLE_MODE=short` and `SAMPLE_MODE=long` unless overridden. |
+| `EVAL_EVERY_EPOCH_FRACTION` | recallXX one-click scripts/trainers | `0.1` | Run in-training evaluation every fraction of the requested training run, e.g. `0.1` saves metrics at 10%, 20%, ...; `0` disables. |
+| `EVAL_THRESHOLD` | recallXX one-click scripts/trainers | `0.50` | Threshold used by in-training evaluation. |
+| `EVAL_MAX_SAMPLES` | recallXX one-click scripts/trainers; older eval tools | `0` for recallXX | Max samples used by in-training evaluation; `0` means all `test.jsonl` rows. |
+| `EVAL_OUTPUT_DIR` | recallXX one-click scripts/trainers | `OUTPUT_DIR/evaluations` | Directory for in-training evaluation JSON files. |
 | `EPOCHS` | fine-tuning one-click scripts | smoke/full script-specific | Training epochs. |
 | `BATCH_SIZE` | `llm_finetune` one-click scripts | `1` | Per-device batch size. |
 | `GRADIENT_ACCUMULATION_STEPS` | fine-tuning one-click scripts | smoke/full script-specific | Gradient accumulation steps. |

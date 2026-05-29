@@ -89,6 +89,10 @@ else
   DEFAULT_CHECKPOINT_EVERY=500
 fi
 CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-$DEFAULT_CHECKPOINT_EVERY}"
+EVAL_EVERY_EPOCH_FRACTION="${EVAL_EVERY_EPOCH_FRACTION:-0.1}"
+EVAL_THRESHOLD="${EVAL_THRESHOLD:-0.50}"
+EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-0}"
+EVAL_OUTPUT_DIR="${EVAL_OUTPUT_DIR:-}"
 
 if [[ "$MODE" == "smoke" ]]; then
   DEFAULT_TRAIN_START="20200101"
@@ -129,7 +133,10 @@ fi
 
 run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" python -m blackbox_finetune_recall75.build_dataset "${BUILD_ARGS[@]}"
 run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" python -m blackbox_finetune_recall75.build_validation_dataset "${VAL_ARGS[@]}"
-TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --weight-decay "$WEIGHT_DECAY" --max-grad-norm "$MAX_GRAD_NORM" --lora-rank "$LORA_RANK" --lora-dropout "$LORA_DROPOUT" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --nonfinite-skip-limit "$NONFINITE_SKIP_LIMIT" --nonfinite-backoff-every "$NONFINITE_BACKOFF_EVERY" --lr-backoff-factor "$LR_BACKOFF_FACTOR" --min-learning-rate "$MIN_LEARNING_RATE" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
+TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --weight-decay "$WEIGHT_DECAY" --max-grad-norm "$MAX_GRAD_NORM" --lora-rank "$LORA_RANK" --lora-dropout "$LORA_DROPOUT" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --nonfinite-skip-limit "$NONFINITE_SKIP_LIMIT" --nonfinite-backoff-every "$NONFINITE_BACKOFF_EVERY" --lr-backoff-factor "$LR_BACKOFF_FACTOR" --min-learning-rate "$MIN_LEARNING_RATE" --eval-every-epoch-fraction "$EVAL_EVERY_EPOCH_FRACTION" --eval-threshold "$EVAL_THRESHOLD" --eval-max-samples "$EVAL_MAX_SAMPLES" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
+if [[ -n "$EVAL_OUTPUT_DIR" ]]; then
+  TRAIN_ARGS+=(--eval-output-dir "$EVAL_OUTPUT_DIR")
+fi
 if [[ -n "$RESUME_ADAPTER_DIR" ]]; then
   TRAIN_ARGS+=(--resume-adapter-dir "$RESUME_ADAPTER_DIR")
 fi

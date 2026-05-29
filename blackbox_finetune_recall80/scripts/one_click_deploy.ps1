@@ -89,6 +89,10 @@ function Write-EnvironmentSnapshot {
     "NO_AUTO_RESUME",
     "RESUME_ADAPTER_DIR",
     "CHECKPOINT_EVERY",
+    "EVAL_EVERY_EPOCH_FRACTION",
+    "EVAL_THRESHOLD",
+    "EVAL_MAX_SAMPLES",
+    "EVAL_OUTPUT_DIR",
     "EPOCHS",
     "GRADIENT_ACCUMULATION_STEPS",
     "LEARNING_RATE",
@@ -175,6 +179,10 @@ $NegativeRatio = if ($env:NEGATIVE_RATIO) { $env:NEGATIVE_RATIO } else { "3.0" }
 $DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } elseif ($SampleMode -eq "xlong") { "3072" } elseif ($SampleMode -eq "xxlong") { "4096" } else { "2048" }
 $DefaultCheckpointEvery = "500"
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { $DefaultCheckpointEvery }
+$EvalEveryEpochFraction = if ($env:EVAL_EVERY_EPOCH_FRACTION) { $env:EVAL_EVERY_EPOCH_FRACTION } else { "0.1" }
+$EvalThreshold = if ($env:EVAL_THRESHOLD) { $env:EVAL_THRESHOLD } else { "0.50" }
+$EvalMaxSamples = if ($env:EVAL_MAX_SAMPLES) { $env:EVAL_MAX_SAMPLES } else { "0" }
+$EvalOutputDir = $env:EVAL_OUTPUT_DIR
 
 if ($Mode -eq "smoke") {
   $DefaultTrainStart = "20110101"
@@ -219,9 +227,10 @@ $TrainArgs = @(
   '--learning-rate', $LearningRate, '--weight-decay', $WeightDecay, '--max-grad-norm', $MaxGradNorm, '--lora-rank', $LoraRank, '--lora-dropout', $LoraDropout, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
   '--min-seq-length-on-oom', $MinSeqLengthOnOom, '--oom-shrink-factor', $OomShrinkFactor,
   '--nonfinite-skip-limit', $NonfiniteSkipLimit, '--nonfinite-backoff-every', $NonfiniteBackoffEvery, '--lr-backoff-factor', $LrBackoffFactor,
-  '--min-learning-rate', $MinLearningRate,
+  '--min-learning-rate', $MinLearningRate, '--eval-every-epoch-fraction', $EvalEveryEpochFraction, '--eval-threshold', $EvalThreshold, '--eval-max-samples', $EvalMaxSamples,
   '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice, '--no-4bit'
 )
+if ($EvalOutputDir) { $TrainArgs += @('--eval-output-dir', $EvalOutputDir) }
 if ($ResumeAdapterDir) { $TrainArgs += @('--resume-adapter-dir', $ResumeAdapterDir) }
 if (Test-EnvFlag $env:REBUILD_TOKEN_CACHE) { $TrainArgs += @('--rebuild-token-cache') }
 if (Test-EnvFlag $env:NO_AUTO_RESUME) { $TrainArgs += @('--no-auto-resume') }

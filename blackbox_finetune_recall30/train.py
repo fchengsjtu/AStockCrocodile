@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import hashlib
 import math
@@ -18,6 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from blackbox_finetune_recall30.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_TRAIN_SEED, compact_messages_from_sample, default_max_seq_length, default_output_dir
 from blackbox_finetune_recall30.gpu import prepare_rtx3060
+from blackbox_finetune_recall30.inference import score_prediction
 
 
 def _env_int(name: str, default: int) -> int:
@@ -100,6 +102,68 @@ def _params_are_finite(params) -> bool:
     return True
 
 
+
+def _evaluate_training_checkpoint(
+    model,
+    tokenizer,
+    rows: list[dict],
+    output_dir: Path,
+    update: int,
+    total_updates: int,
+    progress: float,
+    trained_epochs: float,
+    threshold: float,
+    max_samples: int,
+    max_seq_length: int,
+) -> dict:
+    eval_rows = rows[:max_samples] if max_samples and max_samples > 0 else rows
+    output_dir.mkdir(parents=True, exist_ok=True)
+    was_training = model.training
+    model.eval()
+    tp = fp = tn = fn = positives = 0
+    try:
+        for row in eval_rows:
+            messages = compact_messages_from_sample(row)
+            prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
+            pred = score_prediction(model, tokenizer, prompt, max_seq_length, threshold)
+            predicted_positive = pred["label"] == "positive"
+            actual_positive = int(row["metadata"]["label"]) == 1
+            if actual_positive:
+                positives += 1
+            if predicted_positive and actual_positive:
+                tp += 1
+            elif predicted_positive and not actual_positive:
+                fp += 1
+            elif not predicted_positive and actual_positive:
+                fn += 1
+            else:
+                tn += 1
+    finally:
+        if was_training:
+            model.train()
+    positive_recall = tp / positives if positives else 0.0
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    result = {
+        "update": update,
+        "total_updates": total_updates,
+        "progress": progress,
+        "trained_epochs": trained_epochs,
+        "samples": len(eval_rows),
+        "positive_samples": positives,
+        "tp": tp,
+        "fp": fp,
+        "tn": tn,
+        "fn": fn,
+        "positive_recall": positive_recall,
+        "precision": precision,
+        "threshold": threshold,
+        "max_seq_length": max_seq_length,
+    }
+    output_path = output_dir / f"eval-update-{update:06d}-progress-{int(round(progress * 1000)):04d}.json"
+    with output_path.open("w", encoding="utf-8") as file:
+        json.dump(result, file, ensure_ascii=False, indent=2)
+    print(f"evaluation saved: {output_path} positive_recall={positive_recall:.4f} precision={precision:.4f} samples={len(eval_rows)}", flush=True)
+    return result
 def _checkpoint_update(checkpoint_dir: Path | None) -> int:
     if checkpoint_dir is None:
         return 0
@@ -193,6 +257,10 @@ def train_recall30_lora(
     nonfinite_backoff_every: int,
     lr_backoff_factor: float,
     min_learning_rate: float,
+    evaluation_interval_fraction: float,
+    evaluation_threshold: float,
+    evaluation_max_samples: int,
+    evaluation_output_dir: Path | None,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -253,6 +321,13 @@ def train_recall30_lora(
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
     start_update = min(_checkpoint_update(resume_adapter_dir), total_updates)
     start_micro_step = start_update * max(1, gradient_accumulation_steps)
+    evaluation_interval_fraction = min(max(float(evaluation_interval_fraction), 0.0), 1.0)
+    evaluation_output_dir = evaluation_output_dir or (output_dir / "evaluations")
+    if evaluation_interval_fraction > 0:
+        start_progress = start_update / total_updates if total_updates else 1.0
+        next_evaluation_progress = (math.floor(start_progress / evaluation_interval_fraction) + 1) * evaluation_interval_fraction
+    else:
+        next_evaluation_progress = 0.0
     random.seed(train_seed)
     torch.manual_seed(train_seed)
     torch.cuda.manual_seed_all(train_seed)
@@ -261,7 +336,7 @@ def train_recall30_lora(
         f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
         f"train_seed={train_seed} lr={learning_rate} weight_decay={weight_decay} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
-        f"max_seq_length={max_seq_length}",
+        f"max_seq_length={max_seq_length} eval_every={evaluation_interval_fraction} eval_threshold={evaluation_threshold} eval_max_samples={evaluation_max_samples}",
         flush=True,
     )
     if start_update >= total_updates:
@@ -388,6 +463,21 @@ def train_recall30_lora(
                 f"eta={time.strftime('%Y-%m-%d %H:%M:%S', eta_epoch)}",
                 flush=True,
             )
+            while evaluation_interval_fraction > 0 and progress + 1e-12 >= next_evaluation_progress:
+                _evaluate_training_checkpoint(
+                    model=model,
+                    tokenizer=tokenizer,
+                    rows=valid_rows,
+                    output_dir=evaluation_output_dir,
+                    update=update,
+                    total_updates=total_updates,
+                    progress=min(progress, 1.0),
+                    trained_epochs=epochs * min(progress, 1.0),
+                    threshold=evaluation_threshold,
+                    max_samples=evaluation_max_samples,
+                    max_seq_length=active_max_seq_length if "active_max_seq_length" in locals() else max_seq_length,
+                )
+                next_evaluation_progress += evaluation_interval_fraction
             if checkpoint_every > 0 and update % checkpoint_every == 0:
                 checkpoint_dir = output_dir / "checkpoints" / f"update-{update:06d}"
                 checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -418,6 +508,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lora-rank", type=int, default=_env_int("LORA_RANK", 16), help="LoRA rank. Lower values reduce trainable capacity and can reduce overfitting.")
     parser.add_argument("--lora-dropout", type=float, default=_env_float("LORA_DROPOUT", 0.05), help="LoRA dropout in [0, 1]. Higher values can reduce overfitting.")
     parser.add_argument("--checkpoint-every", type=int, default=default_checkpoint_every(), help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
+    parser.add_argument("--eval-every-epoch-fraction", type=float, default=_env_float("EVAL_EVERY_EPOCH_FRACTION", 0.1), help="Run in-training evaluation at this fraction of total requested epochs; 0 disables.")
+    parser.add_argument("--eval-threshold", type=float, default=_env_float("EVAL_THRESHOLD", 0.50), help="Threshold used by in-training evaluation.")
+    parser.add_argument("--eval-max-samples", type=int, default=_env_int("EVAL_MAX_SAMPLES", 0), help="Max test samples for in-training evaluation; 0 means all.")
+    parser.add_argument("--eval-output-dir", type=Path, default=None, help="Directory for in-training evaluation JSON files; default is output-dir/evaluations.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
     parser.add_argument("--nonfinite-skip-limit", type=int, default=100, help="Abort after this many total non-finite losses or gradients.")
@@ -460,6 +554,10 @@ def main(argv: Iterable[str] | None = None) -> None:
         nonfinite_backoff_every=args.nonfinite_backoff_every,
         lr_backoff_factor=args.lr_backoff_factor,
         min_learning_rate=args.min_learning_rate,
+        evaluation_interval_fraction=args.eval_every_epoch_fraction,
+        evaluation_threshold=args.eval_threshold,
+        evaluation_max_samples=args.eval_max_samples,
+        evaluation_output_dir=args.eval_output_dir,
     )
 
 

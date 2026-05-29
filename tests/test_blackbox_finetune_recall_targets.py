@@ -80,6 +80,9 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertEqual(train_args.max_grad_norm, 0.5)
                 self.assertEqual(train_args.lora_rank, 16)
                 self.assertEqual(train_args.lora_dropout, 0.05)
+                self.assertEqual(train_args.eval_every_epoch_fraction, 0.1)
+                self.assertEqual(train_args.eval_threshold, 0.50)
+                self.assertEqual(train_args.eval_max_samples, 0)
                 self.assertEqual(train_args.checkpoint_every, 500)
                 self.assertEqual(train_args.nonfinite_patience, 20)
                 if target == 80:
