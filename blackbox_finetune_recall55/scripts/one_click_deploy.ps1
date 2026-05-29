@@ -92,6 +92,7 @@ function Write-EnvironmentSnapshot {
     "EPOCHS",
     "GRADIENT_ACCUMULATION_STEPS",
     "LEARNING_RATE",
+    "WEIGHT_DECAY",
     "TRAIN_SEED",
     "MAX_GRAD_NORM",
     "LORA_RANK",
@@ -149,6 +150,7 @@ if ($Mode -eq "diagnose") {
 
 $MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.60" }
 $TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260560" }
+$WeightDecay = if ($env:WEIGHT_DECAY) { $env:WEIGHT_DECAY } else { "0.0" }
 $LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "5e-6" }
 $MaxGradNorm = if ($env:MAX_GRAD_NORM) { $env:MAX_GRAD_NORM } else { "0.5" }
 $LoraRank = if ($env:LORA_RANK) { $env:LORA_RANK } else { "16" }
@@ -211,7 +213,7 @@ Invoke-DatasetBuildIfNeeded -Dir $ValidationDir -Label "validation" -ForceValue 
 $TrainArgs = @(
   '-m', 'blackbox_finetune_recall55.train', '--base-model', $BaseModel, '--data-dir', $DataDir, '--output-dir', $OutputDir,
   '--max-seq-length', $MaxSeqLength, '--epochs', $Epochs, '--batch-size', '1', '--gradient-accumulation-steps', $GradSteps,
-  '--learning-rate', $LearningRate, '--max-grad-norm', $MaxGradNorm, '--lora-rank', $LoraRank, '--lora-dropout', $LoraDropout, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
+  '--learning-rate', $LearningRate, '--weight-decay', $WeightDecay, '--max-grad-norm', $MaxGradNorm, '--lora-rank', $LoraRank, '--lora-dropout', $LoraDropout, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
   '--nonfinite-skip-limit', $NonfiniteSkipLimit, '--nonfinite-backoff-every', $NonfiniteBackoffEvery, '--lr-backoff-factor', $LrBackoffFactor,
   '--min-learning-rate', $MinLearningRate,
   '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice, '--no-4bit'

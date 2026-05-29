@@ -71,6 +71,7 @@ All project-level environment variables are collected here:
 | `BATCH_SIZE` | `llm_finetune` one-click scripts | `1` | Per-device batch size. |
 | `GRADIENT_ACCUMULATION_STEPS` | fine-tuning one-click scripts | smoke/full script-specific | Gradient accumulation steps. |
 | `LEARNING_RATE` | fine-tuning one-click scripts | recall60-style `5e-6`, recall80 `2e-5`, older tools vary | Training learning rate. |
+| `WEIGHT_DECAY` | recallXX one-click scripts/trainers | `0.0` | AdamW weight decay. Values such as `0.01` can reduce overfitting; `0.0` preserves previous behavior. |
 | `TRAIN_SEED` | recallXX one-click scripts | `20260500 + recall target` | Target-specific training seed. |
 | `MAX_GRAD_NORM` | recallXX one-click scripts | `0.5` | Gradient clipping norm. |
 | `LORA_RANK` | recallXX one-click scripts/trainers | `16` | LoRA rank. Lower values such as `8` or `4` reduce trainable capacity and can reduce overfitting. |

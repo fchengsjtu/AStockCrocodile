@@ -178,6 +178,7 @@ def train_recall65_lora(
     batch_size: int,
     gradient_accumulation_steps: int,
     learning_rate: float,
+    weight_decay: float,
     train_seed: int,
     max_grad_norm: float,
     lora_rank: int,
@@ -247,7 +248,7 @@ def train_recall65_lora(
 
     max_seq_length = max(64, max_seq_length)
     tokenized = _load_or_build_tokenized(tokenizer, rows, data_dir, train_path, base_model, max_seq_length, rebuild_token_cache)
-    optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate)
+    optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=max(0.0, float(weight_decay)))
     total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
     start_update = min(_checkpoint_update(resume_adapter_dir), total_updates)
@@ -259,7 +260,7 @@ def train_recall65_lora(
     print(
         f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
-        f"train_seed={train_seed} lr={learning_rate} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
+        f"train_seed={train_seed} lr={learning_rate} weight_decay={weight_decay} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
         f"max_seq_length={max_seq_length}",
         flush=True,
     )
@@ -411,6 +412,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
+    parser.add_argument("--weight-decay", type=float, default=_env_float("WEIGHT_DECAY", 0.0), help="AdamW weight decay. Values like 0.01 can reduce overfitting; 0 keeps prior behavior.")
     parser.add_argument("--train-seed", type=int, default=DEFAULT_TRAIN_SEED, help="Target-specific seed for independent LoRA parameters.")
     parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Clip LoRA gradients and skip non-finite updates.")
     parser.add_argument("--lora-rank", type=int, default=_env_int("LORA_RANK", 16), help="LoRA rank. Lower values reduce trainable capacity and can reduce overfitting.")
@@ -443,6 +445,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         batch_size=args.batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
         train_seed=args.train_seed,
         max_grad_norm=args.max_grad_norm,
         lora_rank=args.lora_rank,

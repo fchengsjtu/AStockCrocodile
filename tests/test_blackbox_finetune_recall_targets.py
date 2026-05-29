@@ -60,6 +60,7 @@ class BlackboxFinetuneRecallTargetsTests(unittest.TestCase):
                 self.assertEqual(train_args.cuda_device, "0")
                 expected_learning_rate = 2e-5 if target == 80 else 5e-6
                 self.assertEqual(train_args.learning_rate, expected_learning_rate)
+                self.assertEqual(train_args.weight_decay, 0.0)
                 self.assertEqual(build_args.sample_mode, "long")
                 self.assertEqual(validation_args.sample_mode, "long")
                 self.assertEqual(predict_args.sample_mode, "long")
