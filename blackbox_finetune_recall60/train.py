@@ -17,7 +17,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from blackbox_finetune_recall60.common import DEFAULT_BASE_MODEL, DEFAULT_DATA_DIR, DEFAULT_MAX_SEQ_LENGTH, DEFAULT_TRAIN_SEED, compact_messages_from_sample, default_max_seq_length, default_output_dir
+from blackbox_finetune_recall60.common import (
+    DEFAULT_BASE_MODEL,
+    DEFAULT_DATA_DIR,
+    DEFAULT_MAX_SEQ_LENGTH,
+    DEFAULT_TRAIN_SEED,
+    compact_messages_from_sample,
+    default_max_seq_length,
+    default_output_dir,
+    normalize_precision_threshold,
+    normalize_precision_top_k,
+    precision_at_k,
+)
 from blackbox_finetune_recall60.gpu import prepare_rtx3060
 from blackbox_finetune_recall60.inference import score_prediction
 
@@ -34,6 +45,13 @@ def _env_float(name: str, default: float) -> float:
         return float(os.environ.get(name, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 from llm_finetune.common import read_jsonl
@@ -102,6 +120,24 @@ def _params_are_finite(params) -> bool:
     return True
 
 
+def _sample_eval_rows(
+    rows: list[dict],
+    max_samples: int,
+    update: int,
+    method: str | None = None,
+) -> tuple[list[dict], str, int | None]:
+    if max_samples <= 0 or max_samples >= len(rows):
+        return rows, "all", None
+    method = (method or os.environ.get("EVAL_SAMPLE_METHOD", "fixed")).strip().lower()
+    if method == "random":
+        seed = 20260530 + int(update)
+        return random.Random(seed).sample(rows, max_samples), "random", seed
+    if method == "stride":
+        step = len(rows) / max_samples
+        return [rows[min(int(index * step), len(rows) - 1)] for index in range(max_samples)], "stride", None
+    return rows[:max_samples], "fixed", None
+
+
 
 def _evaluate_training_checkpoint(
     model,
@@ -115,17 +151,21 @@ def _evaluate_training_checkpoint(
     threshold: float,
     max_samples: int,
     max_seq_length: int,
+    precision_top_k: int,
+    precision_threshold: float,
 ) -> dict:
-    eval_rows = rows[:max_samples] if max_samples and max_samples > 0 else rows
+    eval_rows, sample_method, sample_seed = _sample_eval_rows(rows, max_samples, update)
     output_dir.mkdir(parents=True, exist_ok=True)
     was_training = model.training
     model.eval()
     tp = fp = tn = fn = positives = 0
+    scored_rows: list[dict] = []
     eval_total = len(eval_rows)
     eval_start = time.monotonic()
     print(
         f"evaluation start update={update}/{total_updates} "
-        f"progress={progress * 100:.2f}% samples={eval_total} threshold={threshold}",
+        f"progress={progress * 100:.2f}% samples={eval_total} "
+        f"sample_method={sample_method} sample_seed={sample_seed} threshold={threshold}",
         flush=True,
     )
     try:
@@ -135,6 +175,12 @@ def _evaluate_training_checkpoint(
             pred = score_prediction(model, tokenizer, prompt, max_seq_length, threshold)
             predicted_positive = pred["label"] == "positive"
             actual_positive = int(row["metadata"]["label"]) == 1
+            scored_rows.append(
+                {
+                    "actual_label": 1 if actual_positive else 0,
+                    "positive_probability": pred["positive_probability"],
+                }
+            )
             if actual_positive:
                 positives += 1
             if predicted_positive and actual_positive:
@@ -164,12 +210,20 @@ def _evaluate_training_checkpoint(
             model.train()
     positive_recall = tp / positives if positives else 0.0
     precision = tp / (tp + fp) if tp + fp else 0.0
+    precision_top_k = normalize_precision_top_k(precision_top_k)
+    precision_threshold = normalize_precision_threshold(precision_threshold)
+    precision_values = precision_at_k(scored_rows, sorted({5, 10, 20, precision_top_k}))
+    target_key = f"precision@{precision_top_k}"
     result = {
         "update": update,
         "total_updates": total_updates,
+        "trigger": "checkpoint",
         "progress": progress,
         "trained_epochs": trained_epochs,
         "samples": len(eval_rows),
+        "source_samples": len(rows),
+        "sample_method": sample_method,
+        "sample_seed": sample_seed,
         "positive_samples": positives,
         "tp": tp,
         "fp": fp,
@@ -177,13 +231,25 @@ def _evaluate_training_checkpoint(
         "fn": fn,
         "positive_recall": positive_recall,
         "precision": precision,
+        **precision_values,
         "threshold": threshold,
+        "precision_top_k": precision_top_k,
+        "precision_threshold": precision_threshold,
+        "passed": precision_values[target_key] >= precision_threshold,
         "max_seq_length": max_seq_length,
     }
     output_path = output_dir / f"eval-update-{update:06d}-progress-{int(round(progress * 1000)):04d}.json"
     with output_path.open("w", encoding="utf-8") as file:
         json.dump(result, file, ensure_ascii=False, indent=2)
-    print(f"evaluation saved: {output_path} positive_recall={positive_recall:.4f} precision={precision:.4f} samples={len(eval_rows)}", flush=True)
+    print(
+        f"evaluation saved: {output_path} positive_recall={positive_recall:.4f} "
+        f"precision={precision:.4f} precision@5={precision_values['precision@5']:.4f} "
+        f"precision@10={precision_values['precision@10']:.4f} "
+        f"precision@20={precision_values['precision@20']:.4f} "
+        f"{target_key}={precision_values[target_key]:.4f} target={precision_threshold:.4f} "
+        f"passed={result['passed']} samples={len(eval_rows)}",
+        flush=True,
+    )
     return result
 def _checkpoint_update(checkpoint_dir: Path | None) -> int:
     if checkpoint_dir is None:
@@ -282,6 +348,9 @@ def train_recall60_lora(
     evaluation_threshold: float,
     evaluation_max_samples: int,
     evaluation_output_dir: Path | None,
+    evaluation_precision_top_k: int,
+    evaluation_precision_threshold: float,
+    on_the_fly_tokenize: bool,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -336,9 +405,24 @@ def train_recall60_lora(
     model.train()
 
     max_seq_length = max(64, max_seq_length)
-    tokenized = _load_or_build_tokenized(tokenizer, rows, data_dir, train_path, base_model, max_seq_length, rebuild_token_cache)
+    if on_the_fly_tokenize:
+        train_items = rows
+        print(
+            f"on-the-fly tokenization enabled; skipping tokenized train cache to reduce RAM rows={len(rows)}",
+            flush=True,
+        )
+    else:
+        train_items = _load_or_build_tokenized(
+            tokenizer,
+            rows,
+            data_dir,
+            train_path,
+            base_model,
+            max_seq_length,
+            rebuild_token_cache,
+        )
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=max(0.0, float(weight_decay)))
-    total_updates = max(1, math.ceil((len(tokenized) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
+    total_updates = max(1, math.ceil((len(train_items) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
     start_update = min(_checkpoint_update(resume_adapter_dir), total_updates)
     start_micro_step = start_update * max(1, gradient_accumulation_steps)
@@ -354,10 +438,13 @@ def train_recall60_lora(
     torch.cuda.manual_seed_all(train_seed)
     rng = random.Random(train_seed)
     print(
-        f"manual RTX3060 LoRA train rows={len(tokenized)} valid={len(valid_rows)} "
+        f"manual RTX3060 LoRA train rows={len(train_items)} valid={len(valid_rows)} "
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
         f"train_seed={train_seed} lr={learning_rate} weight_decay={weight_decay} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
-        f"max_seq_length={max_seq_length} eval_every={evaluation_interval_fraction} eval_threshold={evaluation_threshold} eval_max_samples={evaluation_max_samples}",
+        f"max_seq_length={max_seq_length} on_the_fly_tokenize={on_the_fly_tokenize} "
+        f"eval_every={evaluation_interval_fraction} eval_threshold={evaluation_threshold} "
+        f"eval_precision_top_k={evaluation_precision_top_k} "
+        f"eval_precision_threshold={evaluation_precision_threshold} eval_max_samples={evaluation_max_samples}",
         flush=True,
     )
     if start_update >= total_updates:
@@ -375,9 +462,11 @@ def train_recall60_lora(
     for micro_step in range(start_micro_step, total_micro_steps):
         update = (micro_step + 1) // max(1, gradient_accumulation_steps)
         try:
-            batch = [tokenized[(micro_step * batch_size + offset) % len(tokenized)] for offset in range(batch_size)]
-            if micro_step % len(tokenized) == 0:
-                rng.shuffle(tokenized)
+            batch = [train_items[(micro_step * batch_size + offset) % len(train_items)] for offset in range(batch_size)]
+            if micro_step % len(train_items) == 0:
+                rng.shuffle(train_items)
+            if on_the_fly_tokenize:
+                batch = [_tokenize_row(tokenizer, row, max_seq_length) for row in batch]
             tensors = _collate(tokenizer, batch, device)
             output = model(**tensors)
             raw_loss = output.loss
@@ -497,6 +586,8 @@ def train_recall60_lora(
                     threshold=evaluation_threshold,
                     max_samples=evaluation_max_samples,
                     max_seq_length=active_max_seq_length if "active_max_seq_length" in locals() else max_seq_length,
+                    precision_top_k=evaluation_precision_top_k,
+                    precision_threshold=evaluation_precision_threshold,
                 )
                 next_evaluation_progress += evaluation_interval_fraction
             if checkpoint_every > 0 and update % checkpoint_every == 0:
@@ -531,6 +622,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-every", type=int, default=default_checkpoint_every(), help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
     parser.add_argument("--eval-every-epoch-fraction", type=float, default=_env_float("EVAL_EVERY_EPOCH_FRACTION", 0.1), help="Run in-training evaluation at this fraction of total requested epochs; 0 disables.")
     parser.add_argument("--eval-threshold", type=float, default=_env_float("EVAL_THRESHOLD", 0.50), help="Threshold used by in-training evaluation.")
+    parser.add_argument("--eval-precision-top-k", type=int, default=_env_int("EVAL_PRECISION_TOP_K", 10), help="K used by the in-training precision@K gate.")
+    parser.add_argument("--eval-precision-threshold", type=float, default=_env_float("EVAL_PRECISION_THRESHOLD", 0.40), help="Required precision@K value for an evaluation checkpoint to pass.")
     parser.add_argument("--eval-max-samples", type=int, default=_env_int("EVAL_MAX_SAMPLES", 0), help="Max test samples for in-training evaluation; 0 means all.")
     parser.add_argument("--eval-output-dir", type=Path, default=None, help="Directory for in-training evaluation JSON files; default is output-dir/evaluations.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
@@ -541,6 +634,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-learning-rate", type=float, default=1e-6, help="Smallest LR allowed by automatic non-finite backoff.")
     parser.add_argument("--oom-patience", type=int, default=20, help="Abort after this many consecutive CUDA OOM batches.")
     parser.add_argument("--rebuild-token-cache", action="store_true", help="Re-tokenize train.jsonl even when a tokenized cache exists.")
+    parser.add_argument("--on-the-fly-tokenize", action="store_true", default=_env_bool("ON_THE_FLY_TOKENIZE", False), help="Tokenize each training row when it is used instead of loading or building the token cache.")
     parser.add_argument("--no-auto-resume", action="store_true", help="Do not automatically resume from the latest output-dir checkpoint.")
     parser.add_argument("--no-4bit", action="store_true", help="Accepted for script compatibility; recall60 Windows training uses fp16 LoRA on RTX3060.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
@@ -579,6 +673,9 @@ def main(argv: Iterable[str] | None = None) -> None:
         evaluation_threshold=args.eval_threshold,
         evaluation_max_samples=args.eval_max_samples,
         evaluation_output_dir=args.eval_output_dir,
+        evaluation_precision_top_k=args.eval_precision_top_k,
+        evaluation_precision_threshold=args.eval_precision_threshold,
+        on_the_fly_tokenize=args.on_the_fly_tokenize,
     )
 
 

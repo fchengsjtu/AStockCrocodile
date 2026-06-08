@@ -15,6 +15,36 @@ dataset_ready() {
   [[ -f "$1/train.jsonl" && -f "$1/test.jsonl" ]]
 }
 
+recall_target_value() {
+  python - "$1" <<'PY'
+import sys
+try:
+    value = float(sys.argv[1])
+except Exception:
+    value = 0.60
+if value > 1:
+    value /= 100.0
+value = min(max(value, 0.0), 1.0)
+print(f"{value:.2f}")
+PY
+}
+
+recall_target_tag() {
+  python - "$1" <<'PY'
+import sys
+value = float(sys.argv[1])
+print(f"recall{round(value * 100):02d}")
+PY
+}
+
+model_label_value() {
+  recall_target_value "$1"
+}
+
+model_tag() {
+  recall_target_tag "$1"
+}
+
 run_dataset_build_if_needed() {
   local dir="$1"
   local label="$2"
@@ -25,6 +55,11 @@ run_dataset_build_if_needed() {
     return 0
   fi
   "$@"
+}
+
+train_supports_arg() {
+  local arg="$1"
+  [[ "$TRAIN_HELP" == *"$arg"* ]]
 }
 
 MODE="${1:-smoke}"
@@ -42,39 +77,56 @@ BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
 CUDA_DEVICE="${CUDA_DEVICE:-0}"
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export HF_LOCAL_FILES_ONLY="${HF_LOCAL_FILES_ONLY:-1}"
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+export TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-0}"
 python -m blackbox_finetune_recall60.gpu --cuda-device "$CUDA_DEVICE"
 if [[ "$MODE" == "diagnose" ]]; then
   exit 0
 fi
-MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-0.60}"
-TRAIN_SEED="${TRAIN_SEED:-20260560}"
+MODEL_LABEL_VALUE="$(model_label_value "${MODEL_LABEL_VALUE:-${RECALL_TARGET:-${MIN_POSITIVE_RECALL:-0.60}}}")"
+MODEL_TAG="$(model_tag "$MODEL_LABEL_VALUE")"
+# Deprecated compatibility only: these keep older default paths and scripts
+# working. They are not validation or training objectives.
+RECALL_TARGET="${RECALL_TARGET:-$MODEL_LABEL_VALUE}"
+RECALL_TAG="${RECALL_TAG:-$MODEL_TAG}"
+MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-$MODEL_LABEL_VALUE}"
+PRECISION_TOP_K="${PRECISION_TOP_K:-20}"
+PRECISION_THRESHOLD="${PRECISION_THRESHOLD:-${MIN_PRECISION_AT_20:-${PRECISION_AT_20_TARGET:-0.30}}}"
+TRAIN_SEED="${TRAIN_SEED:-$((20260500 + ${MODEL_TAG#recall}))}"
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
 LEARNING_RATE="${LEARNING_RATE:-5e-6}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-0.5}"
 LORA_RANK="${LORA_RANK:-16}"
 LORA_DROPOUT="${LORA_DROPOUT:-0.05}"
+USE_4BIT="${USE_4BIT:-1}"
+ON_THE_FLY_TOKENIZE="${ON_THE_FLY_TOKENIZE:-1}"
 OOM_PATIENCE="${OOM_PATIENCE:-20}"
 NONFINITE_SKIP_LIMIT="${NONFINITE_SKIP_LIMIT:-100}"
 NONFINITE_BACKOFF_EVERY="${NONFINITE_BACKOFF_EVERY:-10}"
 LR_BACKOFF_FACTOR="${LR_BACKOFF_FACTOR:-0.5}"
 MIN_LEARNING_RATE="${MIN_LEARNING_RATE:-1e-6}"
 RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
+INITIAL_ADAPTER_DIR="${INITIAL_ADAPTER_DIR:-}"
+if [[ -n "$INITIAL_ADAPTER_DIR" && "$INITIAL_ADAPTER_DIR" == *\\* ]] && command -v wslpath >/dev/null 2>&1; then
+  INITIAL_ADAPTER_DIR="$(wslpath -u "$INITIAL_ADAPTER_DIR")"
+fi
 SAMPLE_MODE="${SAMPLE_MODE:-long}"
-DEFAULT_DATA_DIR="blackbox_finetune_recall60/data_no_partial_week_$SAMPLE_MODE"
-DEFAULT_VALIDATION_DATA_DIR="blackbox_finetune_recall60/data_evaluation_no_partial_week_$SAMPLE_MODE"
+NEGATIVE_RATIO="${NEGATIVE_RATIO:-9.0}"
+NEGATIVE_TAG="$(python - "$NEGATIVE_RATIO" <<'PY'
+import sys
+value = float(sys.argv[1])
+text = ("%g" % value).replace(".", "_")
+print(f"neg{text}")
+PY
+)"
+DEFAULT_DATA_DIR="blackbox_finetune_recall60/data_no_partial_week_${MODEL_TAG}_${SAMPLE_MODE}_${NEGATIVE_TAG}"
+DEFAULT_VALIDATION_DATA_DIR="blackbox_finetune_recall60/data_evaluation_no_partial_week_${MODEL_TAG}_${SAMPLE_MODE}_${NEGATIVE_TAG}"
 DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"
 VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-$DEFAULT_VALIDATION_DATA_DIR}"
-if [[ "$SAMPLE_MODE" == "short" ]]; then
-  DEFAULT_OUTPUT_DIR="blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-short-lora"
-elif [[ "$SAMPLE_MODE" == "xlong" ]]; then
-  DEFAULT_OUTPUT_DIR="blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-xlong-lora"
-elif [[ "$SAMPLE_MODE" == "xxlong" ]]; then
-  DEFAULT_OUTPUT_DIR="blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-xxlong-lora"
-else
-  DEFAULT_OUTPUT_DIR="blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-long-lora"
-fi
+DEFAULT_OUTPUT_DIR="blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-${MODEL_TAG}-${SAMPLE_MODE}-lora"
 OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
-NEGATIVE_RATIO="${NEGATIVE_RATIO:-3.0}"
 if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_MAX_SEQ_LENGTH=1024
   DEFAULT_CHECKPOINT_EVERY=500
@@ -89,10 +141,31 @@ else
   DEFAULT_CHECKPOINT_EVERY=500
 fi
 CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-$DEFAULT_CHECKPOINT_EVERY}"
-EVAL_EVERY_EPOCH_FRACTION="${EVAL_EVERY_EPOCH_FRACTION:-0.1}"
 EVAL_THRESHOLD="${EVAL_THRESHOLD:-0.50}"
+EVAL_PRECISION_TOP_K="${EVAL_PRECISION_TOP_K:-$PRECISION_TOP_K}"
+EVAL_PRECISION_THRESHOLD="${EVAL_PRECISION_THRESHOLD:-${EVAL_MIN_PRECISION_AT_20:-$PRECISION_THRESHOLD}}"
 EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-0}"
-EVAL_OUTPUT_DIR="${EVAL_OUTPUT_DIR:-}"
+PRECISION_TAG="$(python - "$EVAL_PRECISION_TOP_K" "$EVAL_PRECISION_THRESHOLD" <<'PY'
+import sys
+k = max(1, int(float(sys.argv[1])))
+t = float(sys.argv[2])
+if t > 1:
+    t /= 100.0
+t = min(max(t, 0.0), 1.0)
+print(f"top{k}_precision{round(t * 100):03d}")
+PY
+)"
+FINAL_PRECISION_TAG="$(python - "$PRECISION_TOP_K" "$PRECISION_THRESHOLD" <<'PY'
+import sys
+k = max(1, int(float(sys.argv[1])))
+t = float(sys.argv[2])
+if t > 1:
+    t /= 100.0
+t = min(max(t, 0.0), 1.0)
+print(f"top{k}_precision{round(t * 100):03d}")
+PY
+)"
+EVAL_OUTPUT_DIR="${EVAL_OUTPUT_DIR:-$OUTPUT_DIR/evaluations/$PRECISION_TAG}"
 
 if [[ "$MODE" == "smoke" ]]; then
   DEFAULT_TRAIN_START="20200101"
@@ -122,7 +195,36 @@ else
   GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-8}"
 fi
 
-BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio "$NEGATIVE_RATIO" --sample-mode "$SAMPLE_MODE")
+cat <<EOF
+Project blackbox environment:
+  MODE=$MODE
+  MODEL_TAG=$MODEL_TAG
+  TRAINING_LOSS=causal_lm_cross_entropy
+  EVALUATION_GATE=precision@$EVAL_PRECISION_TOP_K >= $EVAL_PRECISION_THRESHOLD
+  SAMPLE_MODE=$SAMPLE_MODE
+  NEGATIVE_RATIO=$NEGATIVE_RATIO
+  NEGATIVE_TAG=$NEGATIVE_TAG
+  TRAIN_START=$TRAIN_START
+  TRAIN_END=$TRAIN_END
+  VALIDATION_START=$VALIDATION_START
+  VALIDATION_END=$VALIDATION_END
+  DATA_DIR=$DATA_DIR
+  VALIDATION_DATA_DIR=$VALIDATION_DATA_DIR
+  OUTPUT_DIR=$OUTPUT_DIR
+  MAX_SEQ_LENGTH=$MAX_SEQ_LENGTH
+  CHECKPOINT_EVERY=$CHECKPOINT_EVERY
+  LEARNING_RATE=$LEARNING_RATE
+  EVAL_THRESHOLD=$EVAL_THRESHOLD
+  RESUME_ADAPTER_DIR=${RESUME_ADAPTER_DIR:-<unset>}
+  INITIAL_ADAPTER_DIR=${INITIAL_ADAPTER_DIR:-<unset>}
+  USE_4BIT=$USE_4BIT
+  HF_LOCAL_FILES_ONLY=$HF_LOCAL_FILES_ONLY
+  HF_HUB_OFFLINE=$HF_HUB_OFFLINE
+  TRANSFORMERS_OFFLINE=$TRANSFORMERS_OFFLINE
+  TRUST_REMOTE_CODE=$TRUST_REMOTE_CODE
+EOF
+
+BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio "$NEGATIVE_POOL_RATIO" --sample-mode "$SAMPLE_MODE")
 VAL_ARGS=(--output-dir "$VALIDATION_DATA_DIR" --start-date "$VALIDATION_START" --end-date "$VALIDATION_END" --negative-ratio "$NEGATIVE_RATIO" --sample-mode "$SAMPLE_MODE")
 if [[ -n "$POS_LIMIT" ]]; then
   BUILD_ARGS+=(--positive-limit "$POS_LIMIT")
@@ -133,19 +235,51 @@ fi
 
 run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" python -m blackbox_finetune_recall60.build_dataset "${BUILD_ARGS[@]}"
 run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" python -m blackbox_finetune_recall60.build_validation_dataset "${VAL_ARGS[@]}"
-TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --weight-decay "$WEIGHT_DECAY" --max-grad-norm "$MAX_GRAD_NORM" --lora-rank "$LORA_RANK" --lora-dropout "$LORA_DROPOUT" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --nonfinite-skip-limit "$NONFINITE_SKIP_LIMIT" --nonfinite-backoff-every "$NONFINITE_BACKOFF_EVERY" --lr-backoff-factor "$LR_BACKOFF_FACTOR" --min-learning-rate "$MIN_LEARNING_RATE" --eval-every-epoch-fraction "$EVAL_EVERY_EPOCH_FRACTION" --eval-threshold "$EVAL_THRESHOLD" --eval-max-samples "$EVAL_MAX_SAMPLES" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
+TRAIN_HELP="$(python -m blackbox_finetune_recall60.train --help 2>&1 || true)"
+TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --weight-decay "$WEIGHT_DECAY" --max-grad-norm "$MAX_GRAD_NORM" --lora-rank "$LORA_RANK" --lora-dropout "$LORA_DROPOUT" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --nonfinite-skip-limit "$NONFINITE_SKIP_LIMIT" --nonfinite-backoff-every "$NONFINITE_BACKOFF_EVERY" --lr-backoff-factor "$LR_BACKOFF_FACTOR" --min-learning-rate "$MIN_LEARNING_RATE" --eval-threshold "$EVAL_THRESHOLD" --eval-max-samples "$EVAL_MAX_SAMPLES" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
+if train_supports_arg "--eval-precision-top-k"; then
+  TRAIN_ARGS+=(--eval-precision-top-k "$EVAL_PRECISION_TOP_K")
+else
+  echo "Current train.py does not support --eval-precision-top-k; skipping it."
+fi
+if train_supports_arg "--eval-precision-threshold"; then
+  TRAIN_ARGS+=(--eval-precision-threshold "$EVAL_PRECISION_THRESHOLD")
+else
+  echo "Current train.py does not support --eval-precision-threshold; skipping it."
+fi
 if [[ -n "$EVAL_OUTPUT_DIR" ]]; then
   TRAIN_ARGS+=(--eval-output-dir "$EVAL_OUTPUT_DIR")
 fi
 if [[ -n "$RESUME_ADAPTER_DIR" ]]; then
   TRAIN_ARGS+=(--resume-adapter-dir "$RESUME_ADAPTER_DIR")
 fi
+if [[ -n "$INITIAL_ADAPTER_DIR" ]]; then
+  if train_supports_arg "--initial-adapter-dir"; then
+    TRAIN_ARGS+=(--initial-adapter-dir "$INITIAL_ADAPTER_DIR")
+  else
+    echo "Current train.py does not support --initial-adapter-dir; skipping INITIAL_ADAPTER_DIR=$INITIAL_ADAPTER_DIR."
+  fi
+fi
+if ! env_flag "$USE_4BIT"; then
+  TRAIN_ARGS+=(--no-4bit)
+fi
 if env_flag "${REBUILD_TOKEN_CACHE:-}"; then
   TRAIN_ARGS+=(--rebuild-token-cache)
+fi
+if env_flag "$ON_THE_FLY_TOKENIZE"; then
+  if train_supports_arg "--on-the-fly-tokenize"; then
+    TRAIN_ARGS+=(--on-the-fly-tokenize)
+  else
+    echo "Current train.py does not support --on-the-fly-tokenize; skipping it."
+  fi
 fi
 if env_flag "${NO_AUTO_RESUME:-}"; then
   TRAIN_ARGS+=(--no-auto-resume)
 fi
 python -m blackbox_finetune_recall60.train "${TRAIN_ARGS[@]}"
-python -m blackbox_finetune_recall60.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --min-positive-recall "$MIN_POSITIVE_RECALL" --cuda-device "$CUDA_DEVICE" --max-seq-length "$MAX_SEQ_LENGTH"
+if env_flag "${RUN_FINAL_EVAL:-}"; then
+  python -m blackbox_finetune_recall60.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --precision-top-k "$PRECISION_TOP_K" --precision-threshold "$PRECISION_THRESHOLD" --output-dir "$OUTPUT_DIR/evaluations/$FINAL_PRECISION_TAG" --cuda-device "$CUDA_DEVICE" --max-seq-length "$MAX_SEQ_LENGTH"
+else
+  echo "Skipping final evaluation by default. Set RUN_FINAL_EVAL=1 to evaluate after training."
+fi
 python -m unittest tests.test_blackbox_finetune_recall60 -v

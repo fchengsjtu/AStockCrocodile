@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# Source this file before running blackbox recall training in WSL/Linux.
+#
+# Usage:
+#   source ./set_blackbox_wsl_env.sh 80 xlong
+#   bash blackbox_finetune_recall60/scripts/one_click_deploy.sh full
+#
+# Hybrid:
+#   BLACKBOX_RECALL_DIR=blackbox_finetune_hybrid source ./set_blackbox_wsl_env.sh 60 xlong
+#   bash blackbox_finetune_hybrid/scripts/one_click_deploy.sh full
+#
+# Arguments:
+#   $1: model label value, for example 60, 0.60, or 80. Default: 60
+#   $2: sample mode: short, long, xlong, or xxlong. Default: xlong
+
+set -euo pipefail
+
+MODEL_LABEL_INPUT="${1:-${MODEL_LABEL_VALUE:-${RECALL_TARGET:-${MIN_POSITIVE_RECALL:-60}}}}"
+SAMPLE_MODE="${2:-${SAMPLE_MODE:-xlong}}"
+BLACKBOX_RECALL_DIR="${BLACKBOX_RECALL_DIR:-blackbox_finetune_recall60}"
+
+MODEL_LABEL_VALUE="$(python3 - "$MODEL_LABEL_INPUT" <<'PY'
+import sys
+try:
+    value = float(sys.argv[1])
+except Exception:
+    value = 0.60
+if value > 1:
+    value /= 100.0
+value = min(max(value, 0.0), 1.0)
+print(f"{value:.2f}")
+PY
+)"
+DEFAULT_MODEL_TAG="$(python3 - "$MODEL_LABEL_VALUE" <<'PY'
+import sys
+value = float(sys.argv[1])
+print(f"recall{round(value * 100):02d}")
+PY
+)"
+if [[ "$BLACKBOX_RECALL_DIR" == "blackbox_finetune_hybrid" ]]; then
+  MODEL_TAG="${MODEL_TAG:-hybrid_ce_rank}"
+else
+  MODEL_TAG="${MODEL_TAG:-$DEFAULT_MODEL_TAG}"
+fi
+
+case "$SAMPLE_MODE" in
+  short)
+    DEFAULT_MAX_SEQ_LENGTH=1024
+    ;;
+  long)
+    DEFAULT_MAX_SEQ_LENGTH=2048
+    ;;
+  xlong)
+    DEFAULT_MAX_SEQ_LENGTH=3072
+    ;;
+  xxlong)
+    DEFAULT_MAX_SEQ_LENGTH=4096
+    ;;
+  *)
+    echo "Unsupported SAMPLE_MODE: $SAMPLE_MODE" >&2
+    return 2 2>/dev/null || exit 2
+    ;;
+esac
+
+export MODEL_LABEL_VALUE
+export MODEL_TAG
+# Deprecated compatibility only: these keep older default paths and scripts
+# working. They are not validation or training objectives.
+export RECALL_TARGET="${RECALL_TARGET:-$MODEL_LABEL_VALUE}"
+export MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-$MODEL_LABEL_VALUE}"
+export RECALL_TAG="${RECALL_TAG:-$MODEL_TAG}"
+export SAMPLE_MODE
+export BLACKBOX_RECALL_DIR
+export PYTHON_BIN="${PYTHON_BIN:-python3}"
+export VENV_DIR="${VENV_DIR:-$HOME/.venvs/astock-blackbox-finetune-${MODEL_TAG}}"
+export BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
+export HF_LOCAL_FILES_ONLY="${HF_LOCAL_FILES_ONLY:-1}"
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+export TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-0}"
+export CUDA_DEVICE="${CUDA_DEVICE:-0}"
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$CUDA_DEVICE}"
+export USE_4BIT="${USE_4BIT:-1}"
+export ON_THE_FLY_TOKENIZE="${ON_THE_FLY_TOKENIZE:-1}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
+export INITIAL_ADAPTER_DIR="${INITIAL_ADAPTER_DIR:-}"
+if [[ -n "$INITIAL_ADAPTER_DIR" && "$INITIAL_ADAPTER_DIR" == *\\* ]] && command -v wslpath >/dev/null 2>&1; then
+  export INITIAL_ADAPTER_DIR="$(wslpath -u "$INITIAL_ADAPTER_DIR")"
+fi
+
+export TRAIN_START_DATE="${TRAIN_START_DATE:-20230101}"
+export TRAIN_END_DATE="${TRAIN_END_DATE:-20241231}"
+export VALIDATION_START_DATE="${VALIDATION_START_DATE:-20260101}"
+export VALIDATION_END_DATE="${VALIDATION_END_DATE:-20260530}"
+
+# MAX_SEQ_LENGTH should follow SAMPLE_MODE by default. This avoids carrying a
+# stale length such as 2048 from a previous long run into xlong/xxlong runs.
+# Use MAX_SEQ_LENGTH_OVERRIDE when an intentional manual override is needed.
+export MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH_OVERRIDE:-$DEFAULT_MAX_SEQ_LENGTH}"
+export EPOCHS="${EPOCHS:-1.0}"
+export GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-16}"
+export LEARNING_RATE="${LEARNING_RATE:-5e-6}"
+export WEIGHT_DECAY="${WEIGHT_DECAY:-0.02}"
+export MAX_GRAD_NORM="${MAX_GRAD_NORM:-1.0}"
+export LORA_RANK="${LORA_RANK:-8}"
+export LORA_DROPOUT="${LORA_DROPOUT:-0.2}"
+export NEGATIVE_RATIO="${NEGATIVE_RATIO:-9.0}"
+export NEGATIVE_POOL_RATIO="${NEGATIVE_POOL_RATIO:-100.0}"
+export SAMPLE_BOTTOM_BAND_RATIO="${SAMPLE_BOTTOM_BAND_RATIO:-1.0}"
+
+export CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-100}"
+export EVAL_THRESHOLD="${EVAL_THRESHOLD:-0.45}"
+export PRECISION_TOP_K="${PRECISION_TOP_K:-10}"
+export PRECISION_THRESHOLD="${PRECISION_THRESHOLD:-${MIN_PRECISION_AT_20:-${PRECISION_AT_20_TARGET:-0.4}}}"
+export MIN_PRECISION_AT_20="$PRECISION_THRESHOLD"
+export EVAL_PRECISION_TOP_K="${EVAL_PRECISION_TOP_K:-$PRECISION_TOP_K}"
+export EVAL_PRECISION_THRESHOLD="${EVAL_PRECISION_THRESHOLD:-${EVAL_MIN_PRECISION_AT_20:-$PRECISION_THRESHOLD}}"
+export EVAL_SAMPLE_METHOD="${EVAL_SAMPLE_METHOD:-random}"
+export EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-1000}"
+
+export CE_LOSS_WEIGHT="${CE_LOSS_WEIGHT:-1.0}"
+export RANK_LOSS_WEIGHT="${RANK_LOSS_WEIGHT:-0.5}"
+export RANK_MARGIN="${RANK_MARGIN:-0.2}"
+export RANK_NEGATIVES_PER_POSITIVE="${RANK_NEGATIVES_PER_POSITIVE:-3}"
+
+export OOM_PATIENCE="${OOM_PATIENCE:-20}"
+export NONFINITE_SKIP_LIMIT="${NONFINITE_SKIP_LIMIT:-100}"
+export NONFINITE_BACKOFF_EVERY="${NONFINITE_BACKOFF_EVERY:-10}"
+export LR_BACKOFF_FACTOR="${LR_BACKOFF_FACTOR:-0.5}"
+export MIN_LEARNING_RATE="${MIN_LEARNING_RATE:-1e-6}"
+
+TRAINING_LOSS_LABEL="$(if [[ "$BLACKBOX_RECALL_DIR" == "blackbox_finetune_hybrid" ]]; then echo "CE_LOSS_WEIGHT*classification_ce + RANK_LOSS_WEIGHT*pairwise_margin_ranking"; else echo "causal_lm_cross_entropy"; fi)"
+printf '%s\n' \
+  "Loaded WSL/Linux blackbox defaults:" \
+  "  [project]" \
+  "  BLACKBOX_RECALL_DIR=$BLACKBOX_RECALL_DIR" \
+  "  MODEL_LABEL_VALUE=$MODEL_LABEL_VALUE" \
+  "  MODEL_TAG=$MODEL_TAG" \
+  "  SAMPLE_MODE=$SAMPLE_MODE" \
+  "  TRAINING_LOSS=$TRAINING_LOSS_LABEL" \
+  "  [model/runtime]" \
+  "  BASE_MODEL=$BASE_MODEL" \
+  "  VENV_DIR=$VENV_DIR" \
+  "  PYTHON_BIN=$PYTHON_BIN" \
+  "  CUDA_DEVICE=$CUDA_DEVICE" \
+  "  CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES" \
+  "  USE_4BIT=$USE_4BIT" \
+  "  ON_THE_FLY_TOKENIZE=$ON_THE_FLY_TOKENIZE" \
+  "  PYTORCH_CUDA_ALLOC_CONF=$PYTORCH_CUDA_ALLOC_CONF" \
+  "  HF_LOCAL_FILES_ONLY=$HF_LOCAL_FILES_ONLY" \
+  "  HF_HUB_OFFLINE=$HF_HUB_OFFLINE" \
+  "  TRANSFORMERS_OFFLINE=$TRANSFORMERS_OFFLINE" \
+  "  TRUST_REMOTE_CODE=$TRUST_REMOTE_CODE" \
+  "  RESUME_ADAPTER_DIR=${RESUME_ADAPTER_DIR:-<unset>}" \
+  "  INITIAL_ADAPTER_DIR=${INITIAL_ADAPTER_DIR:-<unset>}" \
+  "  [data]" \
+  "  TRAIN_START_DATE=$TRAIN_START_DATE" \
+  "  TRAIN_END_DATE=$TRAIN_END_DATE" \
+  "  VALIDATION_START_DATE=$VALIDATION_START_DATE" \
+  "  VALIDATION_END_DATE=$VALIDATION_END_DATE" \
+  "  NEGATIVE_RATIO=$NEGATIVE_RATIO" \
+  "  NEGATIVE_POOL_RATIO=$NEGATIVE_POOL_RATIO" \
+  "  SAMPLE_BOTTOM_BAND_RATIO=$SAMPLE_BOTTOM_BAND_RATIO" \
+  "  REBUILD_DATASET=${REBUILD_DATASET:-<unset>}" \
+  "  REBUILD_VALIDATION_DATASET=${REBUILD_VALIDATION_DATASET:-<unset>}" \
+  "  [training]" \
+  "  MAX_SEQ_LENGTH=$MAX_SEQ_LENGTH" \
+  "  MAX_SEQ_LENGTH_OVERRIDE=${MAX_SEQ_LENGTH_OVERRIDE:-<unset>}" \
+  "  EPOCHS=$EPOCHS" \
+  "  GRADIENT_ACCUMULATION_STEPS=$GRADIENT_ACCUMULATION_STEPS" \
+  "  LEARNING_RATE=$LEARNING_RATE" \
+  "  WEIGHT_DECAY=$WEIGHT_DECAY" \
+  "  MAX_GRAD_NORM=$MAX_GRAD_NORM" \
+  "  LORA_RANK=$LORA_RANK" \
+  "  LORA_DROPOUT=$LORA_DROPOUT" \
+  "  CHECKPOINT_EVERY=$CHECKPOINT_EVERY" \
+  "  NO_AUTO_RESUME=${NO_AUTO_RESUME:-<unset>}" \
+  "  [evaluation]" \
+  "  EVALUATION_GATE=precision@$PRECISION_TOP_K >= $PRECISION_THRESHOLD" \
+  "  PRECISION_TOP_K=$PRECISION_TOP_K" \
+  "  PRECISION_THRESHOLD=$PRECISION_THRESHOLD" \
+  "  EVAL_PRECISION_TOP_K=$EVAL_PRECISION_TOP_K" \
+  "  EVAL_PRECISION_THRESHOLD=$EVAL_PRECISION_THRESHOLD" \
+  "  EVAL_THRESHOLD=$EVAL_THRESHOLD" \
+   "  EVAL_SAMPLE_METHOD=$EVAL_SAMPLE_METHOD" \
+  "  EVAL_MAX_SAMPLES=$EVAL_MAX_SAMPLES" \
+  "  RUN_FINAL_EVAL=${RUN_FINAL_EVAL:-<unset>}" \
+  "  [hybrid-loss]" \
+  "  CE_LOSS_WEIGHT=$CE_LOSS_WEIGHT" \
+  "  RANK_LOSS_WEIGHT=$RANK_LOSS_WEIGHT" \
+  "  RANK_MARGIN=$RANK_MARGIN" \
+  "  RANK_NEGATIVES_PER_POSITIVE=$RANK_NEGATIVES_PER_POSITIVE" \
+  "  [stability]" \
+  "  OOM_PATIENCE=$OOM_PATIENCE" \
+  "  NONFINITE_SKIP_LIMIT=$NONFINITE_SKIP_LIMIT" \
+  "  NONFINITE_BACKOFF_EVERY=$NONFINITE_BACKOFF_EVERY" \
+  "  LR_BACKOFF_FACTOR=$LR_BACKOFF_FACTOR" \
+  "  MIN_LEARNING_RATE=$MIN_LEARNING_RATE" \
+  "" \
+  "Run:" \
+  "  bash $BLACKBOX_RECALL_DIR/scripts/one_click_deploy.sh full"
