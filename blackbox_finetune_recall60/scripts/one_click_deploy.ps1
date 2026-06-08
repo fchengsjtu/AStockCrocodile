@@ -35,6 +35,24 @@ function Test-EnvFlag {
   return @("1", "true", "TRUE", "yes", "YES", "y", "Y") -contains $Value
 }
 
+function Convert-RecallTarget {
+  param([string]$Value)
+  if (!$Value) { return 0.60 }
+  $Number = 0.60
+  if ([double]::TryParse($Value, [ref]$Number)) {
+    if ($Number -gt 1) { $Number = $Number / 100.0 }
+    if ($Number -lt 0) { return 0.0 }
+    if ($Number -gt 1) { return 1.0 }
+    return $Number
+  }
+  return 0.60
+}
+
+function Convert-RecallTargetTag {
+  param([double]$Value)
+  return ("recall{0:00}" -f [int][Math]::Round($Value * 100))
+}
+
 function Test-DatasetReady {
   param([string]$Dir)
   return (Test-Path (Join-Path $Dir "train.jsonl")) -and (Test-Path (Join-Path $Dir "test.jsonl"))
@@ -63,17 +81,25 @@ function Write-EnvironmentSnapshot {
     "PYTHON_BIN",
     "VENV_DIR",
     "BASE_MODEL",
+    "RECALL_TARGET",
+    "MIN_POSITIVE_RECALL",
+    "PRECISION_TOP_K",
+    "PRECISION_THRESHOLD",
+    "MIN_PRECISION_AT_20",
+    "PRECISION_AT_20_TARGET",
     "DATA_DIR",
     "VALIDATION_DATA_DIR",
     "OUTPUT_DIR",
     "CUDA_DEVICE",
     "CUDA_VISIBLE_DEVICES",
+    "USE_4BIT",
+    "NO_4BIT",
     "PYTORCH_CUDA_ALLOC_CONF",
     "TORCH_CUDA_INDEX",
     "SAMPLE_MODE",
-    "MAX_SEQ_LENGTH",
-    "NEGATIVE_RATIO",
-    "SAMPLE_BOTTOM_BAND_RATIO",
+     "MAX_SEQ_LENGTH",
+     "NEGATIVE_RATIO",
+     "SAMPLE_BOTTOM_BAND_RATIO",
     "TRAIN_START_DATE",
     "TRAIN_END_DATE",
     "VALIDATION_START_DATE",
@@ -86,13 +112,21 @@ function Write-EnvironmentSnapshot {
     "REBUILD_DATASET",
     "REBUILD_VALIDATION_DATASET",
     "REBUILD_TOKEN_CACHE",
+    "ON_THE_FLY_TOKENIZE",
     "NO_AUTO_RESUME",
     "RESUME_ADAPTER_DIR",
     "CHECKPOINT_EVERY",
-    "EVAL_EVERY_EPOCH_FRACTION",
     "EVAL_THRESHOLD",
+    "EVAL_PRECISION_TOP_K",
+    "EVAL_PRECISION_THRESHOLD",
+    "EVAL_MIN_PRECISION_AT_20",
     "EVAL_MAX_SAMPLES",
     "EVAL_OUTPUT_DIR",
+    "HARD_NEGATIVE_MINING",
+    "HARD_NEGATIVE_KEEP_RATIO",
+     "HARD_NEGATIVE_REFRESH_RATIO",
+     "HARD_NEGATIVE_SCORE_MAX_SAMPLES",
+     "HARD_NEGATIVE_ACTIVE_RATIO",
     "EPOCHS",
     "GRADIENT_ACCUMULATION_STEPS",
     "LEARNING_RATE",
@@ -152,13 +186,18 @@ if ($Mode -eq "diagnose") {
   exit 0
 }
 
-$MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.60" }
-$TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { "20260560" }
+$RecallTarget = Convert-RecallTarget $(if ($env:RECALL_TARGET) { $env:RECALL_TARGET } elseif ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { "0.60" })
+$RecallTag = Convert-RecallTargetTag $RecallTarget
+$MinRecall = if ($env:MIN_POSITIVE_RECALL) { $env:MIN_POSITIVE_RECALL } else { $RecallTarget.ToString("0.00", [Globalization.CultureInfo]::InvariantCulture) }
+$PrecisionTopK = if ($env:PRECISION_TOP_K) { $env:PRECISION_TOP_K } else { "20" }
+$PrecisionThreshold = if ($env:PRECISION_THRESHOLD) { $env:PRECISION_THRESHOLD } elseif ($env:MIN_PRECISION_AT_20) { $env:MIN_PRECISION_AT_20 } elseif ($env:PRECISION_AT_20_TARGET) { $env:PRECISION_AT_20_TARGET } else { "0.30" }
+$TrainSeed = if ($env:TRAIN_SEED) { $env:TRAIN_SEED } else { [string](20260500 + [int][Math]::Round($RecallTarget * 100)) }
 $WeightDecay = if ($env:WEIGHT_DECAY) { $env:WEIGHT_DECAY } else { "0.0" }
 $LearningRate = if ($env:LEARNING_RATE) { $env:LEARNING_RATE } else { "5e-6" }
 $MaxGradNorm = if ($env:MAX_GRAD_NORM) { $env:MAX_GRAD_NORM } else { "0.5" }
 $LoraRank = if ($env:LORA_RANK) { $env:LORA_RANK } else { "16" }
 $LoraDropout = if ($env:LORA_DROPOUT) { $env:LORA_DROPOUT } else { "0.05" }
+$Use4Bit = if ($env:USE_4BIT) { Test-EnvFlag $env:USE_4BIT } else { $false }
 $OomPatience = if ($env:OOM_PATIENCE) { $env:OOM_PATIENCE } else { "20" }
 $NonfiniteSkipLimit = if ($env:NONFINITE_SKIP_LIMIT) { $env:NONFINITE_SKIP_LIMIT } else { "100" }
 $NonfiniteBackoffEvery = if ($env:NONFINITE_BACKOFF_EVERY) { $env:NONFINITE_BACKOFF_EVERY } else { "10" }
@@ -166,20 +205,34 @@ $LrBackoffFactor = if ($env:LR_BACKOFF_FACTOR) { $env:LR_BACKOFF_FACTOR } else {
 $MinLearningRate = if ($env:MIN_LEARNING_RATE) { $env:MIN_LEARNING_RATE } else { "1e-6" }
 $ResumeAdapterDir = $env:RESUME_ADAPTER_DIR
 $SampleMode = if ($env:SAMPLE_MODE) { $env:SAMPLE_MODE } else { "long" }
-$DefaultDataDir = "blackbox_finetune_recall60/data_no_partial_week_$SampleMode"
-$DefaultValidationDir = "blackbox_finetune_recall60/data_evaluation_no_partial_week_$SampleMode"
+$DefaultDataDir = "blackbox_finetune_recall60/data_no_partial_week_${RecallTag}_$SampleMode"
+$DefaultValidationDir = "blackbox_finetune_recall60/data_evaluation_no_partial_week_${RecallTag}_$SampleMode"
 $DataDir = if ($env:DATA_DIR) { $env:DATA_DIR } else { $DefaultDataDir }
 $ValidationDir = if ($env:VALIDATION_DATA_DIR) { $env:VALIDATION_DATA_DIR } else { $DefaultValidationDir }
-$DefaultOutputDir = if ($SampleMode -eq "short") { "blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-short-lora" } elseif ($SampleMode -eq "xlong") { "blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-xlong-lora" } elseif ($SampleMode -eq "xxlong") { "blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-xxlong-lora" } else { "blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-long-lora" }
+$DefaultOutputDir = "blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-${RecallTag}-$SampleMode-lora"
 $OutputDir = if ($env:OUTPUT_DIR) { $env:OUTPUT_DIR } else { $DefaultOutputDir }
-$NegativeRatio = if ($env:NEGATIVE_RATIO) { $env:NEGATIVE_RATIO } else { "3.0" }
+$NegativeRatio = if ($env:NEGATIVE_RATIO) { $env:NEGATIVE_RATIO } else { "9.0" }
 $DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } elseif ($SampleMode -eq "xlong") { "3072" } elseif ($SampleMode -eq "xxlong") { "4096" } else { "2048" }
 $DefaultCheckpointEvery = "500"
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { $DefaultCheckpointEvery }
-$EvalEveryEpochFraction = if ($env:EVAL_EVERY_EPOCH_FRACTION) { $env:EVAL_EVERY_EPOCH_FRACTION } else { "0.1" }
-$EvalThreshold = if ($env:EVAL_THRESHOLD) { $env:EVAL_THRESHOLD } else { "0.50" }
+$EvalThreshold = if ($env:EVAL_THRESHOLD) { $env:EVAL_THRESHOLD } else { "0.48" }
+$EvalPrecisionTopK = if ($env:EVAL_PRECISION_TOP_K) { $env:EVAL_PRECISION_TOP_K } else { $PrecisionTopK }
+$EvalPrecisionThreshold = if ($env:EVAL_PRECISION_THRESHOLD) { $env:EVAL_PRECISION_THRESHOLD } elseif ($env:EVAL_MIN_PRECISION_AT_20) { $env:EVAL_MIN_PRECISION_AT_20 } else { $PrecisionThreshold }
 $EvalMaxSamples = if ($env:EVAL_MAX_SAMPLES) { $env:EVAL_MAX_SAMPLES } else { "0" }
-$EvalOutputDir = $env:EVAL_OUTPUT_DIR
+$EvalPrecisionNumber = [double]$EvalPrecisionThreshold
+if ($EvalPrecisionNumber -gt 1) { $EvalPrecisionNumber = $EvalPrecisionNumber / 100.0 }
+$EvalPrecisionNumber = [Math]::Min([Math]::Max($EvalPrecisionNumber, 0.0), 1.0)
+$PrecisionNumber = [double]$PrecisionThreshold
+if ($PrecisionNumber -gt 1) { $PrecisionNumber = $PrecisionNumber / 100.0 }
+$PrecisionNumber = [Math]::Min([Math]::Max($PrecisionNumber, 0.0), 1.0)
+$PrecisionTag = "top{0}_precision{1:000}" -f [int]$EvalPrecisionTopK, [int][Math]::Round($EvalPrecisionNumber * 100)
+$FinalPrecisionTag = "top{0}_precision{1:000}" -f [int]$PrecisionTopK, [int][Math]::Round($PrecisionNumber * 100)
+$EvalOutputDir = if ($env:EVAL_OUTPUT_DIR) { $env:EVAL_OUTPUT_DIR } else { "$OutputDir/evaluations/$PrecisionTag" }
+$HardNegativeMining = if ($env:HARD_NEGATIVE_MINING) { Test-EnvFlag $env:HARD_NEGATIVE_MINING } else { $false }
+$HardNegativeKeepRatio = if ($env:HARD_NEGATIVE_KEEP_RATIO) { $env:HARD_NEGATIVE_KEEP_RATIO } else { "0.20" }
+$HardNegativeRefreshRatio = if ($env:HARD_NEGATIVE_REFRESH_RATIO) { $env:HARD_NEGATIVE_REFRESH_RATIO } else { "0.80" }
+$HardNegativeScoreMaxSamples = if ($env:HARD_NEGATIVE_SCORE_MAX_SAMPLES) { $env:HARD_NEGATIVE_SCORE_MAX_SAMPLES } else { "0" }
+$HardNegativeActiveRatio = if ($env:HARD_NEGATIVE_ACTIVE_RATIO) { $env:HARD_NEGATIVE_ACTIVE_RATIO } else { $NegativeRatio }
 
 if ($Mode -eq "smoke") {
   $DefaultTrainStart = "20200101"
@@ -223,13 +276,18 @@ $TrainArgs = @(
   '--max-seq-length', $MaxSeqLength, '--epochs', $Epochs, '--batch-size', '1', '--gradient-accumulation-steps', $GradSteps,
   '--learning-rate', $LearningRate, '--weight-decay', $WeightDecay, '--max-grad-norm', $MaxGradNorm, '--lora-rank', $LoraRank, '--lora-dropout', $LoraDropout, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
   '--nonfinite-skip-limit', $NonfiniteSkipLimit, '--nonfinite-backoff-every', $NonfiniteBackoffEvery, '--lr-backoff-factor', $LrBackoffFactor,
-  '--min-learning-rate', $MinLearningRate, '--eval-every-epoch-fraction', $EvalEveryEpochFraction, '--eval-threshold', $EvalThreshold, '--eval-max-samples', $EvalMaxSamples,
-  '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice, '--no-4bit'
+  '--min-learning-rate', $MinLearningRate, '--eval-threshold', $EvalThreshold, '--eval-precision-top-k', $EvalPrecisionTopK, '--eval-precision-threshold', $EvalPrecisionThreshold, '--eval-max-samples', $EvalMaxSamples,
+  '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice
 )
+if (-not $Use4Bit) { $TrainArgs += @('--no-4bit') }
 if ($EvalOutputDir) { $TrainArgs += @('--eval-output-dir', $EvalOutputDir) }
 if ($ResumeAdapterDir) { $TrainArgs += @('--resume-adapter-dir', $ResumeAdapterDir) }
 if (Test-EnvFlag $env:REBUILD_TOKEN_CACHE) { $TrainArgs += @('--rebuild-token-cache') }
+if (Test-EnvFlag $env:ON_THE_FLY_TOKENIZE) { $TrainArgs += @('--on-the-fly-tokenize') }
+if ($HardNegativeMining) {
+  $TrainArgs += @('--hard-negative-mining', '--hard-negative-keep-ratio', $HardNegativeKeepRatio, '--hard-negative-refresh-ratio', $HardNegativeRefreshRatio, '--hard-negative-score-max-samples', $HardNegativeScoreMaxSamples, '--hard-negative-active-ratio', $HardNegativeActiveRatio)
+}
 if (Test-EnvFlag $env:NO_AUTO_RESUME) { $TrainArgs += @('--no-auto-resume') }
 Invoke-Step @TrainArgs
-Invoke-Step -m blackbox_finetune_recall60.evaluate --base-model $BaseModel --adapter-dir "$OutputDir/adapter" --data-dir $ValidationDir --threshold 0.50 --min-positive-recall $MinRecall --cuda-device $CudaDevice --max-seq-length $MaxSeqLength
+Invoke-Step -m blackbox_finetune_recall60.evaluate --base-model $BaseModel --adapter-dir "$OutputDir/adapter" --data-dir $ValidationDir --threshold 0.50 --precision-top-k $PrecisionTopK --precision-threshold $PrecisionThreshold --output-dir "$OutputDir/evaluations/$FinalPrecisionTag" --cuda-device $CudaDevice --max-seq-length $MaxSeqLength
 Invoke-Step -m unittest tests.test_blackbox_finetune_recall60 -v

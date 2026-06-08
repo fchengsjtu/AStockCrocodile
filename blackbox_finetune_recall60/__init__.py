@@ -1,1 +1,1 @@
-"""Black-box Qwen fine-tuning with a 60% positive-recall validation target."""
+"""Black-box Qwen fine-tuning with a top-20 precision validation target."""

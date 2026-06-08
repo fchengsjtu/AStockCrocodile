@@ -49,12 +49,19 @@ run_dataset_build_if_needed() {
   local dir="$1"
   local label="$2"
   local force_value="${3:-}"
-  shift 3
+  local expected_signature="$4"
+  local signature_file="$dir/.dataset_signature"
+  shift 4
   if dataset_ready "$dir" && ! env_flag "$force_value"; then
-    echo "Using cached $label dataset in $dir; set REBUILD_DATASET=1 to rebuild all datasets."
-    return 0
+    if [[ -f "$signature_file" ]] && [[ "$(cat "$signature_file")" == "$expected_signature" ]]; then
+      echo "Using cached $label dataset in $dir; configuration signature matches."
+      return 0
+    fi
+    echo "Cached $label dataset configuration does not match; rebuilding $dir."
   fi
   "$@"
+  printf '%s\n' "$expected_signature" > "$signature_file"
+  DATASET_REBUILT=1
 }
 
 train_supports_arg() {
@@ -92,9 +99,12 @@ MODEL_TAG="$(model_tag "$MODEL_LABEL_VALUE")"
 RECALL_TARGET="${RECALL_TARGET:-$MODEL_LABEL_VALUE}"
 RECALL_TAG="${RECALL_TAG:-$MODEL_TAG}"
 MIN_POSITIVE_RECALL="${MIN_POSITIVE_RECALL:-$MODEL_LABEL_VALUE}"
-PRECISION_TOP_K="${PRECISION_TOP_K:-20}"
-PRECISION_THRESHOLD="${PRECISION_THRESHOLD:-${MIN_PRECISION_AT_20:-${PRECISION_AT_20_TARGET:-0.30}}}"
-TRAIN_SEED="${TRAIN_SEED:-$((20260500 + ${MODEL_TAG#recall}))}"
+PRECISION_TOP_K="${PRECISION_TOP_K:-10}"
+PRECISION_THRESHOLD="${PRECISION_THRESHOLD:-${MIN_PRECISION_AT_20:-${PRECISION_AT_20_TARGET:-0.40}}}"
+RANDOM_SEED="${RANDOM_SEED:-937498347}"
+TRAIN_SEED="${TRAIN_SEED:-$RANDOM_SEED}"
+EVAL_RANDOM_SEED="${EVAL_RANDOM_SEED:-20260530}"
+export EVAL_RANDOM_SEED
 WEIGHT_DECAY="${WEIGHT_DECAY:-0.0}"
 LEARNING_RATE="${LEARNING_RATE:-5e-6}"
 MAX_GRAD_NORM="${MAX_GRAD_NORM:-0.5}"
@@ -112,7 +122,7 @@ INITIAL_ADAPTER_DIR="${INITIAL_ADAPTER_DIR:-}"
 if [[ -n "$INITIAL_ADAPTER_DIR" && "$INITIAL_ADAPTER_DIR" == *\\* ]] && command -v wslpath >/dev/null 2>&1; then
   INITIAL_ADAPTER_DIR="$(wslpath -u "$INITIAL_ADAPTER_DIR")"
 fi
-SAMPLE_MODE="${SAMPLE_MODE:-long}"
+SAMPLE_MODE="${SAMPLE_MODE:-xlong}"
 NEGATIVE_RATIO="${NEGATIVE_RATIO:-9.0}"
 NEGATIVE_TAG="$(python - "$NEGATIVE_RATIO" <<'PY'
 import sys
@@ -129,22 +139,24 @@ DEFAULT_OUTPUT_DIR="blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-${MODE
 OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
 if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_MAX_SEQ_LENGTH=1024
-  DEFAULT_CHECKPOINT_EVERY=500
+  DEFAULT_CHECKPOINT_EVERY=100
 elif [[ "$SAMPLE_MODE" == "xlong" ]]; then
   DEFAULT_MAX_SEQ_LENGTH=3072
-  DEFAULT_CHECKPOINT_EVERY=500
+  DEFAULT_CHECKPOINT_EVERY=100
 elif [[ "$SAMPLE_MODE" == "xxlong" ]]; then
   DEFAULT_MAX_SEQ_LENGTH=4096
-  DEFAULT_CHECKPOINT_EVERY=500
+  DEFAULT_CHECKPOINT_EVERY=100
 else
   DEFAULT_MAX_SEQ_LENGTH=2048
-  DEFAULT_CHECKPOINT_EVERY=500
+  DEFAULT_CHECKPOINT_EVERY=100
 fi
-CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-$DEFAULT_CHECKPOINT_EVERY}"
-EVAL_THRESHOLD="${EVAL_THRESHOLD:-0.50}"
+CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-${CHECKOUT_EVERY:-$DEFAULT_CHECKPOINT_EVERY}}"
+EVAL_THRESHOLD="${EVAL_THRESHOLD:-0.48}"
 EVAL_PRECISION_TOP_K="${EVAL_PRECISION_TOP_K:-$PRECISION_TOP_K}"
 EVAL_PRECISION_THRESHOLD="${EVAL_PRECISION_THRESHOLD:-${EVAL_MIN_PRECISION_AT_20:-$PRECISION_THRESHOLD}}"
-EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-0}"
+EVAL_SAMPLE_METHOD="${EVAL_SAMPLE_METHOD:-random}"
+EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-1000}"
+export EVAL_SAMPLE_METHOD
 PRECISION_TAG="$(python - "$EVAL_PRECISION_TOP_K" "$EVAL_PRECISION_THRESHOLD" <<'PY'
 import sys
 k = max(1, int(float(sys.argv[1])))
@@ -181,18 +193,18 @@ if [[ "$MODE" == "smoke" ]]; then
   MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-$DEFAULT_MAX_SEQ_LENGTH}"
   GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 else
-  DEFAULT_TRAIN_START="20200101"
-  DEFAULT_TRAIN_END="20251231"
+  DEFAULT_TRAIN_START="20230101"
+  DEFAULT_TRAIN_END="20241231"
   DEFAULT_VALIDATION_START="20260101"
-  DEFAULT_VALIDATION_END="20260430"
+  DEFAULT_VALIDATION_END="20260530"
   TRAIN_START="${TRAIN_START_DATE:-$DEFAULT_TRAIN_START}"
   TRAIN_END="${TRAIN_END_DATE:-$DEFAULT_TRAIN_END}"
   VALIDATION_START="${VALIDATION_START_DATE:-${TEST_START_DATE:-$DEFAULT_VALIDATION_START}}"
   VALIDATION_END="${VALIDATION_END_DATE:-${TEST_END_DATE:-$DEFAULT_VALIDATION_END}}"
   POS_LIMIT="${POSITIVE_LIMIT:-}"
-  EPOCHS="${EPOCHS:-1}"
+  EPOCHS="${EPOCHS:-0.3}"
   MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-$DEFAULT_MAX_SEQ_LENGTH}"
-  GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-8}"
+  GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-16}"
 fi
 
 cat <<EOF
@@ -212,9 +224,18 @@ Project blackbox environment:
   VALIDATION_DATA_DIR=$VALIDATION_DATA_DIR
   OUTPUT_DIR=$OUTPUT_DIR
   MAX_SEQ_LENGTH=$MAX_SEQ_LENGTH
+  EPOCHS=$EPOCHS
+  GRADIENT_ACCUMULATION_STEPS=$GRAD_STEPS
+  RANDOM_SEED=$RANDOM_SEED
+  TRAIN_SEED=$TRAIN_SEED
   CHECKPOINT_EVERY=$CHECKPOINT_EVERY
   LEARNING_RATE=$LEARNING_RATE
   EVAL_THRESHOLD=$EVAL_THRESHOLD
+  EVAL_RANDOM_SEED=$EVAL_RANDOM_SEED
+  EVAL_SAMPLE_METHOD=$EVAL_SAMPLE_METHOD
+  EVAL_MAX_SAMPLES=$EVAL_MAX_SAMPLES
+  EVAL_PRECISION_TOP_K=$EVAL_PRECISION_TOP_K
+  EVAL_PRECISION_THRESHOLD=$EVAL_PRECISION_THRESHOLD
   RESUME_ADAPTER_DIR=${RESUME_ADAPTER_DIR:-<unset>}
   INITIAL_ADAPTER_DIR=${INITIAL_ADAPTER_DIR:-<unset>}
   USE_4BIT=$USE_4BIT
@@ -224,7 +245,7 @@ Project blackbox environment:
   TRUST_REMOTE_CODE=$TRUST_REMOTE_CODE
 EOF
 
-BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio "$NEGATIVE_POOL_RATIO" --sample-mode "$SAMPLE_MODE")
+BUILD_ARGS=(--output-dir "$DATA_DIR" --start-date "$TRAIN_START" --end-date "$TRAIN_END" --negative-ratio "$NEGATIVE_RATIO" --sample-mode "$SAMPLE_MODE")
 VAL_ARGS=(--output-dir "$VALIDATION_DATA_DIR" --start-date "$VALIDATION_START" --end-date "$VALIDATION_END" --negative-ratio "$NEGATIVE_RATIO" --sample-mode "$SAMPLE_MODE")
 if [[ -n "$POS_LIMIT" ]]; then
   BUILD_ARGS+=(--positive-limit "$POS_LIMIT")
@@ -233,8 +254,15 @@ if [[ "$MODE" == "smoke" ]]; then
   VAL_ARGS+=(--positive-limit "$POS_LIMIT")
 fi
 
-run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" python -m blackbox_finetune_recall60.build_dataset "${BUILD_ARGS[@]}"
-run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" python -m blackbox_finetune_recall60.build_validation_dataset "${VAL_ARGS[@]}"
+TRAIN_DATASET_SIGNATURE="kind=training;start=$TRAIN_START;end=$TRAIN_END;negative_ratio=$NEGATIVE_RATIO;sample_mode=$SAMPLE_MODE;positive_limit=${POS_LIMIT:-all};seed=$TRAIN_SEED"
+VALIDATION_DATASET_SIGNATURE="kind=validation;start=$VALIDATION_START;end=$VALIDATION_END;negative_ratio=$NEGATIVE_RATIO;sample_mode=$SAMPLE_MODE;positive_limit=${POS_LIMIT:-all};seed=$TRAIN_SEED"
+DATASET_REBUILT=0
+run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" "$TRAIN_DATASET_SIGNATURE" python -m blackbox_finetune_recall60.build_dataset "${BUILD_ARGS[@]}"
+run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" "$VALIDATION_DATASET_SIGNATURE" python -m blackbox_finetune_recall60.build_validation_dataset "${VAL_ARGS[@]}"
+if [[ "$DATASET_REBUILT" == "1" && -z "$RESUME_ADAPTER_DIR" ]]; then
+  NO_AUTO_RESUME=1
+  echo "Dataset was rebuilt; automatic checkpoint resume is disabled for this run."
+fi
 TRAIN_HELP="$(python -m blackbox_finetune_recall60.train --help 2>&1 || true)"
 TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --weight-decay "$WEIGHT_DECAY" --max-grad-norm "$MAX_GRAD_NORM" --lora-rank "$LORA_RANK" --lora-dropout "$LORA_DROPOUT" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --nonfinite-skip-limit "$NONFINITE_SKIP_LIMIT" --nonfinite-backoff-every "$NONFINITE_BACKOFF_EVERY" --lr-backoff-factor "$LR_BACKOFF_FACTOR" --min-learning-rate "$MIN_LEARNING_RATE" --eval-threshold "$EVAL_THRESHOLD" --eval-max-samples "$EVAL_MAX_SAMPLES" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
 if train_supports_arg "--eval-precision-top-k"; then

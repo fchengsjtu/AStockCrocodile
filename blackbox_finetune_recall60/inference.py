@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
-from blackbox_finetune_recall60.common import label_answer
+from blackbox_finetune_recall60.common import label_answer, resolve_pretrained_source
 from llm_finetune.evaluate import missing_adapter_error
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def load_model(base_model: str, adapter_dir: Path):
@@ -16,15 +24,39 @@ def load_model(base_model: str, adapter_dir: Path):
         raise RuntimeError("missing inference dependencies; run one_click_deploy.ps1 first") from exc
     if not (adapter_dir / "adapter_config.json").exists():
         raise missing_adapter_error(adapter_dir)
-    tokenizer = AutoTokenizer.from_pretrained(adapter_dir if (adapter_dir / "tokenizer_config.json").exists() else base_model, trust_remote_code=True, use_fast=True)
+    local_files_only = _env_bool("HF_LOCAL_FILES_ONLY") or _env_bool("TRANSFORMERS_OFFLINE") or _env_bool("HF_HUB_OFFLINE")
+    trust_remote_code = _env_bool("TRUST_REMOTE_CODE", False)
+    try:
+        pretrained_source = resolve_pretrained_source(base_model)
+    except FileNotFoundError as exc:
+        raise RuntimeError(str(exc)) from exc
+    tokenizer_source = adapter_dir if (adapter_dir / "tokenizer_config.json").exists() else base_model
+    if tokenizer_source == base_model:
+        tokenizer_source = pretrained_source
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=trust_remote_code, use_fast=True, local_files_only=local_files_only)
+    except OSError as exc:
+        raise RuntimeError(
+            f"Unable to load tokenizer for {str(tokenizer_source)!r}. If WSL/Linux cannot reach HuggingFace, "
+            "set BASE_MODEL to a local HuggingFace-format model directory or pre-download the model cache. "
+            "Set HF_LOCAL_FILES_ONLY=0 only when network access is available."
+        ) from exc
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model,
-        trust_remote_code=True,
-        torch_dtype=torch.float16,
-        low_cpu_mem_usage=True,
-    )
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            pretrained_source,
+            trust_remote_code=trust_remote_code,
+            torch_dtype=torch.float16,
+            low_cpu_mem_usage=True,
+            local_files_only=local_files_only,
+        )
+    except OSError as exc:
+        raise RuntimeError(
+            f"Unable to load model for {base_model!r}. If WSL/Linux cannot reach HuggingFace, "
+            "set BASE_MODEL to a local HuggingFace-format model directory or pre-download the model cache. "
+            "Set HF_LOCAL_FILES_ONLY=0 only when network access is available."
+        ) from exc
     model = PeftModel.from_pretrained(model, str(adapter_dir))
     model.to("cuda")
     model.eval()

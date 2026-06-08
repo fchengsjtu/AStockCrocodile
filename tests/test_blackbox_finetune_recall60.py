@@ -1,10 +1,50 @@
+import os
 import unittest
+from contextlib import contextmanager
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from datetime import date
 from unittest.mock import patch
 
 from blackbox_finetune import build_dataset as base_build_dataset
 from blackbox_finetune.common import SampleEvent
 from blackbox_finetune_recall60 import build_dataset, build_validation_dataset, common, evaluate, predict_day, train
+
+PROJECT_ENV_KEYS = [
+    "SAMPLE_MODE",
+    "SAMPLE_BOTTOM_BAND_RATIO",
+    "TRAIN_START_DATE",
+    "TRAIN_END_DATE",
+    "VALIDATION_START_DATE",
+    "VALIDATION_END_DATE",
+    "TEST_START_DATE",
+    "TEST_END_DATE",
+    "NEGATIVE_RATIO",
+    "NEGATIVE_POOL_RATIO",
+    "RECALL_TARGET",
+    "MIN_POSITIVE_RECALL",
+    "PRECISION_TOP_K",
+    "PRECISION_THRESHOLD",
+    "MIN_PRECISION_AT_20",
+    "PRECISION_AT_20_TARGET",
+    "HARD_NEGATIVE_MINING",
+    "HARD_NEGATIVE_KEEP_RATIO",
+    "HARD_NEGATIVE_REFRESH_RATIO",
+    "HARD_NEGATIVE_SCORE_MAX_SAMPLES",
+    "HARD_NEGATIVE_ACTIVE_RATIO",
+    "EVAL_SAMPLE_METHOD",
+]
+
+
+@contextmanager
+def without_project_env():
+    saved = {key: os.environ.pop(key, None) for key in PROJECT_ENV_KEYS}
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is not None:
+                os.environ[key] = value
 
 
 def daily(day, open_, high, low, close, volume=100.0, amount=1000.0):
@@ -24,20 +64,32 @@ def daily(day, open_, high, low, close, volume=100.0, amount=1000.0):
 
 
 class BlackboxFinetuneRecall60Tests(unittest.TestCase):
+    def test_next_evaluation_threshold_uses_top_twenty_percent_position(self):
+        average_probability, max_probability, next_threshold = train._next_evaluation_threshold(
+            [0.2, 0.4, 0.6],
+            current_threshold=0.48,
+        )
+
+        self.assertAlmostEqual(average_probability, 0.4)
+        self.assertAlmostEqual(max_probability, 0.6)
+        self.assertAlmostEqual(next_threshold, 0.56)
+
     def test_training_defaults_use_2020_to_2025(self):
-        args = build_dataset.build_parser().parse_args([])
+        with without_project_env():
+            args = build_dataset.build_parser().parse_args([])
 
         self.assertEqual(args.start_date, "20200101")
         self.assertEqual(args.end_date, "20251231")
         self.assertEqual(args.output_dir, common.default_data_dir("long"))
-        self.assertEqual(args.negative_ratio, 3.0)
+        self.assertIn("recall60_long", str(args.output_dir))
+        self.assertEqual(args.negative_ratio, 100.0)
 
     def test_negative_ratio_default_can_come_from_environment(self):
-        with patch.dict("os.environ", {"NEGATIVE_RATIO": "2.5"}):
+        with patch.dict("os.environ", {"NEGATIVE_RATIO": "2.5", "NEGATIVE_POOL_RATIO": "11.0"}):
             build_args = build_dataset.build_parser().parse_args([])
             validation_args = build_validation_dataset.build_parser().parse_args([])
 
-        self.assertEqual(build_args.negative_ratio, 2.5)
+        self.assertEqual(build_args.negative_ratio, 11.0)
         self.assertEqual(validation_args.negative_ratio, 2.5)
 
     def test_regularization_and_training_eval_args_can_come_from_environment(self):
@@ -47,19 +99,192 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
                 "LORA_RANK": "8",
                 "LORA_DROPOUT": "0.10",
                 "WEIGHT_DECAY": "0.01",
-                "EVAL_EVERY_EPOCH_FRACTION": "0.2",
                 "EVAL_THRESHOLD": "0.6",
+                "EVAL_PRECISION_TOP_K": "12",
+                "EVAL_PRECISION_THRESHOLD": "0.35",
                 "EVAL_MAX_SAMPLES": "17",
+                "RECALL_TARGET": "80",
+                "PRECISION_TOP_K": "20",
+                "PRECISION_THRESHOLD": "0.30",
+                "ON_THE_FLY_TOKENIZE": "1",
+                "HARD_NEGATIVE_MINING": "1",
+                "HARD_NEGATIVE_KEEP_RATIO": "0.25",
+                "HARD_NEGATIVE_REFRESH_RATIO": "0.75",
+                "HARD_NEGATIVE_SCORE_MAX_SAMPLES": "123",
+                "HARD_NEGATIVE_ACTIVE_RATIO": "4.5",
             },
         ):
             args = train.build_parser().parse_args([])
+            eval_args = evaluate.build_parser().parse_args([])
 
         self.assertEqual(args.lora_rank, 8)
         self.assertEqual(args.lora_dropout, 0.10)
         self.assertEqual(args.weight_decay, 0.01)
-        self.assertEqual(args.eval_every_epoch_fraction, 0.2)
+        self.assertEqual(args.eval_every_epoch_fraction, 0.0)
         self.assertEqual(args.eval_threshold, 0.6)
+        self.assertEqual(args.eval_precision_top_k, 12)
+        self.assertEqual(args.eval_precision_threshold, 0.35)
         self.assertEqual(args.eval_max_samples, 17)
+        self.assertTrue(args.on_the_fly_tokenize)
+        self.assertTrue(args.hard_negative_mining)
+        self.assertEqual(args.hard_negative_keep_ratio, 0.25)
+        self.assertEqual(args.hard_negative_refresh_ratio, 0.75)
+        self.assertEqual(args.hard_negative_score_max_samples, 123)
+        self.assertEqual(args.hard_negative_active_ratio, 4.5)
+        self.assertIsNone(eval_args.min_positive_recall)
+        self.assertEqual(eval_args.precision_top_k, 20)
+        self.assertEqual(eval_args.precision_threshold, 0.30)
+        self.assertIn("recall80", str(args.output_dir))
+
+    def test_hard_negative_refresh_keeps_high_scoring_negatives_and_refills(self):
+        positives = [{"metadata": {"scode": "P1", "anchor_date": "2026-01-01", "label": 1}}]
+        active_negatives = [
+            {"metadata": {"scode": f"N{idx}", "anchor_date": "2026-01-01", "label": 0}}
+            for idx in range(10)
+        ]
+        pool_negatives = active_negatives + [
+            {"metadata": {"scode": f"F{idx}", "anchor_date": "2026-01-01", "label": 0}}
+            for idx in range(10)
+        ]
+        scored = [(1.0 - idx / 100.0, row) for idx, row in enumerate(active_negatives)]
+
+        refreshed, stats = train.refresh_hard_negative_rows(
+            positives,
+            active_negatives,
+            pool_negatives,
+            scored,
+            keep_ratio=0.2,
+            refresh_ratio=0.8,
+            seed=7,
+        )
+
+        negative_codes = {row["metadata"]["scode"] for row in refreshed if row["metadata"]["label"] == 0}
+        self.assertIn("N0", negative_codes)
+        self.assertIn("N1", negative_codes)
+        self.assertEqual(len(negative_codes), len(active_negatives))
+        self.assertTrue(any(code.startswith("F") for code in negative_codes))
+        self.assertEqual(stats["kept_hard_negatives"], 2)
+
+    def test_initial_active_negatives_use_ratio_from_candidate_pool(self):
+        positives = [{"metadata": {"scode": f"P{idx}", "anchor_date": "2026-01-01", "label": 1}} for idx in range(3)]
+        negative_pool = [
+            {"metadata": {"scode": f"N{idx}", "anchor_date": "2026-01-01", "label": 0}}
+            for idx in range(100)
+        ]
+
+        active = train.initialize_active_negative_rows(positives, negative_pool, active_negative_ratio=9.0, seed=11)
+
+        self.assertEqual(len(active), 27)
+        self.assertEqual(len({_row["metadata"]["scode"] for _row in active}), 27)
+
+    def test_active_negatives_are_saved_and_restored_from_checkpoint(self):
+        active = [
+            {"metadata": {"scode": "N1", "anchor_date": "2026-01-01", "label": 0}},
+            {"metadata": {"scode": "N2", "anchor_date": "2026-01-02", "label": 0}},
+        ]
+        pool = active + [{"metadata": {"scode": "N3", "anchor_date": "2026-01-03", "label": 0}}]
+
+        with TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "update-000100"
+            train.save_active_negative_rows(checkpoint_dir, active, {"kept_hard_negatives": 1})
+            restored = train.load_active_negative_rows_from_checkpoint(checkpoint_dir, pool)
+
+        self.assertEqual(restored, active)
+
+    def test_restore_active_negatives_drops_rows_not_in_current_pool(self):
+        active = [
+            {"metadata": {"scode": "N1", "anchor_date": "2026-01-01", "label": 0}},
+            {"metadata": {"scode": "OLD", "anchor_date": "2025-01-01", "label": 0}},
+        ]
+        pool = [{"metadata": {"scode": "N1", "anchor_date": "2026-01-01", "label": 0}}]
+
+        with TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "update-000100"
+            train.save_active_negative_rows(checkpoint_dir, active)
+            restored = train.load_active_negative_rows_from_checkpoint(checkpoint_dir, pool)
+
+        self.assertEqual(restored, pool)
+
+    def test_resolve_pretrained_source_validates_local_model_directory(self):
+        with TemporaryDirectory() as temp_dir:
+            model_dir = Path(temp_dir) / "Qwen2.5-0.5B-Instruct"
+            model_dir.mkdir()
+            with self.assertRaises(FileNotFoundError):
+                common.resolve_pretrained_source(str(model_dir))
+            (model_dir / "config.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(common.resolve_pretrained_source(str(model_dir)), str(model_dir))
+
+    def test_precision_at_k_orders_by_positive_probability(self):
+        scored = [
+            {"actual_label": 0, "positive_probability": 0.95},
+            {"actual_label": 1, "positive_probability": 0.90},
+            {"actual_label": 1, "positive_probability": 0.80},
+            {"actual_label": 0, "positive_probability": 0.70},
+            {"actual_label": 1, "positive_probability": 0.60},
+            {"actual_label": 0, "positive_probability": 0.50},
+        ]
+
+        result = common.precision_at_k(scored, (5, 10, 20))
+
+        self.assertEqual(result["precision@5"], 0.6)
+        self.assertEqual(result["precision@10"], 0.5)
+        self.assertEqual(result["precision@20"], 0.5)
+
+    def test_evaluation_summary_counts_predicted_labels(self):
+        scored = [
+            {"actual_label": 1, "predicted_label": 1, "positive_probability": 0.90},
+            {"actual_label": 0, "predicted_label": 1, "positive_probability": 0.80},
+            {"actual_label": 0, "predicted_label": 0, "positive_probability": 0.20},
+            {"actual_label": 1, "predicted_label": 0, "positive_probability": 0.10},
+        ]
+
+        summary = evaluate.summarize_scored_rows(scored, precision_top_k=2)
+
+        self.assertEqual(summary["tp"], 1)
+        self.assertEqual(summary["fp"], 1)
+        self.assertEqual(summary["tn"], 1)
+        self.assertEqual(summary["fn"], 1)
+        self.assertEqual(summary["positive_samples"], 2)
+        self.assertEqual(summary["precision"], 0.5)
+        self.assertEqual(summary["positive_recall"], 0.5)
+        self.assertEqual(summary["precision@2"], 0.5)
+
+    def test_precision_target_tag_uses_top_k_and_threshold(self):
+        self.assertEqual(common.precision_target_tag(20, 0.30), "top20_precision030")
+        self.assertEqual(common.precision_target_tag(5, 30), "top5_precision030")
+        self.assertEqual(common.normalize_precision_threshold(30), 0.30)
+
+    def test_checkpoint_evaluation_samples_fixed_rows_by_default(self):
+        rows = [{"metadata": {"scode": f"{idx:06d}"}} for idx in range(20)]
+
+        sampled_a, method_a, seed_a = train._sample_eval_rows(rows, 5, update=100)
+        sampled_b, method_b, seed_b = train._sample_eval_rows(rows, 5, update=100)
+        sampled_c, method_c, seed_c = train._sample_eval_rows(rows, 5, update=101)
+        all_rows, method_all, seed_all = train._sample_eval_rows(rows, 0, update=100)
+
+        self.assertEqual(method_a, "fixed")
+        self.assertEqual(method_b, "fixed")
+        self.assertEqual(method_c, "fixed")
+        self.assertIsNone(seed_a)
+        self.assertIsNone(seed_b)
+        self.assertIsNone(seed_c)
+        self.assertEqual(sampled_a, sampled_b)
+        self.assertEqual(sampled_a, rows[:5])
+        self.assertEqual(sampled_a, sampled_c)
+        self.assertEqual(all_rows, rows)
+        self.assertEqual(method_all, "all")
+        self.assertIsNone(seed_all)
+
+    def test_checkpoint_evaluation_can_still_sample_random_rows_explicitly(self):
+        rows = [{"metadata": {"scode": f"{idx:06d}"}} for idx in range(20)]
+
+        sampled_a, method_a, seed_a = train._sample_eval_rows(rows, 5, update=100, method="random")
+        sampled_b, method_b, seed_b = train._sample_eval_rows(rows, 5, update=101, method="random")
+
+        self.assertEqual(method_a, "random")
+        self.assertEqual(method_b, "random")
+        self.assertNotEqual(seed_a, seed_b)
+        self.assertNotEqual(sampled_a, sampled_b)
 
     def test_positive_samples_use_twenty_trading_day_cooldown(self):
         trade_dates = [date(2026, 1, day) for day in range(1, 32)]
@@ -85,12 +310,13 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(base_build_dataset.NEGATIVE_EXCLUSION_TRADING_DAYS, 20)
 
     def test_evaluation_defaults_match_2026_holdout_period(self):
-        args = build_validation_dataset.build_parser().parse_args([])
+        with without_project_env():
+            args = build_validation_dataset.build_parser().parse_args([])
 
         self.assertEqual(args.start_date, "20260101")
         self.assertEqual(args.end_date, "20260430")
         self.assertEqual(args.output_dir, common.default_validation_dir("long"))
-        self.assertIn("no_partial_week_long", str(args.output_dir))
+        self.assertIn("no_partial_week_recall60_long", str(args.output_dir))
 
     def test_compact_window_and_sequence_length_defaults_match_2048_format(self):
         self.assertEqual(common.COMPACT_DAILY_WINDOW, 13)
@@ -99,11 +325,11 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(common.sample_mode_config("short")["daily"], 8)
         self.assertEqual(common.sample_mode_config("short")["weekly"], 5)
         self.assertEqual(common.default_max_seq_length("short"), 1024)
-        self.assertIn("data_no_partial_week_short", str(common.default_data_dir("short")))
-        self.assertIn("data_no_partial_week_long", str(common.default_data_dir("long")))
-        self.assertIn("data_no_partial_week_xlong", str(common.default_data_dir("xlong")))
-        self.assertIn("data_no_partial_week_xxlong", str(common.default_data_dir("xxlong")))
-        self.assertIn("data_evaluation_no_partial_week_short", str(common.default_validation_dir("short")))
+        self.assertIn("data_no_partial_week_recall60_short", str(common.default_data_dir("short")))
+        self.assertIn("data_no_partial_week_recall60_long", str(common.default_data_dir("long")))
+        self.assertIn("data_no_partial_week_recall60_xlong", str(common.default_data_dir("xlong")))
+        self.assertIn("data_no_partial_week_recall60_xxlong", str(common.default_data_dir("xxlong")))
+        self.assertIn("data_evaluation_no_partial_week_recall60_short", str(common.default_validation_dir("short")))
         self.assertEqual(common.sample_mode_config("xlong"), {"daily": 21, "weekly": 13, "monthly": 8, "max_seq_length": 3072})
         self.assertEqual(common.default_max_seq_length("xlong"), 3072)
         self.assertEqual(common.sample_mode_config("xxlong"), {"daily": 34, "weekly": 21, "monthly": 13, "max_seq_length": 4096})
@@ -198,15 +424,16 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         low_daily = [daily("20260101", 18, 19, 17, 19)]
         high_daily = [daily("20260101", 30, 31, 29, 30)]
 
-        self.assertTrue(common._sample_windows_are_valid("short", weekly_rows, [], low_daily))
-        self.assertFalse(common._sample_windows_are_valid("short", weekly_rows, [], high_daily))
-        self.assertTrue(common._sample_windows_are_valid("long", weekly_rows, monthly_rows[:5], low_daily))
-        self.assertFalse(common._sample_windows_are_valid("long", weekly_rows, monthly_rows[:5], high_daily))
-        self.assertTrue(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:8], low_daily))
-        self.assertTrue(common._sample_windows_are_valid("xxlong", weekly_rows, monthly_rows, low_daily))
-        self.assertFalse(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:8], high_daily))
-        self.assertFalse(common._sample_windows_are_valid("xxlong", weekly_rows, monthly_rows, high_daily))
-        self.assertFalse(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:7], low_daily))
+        with patch.dict("os.environ", {"SAMPLE_BOTTOM_BAND_RATIO": "0.10"}):
+            self.assertTrue(common._sample_windows_are_valid("short", weekly_rows, [], low_daily))
+            self.assertFalse(common._sample_windows_are_valid("short", weekly_rows, [], high_daily))
+            self.assertTrue(common._sample_windows_are_valid("long", weekly_rows, monthly_rows[:5], low_daily))
+            self.assertFalse(common._sample_windows_are_valid("long", weekly_rows, monthly_rows[:5], high_daily))
+            self.assertTrue(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:8], low_daily))
+            self.assertTrue(common._sample_windows_are_valid("xxlong", weekly_rows, monthly_rows, low_daily))
+            self.assertFalse(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:8], high_daily))
+            self.assertFalse(common._sample_windows_are_valid("xxlong", weekly_rows, monthly_rows, high_daily))
+            self.assertFalse(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:7], low_daily))
 
     def test_bottom_band_ratio_can_come_from_environment(self):
         rows = [daily("20251231", 10, 100, 10, 50)]

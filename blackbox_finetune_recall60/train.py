@@ -58,7 +58,7 @@ from llm_finetune.common import read_jsonl
 
 
 def default_checkpoint_every() -> int:
-    return 500
+    return _env_int("CHECKPOINT_EVERY", _env_int("CHECKOUT_EVERY", 100))
 
 TOKEN_CACHE_VERSION = "v7_csv11_21d13w_no_partial_2020_2025"
 
@@ -130,12 +130,22 @@ def _sample_eval_rows(
         return rows, "all", None
     method = (method or os.environ.get("EVAL_SAMPLE_METHOD", "fixed")).strip().lower()
     if method == "random":
-        seed = 20260530 + int(update)
+        seed = _env_int("EVAL_RANDOM_SEED", 20260530) + int(update)
         return random.Random(seed).sample(rows, max_samples), "random", seed
     if method == "stride":
         step = len(rows) / max_samples
         return [rows[min(int(index * step), len(rows) - 1)] for index in range(max_samples)], "stride", None
     return rows[:max_samples], "fixed", None
+
+
+def _next_evaluation_threshold(probabilities: list[float], current_threshold: float) -> tuple[float, float, float]:
+    if not probabilities:
+        value = min(max(float(current_threshold), 0.0), 1.0)
+        return value, value, value
+    average_probability = sum(probabilities) / len(probabilities)
+    max_probability = max(probabilities)
+    next_threshold = average_probability + 0.8 * (max_probability - average_probability)
+    return average_probability, max_probability, min(max(next_threshold, 0.0), 1.0)
 
 
 
@@ -214,6 +224,9 @@ def _evaluate_training_checkpoint(
     precision_threshold = normalize_precision_threshold(precision_threshold)
     precision_values = precision_at_k(scored_rows, sorted({5, 10, 20, precision_top_k}))
     target_key = f"precision@{precision_top_k}"
+    probabilities = [float(row["positive_probability"]) for row in scored_rows]
+    average_probability, max_probability, next_threshold = _next_evaluation_threshold(probabilities, threshold)
+    threshold_position = 0.8
     result = {
         "update": update,
         "total_updates": total_updates,
@@ -233,6 +246,10 @@ def _evaluate_training_checkpoint(
         "precision": precision,
         **precision_values,
         "threshold": threshold,
+        "average_positive_probability": average_probability,
+        "max_positive_probability": max_probability,
+        "threshold_position": threshold_position,
+        "next_threshold": next_threshold,
         "precision_top_k": precision_top_k,
         "precision_threshold": precision_threshold,
         "passed": precision_values[target_key] >= precision_threshold,
@@ -246,6 +263,8 @@ def _evaluate_training_checkpoint(
         f"precision={precision:.4f} precision@5={precision_values['precision@5']:.4f} "
         f"precision@10={precision_values['precision@10']:.4f} "
         f"precision@20={precision_values['precision@20']:.4f} "
+        f"avg_p={average_probability:.4f} max_p={max_probability:.4f} "
+        f"next_threshold={next_threshold:.4f} "
         f"{target_key}={precision_values[target_key]:.4f} target={precision_threshold:.4f} "
         f"passed={result['passed']} samples={len(eval_rows)}",
         flush=True,
@@ -344,7 +363,6 @@ def train_recall60_lora(
     nonfinite_backoff_every: int,
     lr_backoff_factor: float,
     min_learning_rate: float,
-    evaluation_interval_fraction: float,
     evaluation_threshold: float,
     evaluation_max_samples: int,
     evaluation_output_dir: Path | None,
@@ -426,13 +444,7 @@ def train_recall60_lora(
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
     start_update = min(_checkpoint_update(resume_adapter_dir), total_updates)
     start_micro_step = start_update * max(1, gradient_accumulation_steps)
-    evaluation_interval_fraction = min(max(float(evaluation_interval_fraction), 0.0), 1.0)
     evaluation_output_dir = evaluation_output_dir or (output_dir / "evaluations")
-    if evaluation_interval_fraction > 0:
-        start_progress = start_update / total_updates if total_updates else 1.0
-        next_evaluation_progress = (math.floor(start_progress / evaluation_interval_fraction) + 1) * evaluation_interval_fraction
-    else:
-        next_evaluation_progress = 0.0
     random.seed(train_seed)
     torch.manual_seed(train_seed)
     torch.cuda.manual_seed_all(train_seed)
@@ -442,7 +454,7 @@ def train_recall60_lora(
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
         f"train_seed={train_seed} lr={learning_rate} weight_decay={weight_decay} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
         f"max_seq_length={max_seq_length} on_the_fly_tokenize={on_the_fly_tokenize} "
-        f"eval_every={evaluation_interval_fraction} eval_threshold={evaluation_threshold} "
+        f"checkpoint_every={checkpoint_every} checkpoint_evaluate=True eval_threshold={evaluation_threshold} "
         f"eval_precision_top_k={evaluation_precision_top_k} "
         f"eval_precision_threshold={evaluation_precision_threshold} eval_max_samples={evaluation_max_samples}",
         flush=True,
@@ -573,8 +585,13 @@ def train_recall60_lora(
                 f"eta={time.strftime('%Y-%m-%d %H:%M:%S', eta_epoch)}",
                 flush=True,
             )
-            while evaluation_interval_fraction > 0 and progress + 1e-12 >= next_evaluation_progress:
-                _evaluate_training_checkpoint(
+            if checkpoint_every > 0 and update % checkpoint_every == 0:
+                checkpoint_dir = output_dir / "checkpoints" / f"update-{update:06d}"
+                checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                model.save_pretrained(checkpoint_dir)
+                tokenizer.save_pretrained(checkpoint_dir)
+                print(f"checkpoint saved: {checkpoint_dir}", flush=True)
+                evaluation_result = _evaluate_training_checkpoint(
                     model=model,
                     tokenizer=tokenizer,
                     rows=valid_rows,
@@ -585,17 +602,15 @@ def train_recall60_lora(
                     trained_epochs=epochs * min(progress, 1.0),
                     threshold=evaluation_threshold,
                     max_samples=evaluation_max_samples,
-                    max_seq_length=active_max_seq_length if "active_max_seq_length" in locals() else max_seq_length,
+                    max_seq_length=max_seq_length,
                     precision_top_k=evaluation_precision_top_k,
                     precision_threshold=evaluation_precision_threshold,
                 )
-                next_evaluation_progress += evaluation_interval_fraction
-            if checkpoint_every > 0 and update % checkpoint_every == 0:
-                checkpoint_dir = output_dir / "checkpoints" / f"update-{update:06d}"
-                checkpoint_dir.mkdir(parents=True, exist_ok=True)
-                model.save_pretrained(checkpoint_dir)
-                tokenizer.save_pretrained(checkpoint_dir)
-                print(f"checkpoint saved: {checkpoint_dir}", flush=True)
+                evaluation_threshold = float(evaluation_result["next_threshold"])
+                print(
+                    f"evaluation threshold updated for next checkpoint: {evaluation_threshold:.6f}",
+                    flush=True,
+                )
 
     adapter_dir = output_dir / "adapter"
     adapter_dir.mkdir(parents=True, exist_ok=True)
@@ -610,18 +625,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=default_output_dir())
     parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH, help="Override token length; default follows sample mode")
-    parser.add_argument("--epochs", type=float, default=1.0)
+    parser.add_argument("--epochs", type=float, default=_env_float("EPOCHS", 0.3))
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=_env_int("GRADIENT_ACCUMULATION_STEPS", 16))
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--weight-decay", type=float, default=_env_float("WEIGHT_DECAY", 0.0), help="AdamW weight decay. Values like 0.01 can reduce overfitting; 0 keeps prior behavior.")
-    parser.add_argument("--train-seed", type=int, default=DEFAULT_TRAIN_SEED, help="Target-specific seed for independent LoRA parameters.")
+    parser.add_argument(
+        "--train-seed",
+        type=int,
+        default=_env_int("TRAIN_SEED", _env_int("RANDOM_SEED", DEFAULT_TRAIN_SEED)),
+        help="Training shuffle and PyTorch seed. TRAIN_SEED takes precedence over RANDOM_SEED.",
+    )
     parser.add_argument("--max-grad-norm", type=float, default=0.5, help="Clip LoRA gradients and skip non-finite updates.")
     parser.add_argument("--lora-rank", type=int, default=_env_int("LORA_RANK", 16), help="LoRA rank. Lower values reduce trainable capacity and can reduce overfitting.")
     parser.add_argument("--lora-dropout", type=float, default=_env_float("LORA_DROPOUT", 0.05), help="LoRA dropout in [0, 1]. Higher values can reduce overfitting.")
     parser.add_argument("--checkpoint-every", type=int, default=default_checkpoint_every(), help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
-    parser.add_argument("--eval-every-epoch-fraction", type=float, default=_env_float("EVAL_EVERY_EPOCH_FRACTION", 0.1), help="Run in-training evaluation at this fraction of total requested epochs; 0 disables.")
-    parser.add_argument("--eval-threshold", type=float, default=_env_float("EVAL_THRESHOLD", 0.50), help="Threshold used by in-training evaluation.")
+    parser.add_argument("--eval-every-epoch-fraction", type=float, default=0.0, help="Deprecated compatibility option. Evaluation now runs immediately after every checkpoint.")
+    parser.add_argument("--eval-threshold", type=float, default=_env_float("EVAL_THRESHOLD", 0.48), help="Threshold used by in-training evaluation.")
     parser.add_argument("--eval-precision-top-k", type=int, default=_env_int("EVAL_PRECISION_TOP_K", 10), help="K used by the in-training precision@K gate.")
     parser.add_argument("--eval-precision-threshold", type=float, default=_env_float("EVAL_PRECISION_THRESHOLD", 0.40), help="Required precision@K value for an evaluation checkpoint to pass.")
     parser.add_argument("--eval-max-samples", type=int, default=_env_int("EVAL_MAX_SAMPLES", 0), help="Max test samples for in-training evaluation; 0 means all.")
@@ -669,7 +689,6 @@ def main(argv: Iterable[str] | None = None) -> None:
         nonfinite_backoff_every=args.nonfinite_backoff_every,
         lr_backoff_factor=args.lr_backoff_factor,
         min_learning_rate=args.min_learning_rate,
-        evaluation_interval_fraction=args.eval_every_epoch_fraction,
         evaluation_threshold=args.eval_threshold,
         evaluation_max_samples=args.eval_max_samples,
         evaluation_output_dir=args.eval_output_dir,

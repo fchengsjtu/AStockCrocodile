@@ -10,17 +10,15 @@ from blackbox_finetune.common import *  # noqa: F401,F403
 from blackbox_finetune.common import DEFAULT_BASE_MODEL, DEFAULT_STAT_TYPE, DEFAULT_WINDOW, SampleEvent
 from llm_finetune.common import compact_date, iter_batches, load_kline_map, parse_date
 
-DEFAULT_OUTPUT_DIR_SHORT = Path("blackbox_finetune_recall60") / "runs" / "qwen2.5-0.5b-blackbox-recall60-short-lora"
-DEFAULT_OUTPUT_DIR_LONG = Path("blackbox_finetune_recall60") / "runs" / "qwen2.5-0.5b-blackbox-recall60-long-lora"
-DEFAULT_OUTPUT_DIR_XLONG = Path("blackbox_finetune_recall60") / "runs" / "qwen2.5-0.5b-blackbox-recall60-xlong-lora"
-DEFAULT_OUTPUT_DIR_XXLONG = Path("blackbox_finetune_recall60") / "runs" / "qwen2.5-0.5b-blackbox-recall60-xxlong-lora"
-DEFAULT_OUTPUT_DIR = DEFAULT_OUTPUT_DIR_LONG
+PROJECT_DIR = Path("blackbox_finetune_recall60")
 DEFAULT_TRAIN_START_DATE = "20200101"
 DEFAULT_TRAIN_END_DATE = "20251231"
 DEFAULT_VALIDATION_START_DATE = "20260101"
 DEFAULT_VALIDATION_END_DATE = "20260430"
 DEFAULT_MIN_POSITIVE_RECALL = 0.60
-DEFAULT_TRAIN_SEED = 20260560
+DEFAULT_PRECISION_TOP_K = 20
+DEFAULT_PRECISION_THRESHOLD = 0.30
+DEFAULT_TRAIN_SEED = 937498347
 CSV_COLUMNS = "dt/o/h/l/c/v/a/m5/m13/m34/m55"
 SYSTEM_PROMPT = "Classify A-share surge. Return JSON."
 SHORT_SAMPLE_MODE = "short"
@@ -55,14 +53,82 @@ def sample_mode_config(sample_mode: str | None) -> dict[str, int]:
 def default_max_seq_length(sample_mode: str | None = None) -> int:
     return sample_mode_config(sample_mode)["max_seq_length"]
 
+
+def normalize_recall_target(value: str | float | int | None = None) -> float:
+    raw = value
+    if raw is None:
+        raw = os.environ.get("RECALL_TARGET") or os.environ.get("MIN_POSITIVE_RECALL") or DEFAULT_MIN_POSITIVE_RECALL
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        number = DEFAULT_MIN_POSITIVE_RECALL
+    if number > 1:
+        number = number / 100.0
+    return min(max(number, 0.0), 1.0)
+
+
+def normalize_precision_threshold(value: str | float | int | None = None) -> float:
+    raw = value
+    if raw is None:
+        raw = (
+            os.environ.get("PRECISION_THRESHOLD")
+            or os.environ.get("MIN_PRECISION_AT_20")
+            or os.environ.get("PRECISION_AT_20_TARGET")
+            or DEFAULT_PRECISION_THRESHOLD
+        )
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        number = DEFAULT_PRECISION_THRESHOLD
+    if number > 1:
+        number = number / 100.0
+    return min(max(number, 0.0), 1.0)
+
+
+def normalize_precision_top_k(value: str | int | None = None) -> int:
+    raw = value
+    if raw is None:
+        raw = os.environ.get("PRECISION_TOP_K") or DEFAULT_PRECISION_TOP_K
+    try:
+        number = int(raw)
+    except (TypeError, ValueError):
+        number = DEFAULT_PRECISION_TOP_K
+    return max(1, number)
+
+
+def precision_target_tag(precision_top_k: int | None = None, precision_threshold: float | None = None) -> str:
+    top_k = normalize_precision_top_k(precision_top_k)
+    threshold = normalize_precision_threshold(precision_threshold)
+    return f"top{top_k}_precision{int(round(threshold * 100)):03d}"
+
+
+def recall_target_tag(value: str | float | int | None = None) -> str:
+    target = normalize_recall_target(value)
+    return f"recall{int(round(target * 100)):02d}"
+
+
+def recall_strategy_name(value: str | float | int | None = None) -> str:
+    return f"blackbox_finetune_{recall_target_tag(value)}"
+
+
+def precision_at_k(scored_rows: Sequence[dict], ks: Sequence[int] = (5, 10, 20)) -> dict[str, float]:
+    ordered = sorted(scored_rows, key=lambda row: float(row.get("positive_probability", 0.0)), reverse=True)
+    result: dict[str, float] = {}
+    for k in ks:
+        top_rows = ordered[:k]
+        key = f"precision@{k}"
+        result[key] = (sum(1 for row in top_rows if int(row.get("actual_label", 0)) == 1) / len(top_rows)) if top_rows else 0.0
+    return result
+
+
 def default_data_dir(sample_mode: str | None = None) -> Path:
     mode = normalize_sample_mode(sample_mode or os.environ.get("SAMPLE_MODE"))
-    return Path("blackbox_finetune_recall60") / f"data_no_partial_week_{mode}"
+    return PROJECT_DIR / f"data_no_partial_week_{recall_target_tag()}_{mode}"
 
 
 def default_validation_dir(sample_mode: str | None = None) -> Path:
     mode = normalize_sample_mode(sample_mode or os.environ.get("SAMPLE_MODE"))
-    return Path("blackbox_finetune_recall60") / f"data_evaluation_no_partial_week_{mode}"
+    return PROJECT_DIR / f"data_evaluation_no_partial_week_{recall_target_tag()}_{mode}"
 
 
 DEFAULT_DATA_DIR = default_data_dir(os.environ.get("SAMPLE_MODE"))
@@ -70,13 +136,42 @@ DEFAULT_VALIDATION_DIR = default_validation_dir(os.environ.get("SAMPLE_MODE"))
 
 def default_output_dir(sample_mode: str | None = None) -> Path:
     mode = normalize_sample_mode(sample_mode or os.environ.get("SAMPLE_MODE"))
-    if mode == SHORT_SAMPLE_MODE:
-        return DEFAULT_OUTPUT_DIR_SHORT
-    if mode == XLONG_SAMPLE_MODE:
-        return DEFAULT_OUTPUT_DIR_XLONG
-    if mode == XXLONG_SAMPLE_MODE:
-        return DEFAULT_OUTPUT_DIR_XXLONG
-    return DEFAULT_OUTPUT_DIR_LONG
+    return PROJECT_DIR / "runs" / f"qwen2.5-0.5b-blackbox-{recall_target_tag()}-{mode}-lora"
+
+
+DEFAULT_OUTPUT_DIR = default_output_dir(os.environ.get("SAMPLE_MODE"))
+
+
+def _looks_like_local_model_path(value: str) -> bool:
+    text = value.strip()
+    return (
+        text.startswith("/")
+        or text.startswith("./")
+        or text.startswith("../")
+        or text.startswith("~")
+        or (len(text) >= 3 and text[1:3] == ":\\")
+    )
+
+
+def resolve_pretrained_source(base_model: str) -> str:
+    """Return a validated local model path or a HuggingFace repo id."""
+    if _looks_like_local_model_path(base_model):
+        model_path = Path(base_model).expanduser()
+        if not model_path.exists():
+            raise FileNotFoundError(
+                f"BASE_MODEL points to a local path that does not exist: {model_path}\n"
+                "Set BASE_MODEL to an existing HuggingFace-format model directory, "
+                "or set BASE_MODEL=Qwen/Qwen2.5-0.5B-Instruct with HF_LOCAL_FILES_ONLY=0 when network access is available."
+            )
+        if not (model_path / "config.json").exists():
+            sample_files = ", ".join(sorted(path.name for path in model_path.iterdir())[:12]) if model_path.is_dir() else "<not a directory>"
+            raise FileNotFoundError(
+                f"BASE_MODEL directory is not a HuggingFace-format model directory because config.json is missing: {model_path}\n"
+                f"Found files: {sample_files}\n"
+                "Use the directory that contains config.json, tokenizer files, and model safetensors."
+            )
+        return str(model_path)
+    return base_model
 
 
 

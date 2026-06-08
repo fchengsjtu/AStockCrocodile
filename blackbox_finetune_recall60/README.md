@@ -14,8 +14,9 @@ This target writes to its own output directory and uses its own training seed, s
 - For Monday-Thursday anchor dates, the current week is represented by a temporary in-memory weekly K-line aggregated from Monday through the anchor date. This temporary K-line is used only for model input and is not written to MySQL.
 - Training period: `20110101-20241231`.
 - Validation period: `20260101-20260430`.
-- Target metric: positive recall, meaning the correctness rate when the sample is actually positive.
-- Required target: `positive_recall >= 60%`.
+- Target metric: `precision@{PRECISION_TOP_K}`, meaning the positive hit rate among the model's top-k ranked validation samples.
+- Required target: `precision@20 >= 30%` by default, configurable through `PRECISION_TOP_K` and `PRECISION_THRESHOLD`.
+- Evaluation results are stored per target, for example `runs/qwen2.5-0.5b-blackbox-recall60-long-lora/evaluations/top20_precision030/evaluation.json`.
 
 ## One-Click Run
 
@@ -47,7 +48,7 @@ cd D:\Documents\StockInfoCrawler
 powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall60\scripts\one_click_deploy.ps1 full
 ```
 
-The one-click scripts reuse existing `train.jsonl` and `test.jsonl` files in `blackbox_finetune_recall60/data_partial_week` and `blackbox_finetune_recall60/data_validation_partial_week`. After the first full dataset build, later full runs skip the expensive sample materialization step and go straight to training/evaluation.
+The one-click scripts reuse existing `train.jsonl` and `test.jsonl` files in `blackbox_finetune_recall60/data_no_partial_week_recall60_long` and `blackbox_finetune_recall60/data_evaluation_no_partial_week_recall60_long`. After the first full dataset build, later full runs skip the expensive sample materialization step and go straight to training/evaluation.
 
 Force a full dataset rebuild:
 
@@ -65,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall60\scripts\on
 Remove-Item Env:\REBUILD_VALIDATION_DATASET
 ```
 
-Training also caches tokenized samples under `blackbox_finetune_recall60/data_partial_week/tokenized`. If `train.jsonl`, `BASE_MODEL`, and `MAX_SEQ_LENGTH` are unchanged, later training runs load the tokenized cache and skip the slow tokenization pass.
+Training also caches tokenized samples under `blackbox_finetune_recall60/data_no_partial_week_recall60_long/tokenized`. If `train.jsonl`, `BASE_MODEL`, and `MAX_SEQ_LENGTH` are unchanged, later training runs load the tokenized cache and skip the slow tokenization pass.
 
 Force tokenization rebuild:
 
@@ -75,7 +76,28 @@ powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall60\scripts\on
 Remove-Item Env:\REBUILD_TOKEN_CACHE
 ```
 
-Training automatically resumes from the latest `blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-lora/checkpoints/update-*` checkpoint. The log should show `resuming adapter from ...` and `start_update=N`. Disable automatic resume only when you intentionally want to restart from the base model:
+Training automatically resumes from the latest `blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-long-lora/checkpoints/update-*` checkpoint. `CHECKPOINT_EVERY` is the only in-training evaluation cadence: when a checkpoint is saved, training also immediately runs evaluation and writes a JSON file with `trigger=checkpoint` under the configured evaluation directory. If `EVAL_MAX_SAMPLES` is greater than 0, that checkpoint evaluation randomly samples that many rows from `test.jsonl` with a deterministic seed based on the checkpoint update. The old `EVAL_EVERY_EPOCH_FRACTION` setting is ignored. The log should show `resuming adapter from ...` and `start_update=N`. Disable automatic resume only when you intentionally want to restart from the base model:
+
+WSL/Linux defaults to `ON_THE_FLY_TOKENIZE=1`, so training tokenizes each batch on demand instead of loading the large `tokenized/*.pkl` cache into RAM. This avoids Linux `Killed` exits when the tokenized cache is larger than available memory. Set `ON_THE_FLY_TOKENIZE=0` only when RAM is ample and you prefer faster cached token loading.
+
+## Hard Negative Mining
+
+Hard negative mining is optional and is off by default. When enabled, every checkpoint first runs the normal validation evaluation, then scores active negative training samples with the current model. The highest-scoring negatives are kept as hard negatives, and the remaining negative slots are refilled from the training negative pool. Positive samples and the validation set are never refreshed.
+
+Recommended WSL/Linux settings:
+
+```bash
+export HARD_NEGATIVE_MINING=1
+export HARD_NEGATIVE_KEEP_RATIO=0.20
+export HARD_NEGATIVE_REFRESH_RATIO=0.80
+export HARD_NEGATIVE_SCORE_MAX_SAMPLES=0
+export NEGATIVE_RATIO=9
+bash blackbox_finetune_recall60/scripts/one_click_deploy.sh full
+```
+
+`NEGATIVE_RATIO=9` builds nine negative samples for each positive sample. At each checkpoint, hard negative mining scores active negatives and keeps the highest-scoring examples. `HARD_NEGATIVE_SCORE_MAX_SAMPLES=0` scores all active negatives at each checkpoint, but it can be very slow. Keep `ON_THE_FLY_TOKENIZE=1` when hard negative mining is enabled.
+
+After each hard-negative refresh, the active negative pool is saved beside the checkpoint as `active_negative_rows.jsonl`. When training resumes from that checkpoint, the trainer restores this saved pool before continuing. If the dataset was rebuilt and some saved rows no longer exist in the current candidate pool, those rows are ignored and the trainer falls back to valid rows only.
 
 ```powershell
 $env:NO_AUTO_RESUME='1'
@@ -97,7 +119,7 @@ For a more conservative resume:
 
 ```powershell
 $env:LEARNING_RATE='5e-6'
-$env:RESUME_ADAPTER_DIR='blackbox_finetune_recall60\runs\qwen2.5-0.5b-blackbox-recall60-lora\checkpoints\update-012000'
+$env:RESUME_ADAPTER_DIR='blackbox_finetune_recall60\runs\qwen2.5-0.5b-blackbox-recall60-long-lora\checkpoints\update-012000'
 powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall60\scripts\one_click_deploy.ps1 full
 Remove-Item Env:\LEARNING_RATE
 Remove-Item Env:\RESUME_ADAPTER_DIR
@@ -119,7 +141,7 @@ python -m blackbox_finetune_recall60.build_dataset `
   --start-date 20110101 `
   --end-date 20241231 `
   --negative-ratio 1.0 `
-  --output-dir blackbox_finetune_recall60/data_partial_week `
+  --output-dir blackbox_finetune_recall60/data_no_partial_week_recall60_long `
   --daily-window 55 `
   --weekly-window 55 `
   --batch-size 80
@@ -132,7 +154,7 @@ python -m blackbox_finetune_recall60.build_validation_dataset `
   --start-date 20260101 `
   --end-date 20260430 `
   --negative-ratio 1.0 `
-  --output-dir blackbox_finetune_recall60/data_validation_partial_week `
+  --output-dir blackbox_finetune_recall60/data_evaluation_no_partial_week_recall60_long `
   --daily-window 55 `
   --weekly-window 55 `
   --batch-size 80
@@ -143,8 +165,8 @@ Train on WSL2/Linux with QLoRA:
 ```bash
 python -m blackbox_finetune_recall60.train \
   --base-model Qwen/Qwen2.5-0.5B-Instruct \
-  --data-dir blackbox_finetune_recall60/data_partial_week \
-  --output-dir blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-lora \
+  --data-dir blackbox_finetune_recall60/data_no_partial_week_recall60_long \
+  --output-dir blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-long-lora \
   --max-seq-length 2048 \
   --epochs 1 \
   --batch-size 1 \
@@ -158,8 +180,8 @@ Train on native Windows with 4-bit loading disabled:
 ```powershell
 python -m blackbox_finetune_recall60.train `
   --base-model Qwen/Qwen2.5-0.5B-Instruct `
-  --data-dir blackbox_finetune_recall60/data_partial_week `
-  --output-dir blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-lora `
+  --data-dir blackbox_finetune_recall60/data_no_partial_week_recall60_long `
+  --output-dir blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-long-lora `
   --max-seq-length 2048 `
   --epochs 1 `
   --batch-size 1 `
@@ -171,17 +193,19 @@ python -m blackbox_finetune_recall60.train `
 
 Training, evaluation, and prediction now bind CUDA device `0` by default and verify that the visible CUDA device name contains `RTX3060` or `RTX 3060`. Set `CUDA_DEVICE=0` before the one-click scripts if the RTX3060 is not the first GPU. For non-RTX3060 development machines, add `--allow-non-rtx3060` to the manual Python commands.
 
-If native Windows reports `os error 1455` or `页面文件太小，无法完成操作` while loading Qwen, increase the Windows page file size or run the full training in WSL2/Linux. The dataset and validation builders are lightweight, but model loading can still require several GB of RAM plus page file space even for Qwen2.5-0.5B.
+If native Windows reports `os error 1455` or `妞ょ敻娼伴弬鍥︽婢额亜鐨敍灞炬￥濞夋洖鐣幋鎰惙娴ｆ竴 while loading Qwen, increase the Windows page file size or run the full training in WSL2/Linux. The dataset and validation builders are lightweight, but model loading can still require several GB of RAM plus page file space even for Qwen2.5-0.5B.
 
-Evaluate and enforce the `60%` positive-recall target:
+Evaluate and enforce the configurable precision target:
 
 ```powershell
 python -m blackbox_finetune_recall60.evaluate `
   --base-model Qwen/Qwen2.5-0.5B-Instruct `
-  --adapter-dir blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-lora/adapter `
-  --data-dir blackbox_finetune_recall60/data_validation_partial_week `
+  --adapter-dir blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-long-lora/adapter `
+  --data-dir blackbox_finetune_recall60/data_evaluation_no_partial_week_recall60_long `
   --threshold 0.50 `
-  --min-positive-recall 0.60 `
+  --precision-top-k 20 `
+  --precision-threshold 0.30 `
+  --output-dir blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-long-lora/evaluations/top20_precision030 `
   --max-seq-length 512 `
   --cuda-device 0
 ```
@@ -191,7 +215,7 @@ Predict all stocks for one trading day:
 ```powershell
 python -m blackbox_finetune_recall60.predict_day `
   --date 20260514 `
-  --adapter-dir blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-lora/adapter `
+  --adapter-dir blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-recall60-long-lora/adapter `
   --threshold 0.50 `
   --max-seq-length 512 `
   --cuda-device 0 `
@@ -202,6 +226,6 @@ python -m blackbox_finetune_recall60.predict_day `
 ## Tests
 
 ```powershell
-python -m unittest tests.test_blackbox_finetune_recall_targets -v
+python -m unittest tests.test_blackbox_finetune_recall60 -v
 python -m unittest discover -s tests -v
 ```
