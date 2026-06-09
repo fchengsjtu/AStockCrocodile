@@ -91,11 +91,11 @@ export HARD_NEGATIVE_MINING=1
 export HARD_NEGATIVE_KEEP_RATIO=0.20
 export HARD_NEGATIVE_REFRESH_RATIO=0.80
 export HARD_NEGATIVE_SCORE_MAX_SAMPLES=0
-export NEGATIVE_RATIO=9
+export NEGATIVE_RATIO=49
 bash blackbox_finetune_recall60/scripts/one_click_deploy.sh full
 ```
 
-`NEGATIVE_RATIO=9` builds nine negative samples for each positive sample. At each checkpoint, hard negative mining scores active negatives and keeps the highest-scoring examples. `HARD_NEGATIVE_SCORE_MAX_SAMPLES=0` scores all active negatives at each checkpoint, but it can be very slow. Keep `ON_THE_FLY_TOKENIZE=1` when hard negative mining is enabled.
+`NEGATIVE_RATIO=49` builds 49 negative samples for each positive sample, so positive samples account for about 2% of the combined dataset. At each checkpoint, hard negative mining scores active negatives and keeps the highest-scoring examples. `HARD_NEGATIVE_SCORE_MAX_SAMPLES=0` scores all active negatives at each checkpoint, but it can be very slow. Keep `ON_THE_FLY_TOKENIZE=1` when hard negative mining is enabled.
 
 After each hard-negative refresh, the active negative pool is saved beside the checkpoint as `active_negative_rows.jsonl`. When training resumes from that checkpoint, the trainer restores this saved pool before continuing. If the dataset was rebuilt and some saved rows no longer exist in the current candidate pool, those rows are ignored and the trainer falls back to valid rows only.
 
@@ -131,6 +131,21 @@ WSL2/Linux full run:
 cd /mnt/d/Documents/StockInfoCrawler
 bash blackbox_finetune_recall60/scripts/one_click_deploy.sh full
 ```
+
+### Use Existing Dataset Files
+
+By default, the deployment script builds or reuses datasets under `DATA_DIR` and `VALIDATION_DATA_DIR`. To bypass dataset generation and use three existing JSONL files, set all three variables together:
+
+```bash
+export TRAIN_DATASET_PATH=/path/to/train.jsonl
+export TEST_DATASET_PATH=/path/to/test.jsonl
+export VALIDATION_DATASET_PATH=/path/to/validation.jsonl
+bash "$BLACKBOX_RECALL_DIR/scripts/one_click_deploy.sh" full
+```
+
+Windows paths such as `D:\Models\dataset\train.jsonl` are accepted when the script runs inside WSL. The script creates lightweight symbolic links under `$OUTPUT_DIR/input_datasets`; it does not copy or modify the source files. `EXPLICIT_DATASET_WORK_DIR` can override that runtime link directory.
+
+The three variables must be supplied together. If none is set, the original database sampling, dataset cache, and rebuild behavior remains unchanged.
 
 ## Manual Commands
 

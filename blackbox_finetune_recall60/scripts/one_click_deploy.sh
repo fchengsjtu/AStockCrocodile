@@ -15,6 +15,51 @@ dataset_ready() {
   [[ -f "$1/train.jsonl" && -f "$1/test.jsonl" ]]
 }
 
+normalize_dataset_path() {
+  local path="$1"
+  if [[ "$path" == [A-Za-z]:\\* ]] && command -v wslpath >/dev/null 2>&1; then
+    path="$(wslpath -u "$path")"
+  elif [[ "$path" != /* ]]; then
+    path="$ROOT_DIR/$path"
+  fi
+  printf '%s\n' "$path"
+}
+
+prepare_explicit_datasets() {
+  local configured=0
+  local value
+  for value in "$TRAIN_DATASET_PATH" "$TEST_DATASET_PATH" "$VALIDATION_DATASET_PATH"; do
+    [[ -n "$value" ]] && configured=$((configured + 1))
+  done
+  if [[ "$configured" == "0" ]]; then
+    return 0
+  fi
+  if [[ "$configured" != "3" ]]; then
+    echo "TRAIN_DATASET_PATH, TEST_DATASET_PATH, and VALIDATION_DATASET_PATH must be set together." >&2
+    exit 2
+  fi
+
+  TRAIN_DATASET_PATH="$(normalize_dataset_path "$TRAIN_DATASET_PATH")"
+  TEST_DATASET_PATH="$(normalize_dataset_path "$TEST_DATASET_PATH")"
+  VALIDATION_DATASET_PATH="$(normalize_dataset_path "$VALIDATION_DATASET_PATH")"
+  EXPLICIT_DATASET_WORK_DIR="$(normalize_dataset_path "$EXPLICIT_DATASET_WORK_DIR")"
+  for value in "$TRAIN_DATASET_PATH" "$TEST_DATASET_PATH" "$VALIDATION_DATASET_PATH"; do
+    if [[ ! -f "$value" ]]; then
+      echo "Explicit dataset file does not exist: $value" >&2
+      exit 2
+    fi
+  done
+
+  DATA_DIR="$EXPLICIT_DATASET_WORK_DIR/training"
+  VALIDATION_DATA_DIR="$EXPLICIT_DATASET_WORK_DIR/validation"
+  mkdir -p "$DATA_DIR" "$VALIDATION_DATA_DIR"
+  ln -sfn "$TRAIN_DATASET_PATH" "$DATA_DIR/train.jsonl"
+  ln -sfn "$TEST_DATASET_PATH" "$DATA_DIR/test.jsonl"
+  ln -sfn "$VALIDATION_DATASET_PATH" "$VALIDATION_DATA_DIR/test.jsonl"
+  EXPLICIT_DATASETS_ENABLED=1
+  return 0
+}
+
 recall_target_value() {
   python - "$1" <<'PY'
 import sys
@@ -123,7 +168,7 @@ if [[ -n "$INITIAL_ADAPTER_DIR" && "$INITIAL_ADAPTER_DIR" == *\\* ]] && command 
   INITIAL_ADAPTER_DIR="$(wslpath -u "$INITIAL_ADAPTER_DIR")"
 fi
 SAMPLE_MODE="${SAMPLE_MODE:-xlong}"
-NEGATIVE_RATIO="${NEGATIVE_RATIO:-9.0}"
+NEGATIVE_RATIO="${NEGATIVE_RATIO:-49.0}"
 NEGATIVE_TAG="$(python - "$NEGATIVE_RATIO" <<'PY'
 import sys
 value = float(sys.argv[1])
@@ -137,6 +182,12 @@ DATA_DIR="${DATA_DIR:-$DEFAULT_DATA_DIR}"
 VALIDATION_DATA_DIR="${VALIDATION_DATA_DIR:-$DEFAULT_VALIDATION_DATA_DIR}"
 DEFAULT_OUTPUT_DIR="blackbox_finetune_recall60/runs/qwen2.5-0.5b-blackbox-${MODEL_TAG}-${SAMPLE_MODE}-lora"
 OUTPUT_DIR="${OUTPUT_DIR:-$DEFAULT_OUTPUT_DIR}"
+TRAIN_DATASET_PATH="${TRAIN_DATASET_PATH:-}"
+TEST_DATASET_PATH="${TEST_DATASET_PATH:-}"
+VALIDATION_DATASET_PATH="${VALIDATION_DATASET_PATH:-}"
+EXPLICIT_DATASET_WORK_DIR="${EXPLICIT_DATASET_WORK_DIR:-$OUTPUT_DIR/input_datasets}"
+EXPLICIT_DATASETS_ENABLED=0
+prepare_explicit_datasets
 if [[ "$SAMPLE_MODE" == "short" ]]; then
   DEFAULT_MAX_SEQ_LENGTH=1024
   DEFAULT_CHECKPOINT_EVERY=100
@@ -189,7 +240,7 @@ if [[ "$MODE" == "smoke" ]]; then
   VALIDATION_START="${VALIDATION_START_DATE:-${TEST_START_DATE:-$DEFAULT_VALIDATION_START}}"
   VALIDATION_END="${VALIDATION_END_DATE:-${TEST_END_DATE:-$DEFAULT_VALIDATION_END}}"
   POS_LIMIT="${SMOKE_POSITIVE_LIMIT:-12}"
-  EPOCHS="${EPOCHS:-3}"
+  EPOCHS="${EPOCHS:-0.3}"
   MAX_SEQ_LENGTH="${MAX_SEQ_LENGTH:-$DEFAULT_MAX_SEQ_LENGTH}"
   GRAD_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
 else
@@ -222,6 +273,11 @@ Project blackbox environment:
   VALIDATION_END=$VALIDATION_END
   DATA_DIR=$DATA_DIR
   VALIDATION_DATA_DIR=$VALIDATION_DATA_DIR
+  TRAIN_DATASET_PATH=${TRAIN_DATASET_PATH:-<unset>}
+  TEST_DATASET_PATH=${TEST_DATASET_PATH:-<unset>}
+  VALIDATION_DATASET_PATH=${VALIDATION_DATASET_PATH:-<unset>}
+  EXPLICIT_DATASET_WORK_DIR=$EXPLICIT_DATASET_WORK_DIR
+  EXPLICIT_DATASETS_ENABLED=$EXPLICIT_DATASETS_ENABLED
   OUTPUT_DIR=$OUTPUT_DIR
   MAX_SEQ_LENGTH=$MAX_SEQ_LENGTH
   EPOCHS=$EPOCHS
@@ -257,8 +313,12 @@ fi
 TRAIN_DATASET_SIGNATURE="kind=training;start=$TRAIN_START;end=$TRAIN_END;negative_ratio=$NEGATIVE_RATIO;sample_mode=$SAMPLE_MODE;positive_limit=${POS_LIMIT:-all};seed=$TRAIN_SEED"
 VALIDATION_DATASET_SIGNATURE="kind=validation;start=$VALIDATION_START;end=$VALIDATION_END;negative_ratio=$NEGATIVE_RATIO;sample_mode=$SAMPLE_MODE;positive_limit=${POS_LIMIT:-all};seed=$TRAIN_SEED"
 DATASET_REBUILT=0
-run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" "$TRAIN_DATASET_SIGNATURE" python -m blackbox_finetune_recall60.build_dataset "${BUILD_ARGS[@]}"
-run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" "$VALIDATION_DATASET_SIGNATURE" python -m blackbox_finetune_recall60.build_validation_dataset "${VAL_ARGS[@]}"
+if [[ "$EXPLICIT_DATASETS_ENABLED" == "1" ]]; then
+  echo "Using explicit train, test, and validation dataset files; dataset generation is skipped."
+else
+  run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" "$TRAIN_DATASET_SIGNATURE" python -m blackbox_finetune_recall60.build_dataset "${BUILD_ARGS[@]}"
+  run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" "$VALIDATION_DATASET_SIGNATURE" python -m blackbox_finetune_recall60.build_validation_dataset "${VAL_ARGS[@]}"
+fi
 if [[ "$DATASET_REBUILT" == "1" && -z "$RESUME_ADAPTER_DIR" ]]; then
   NO_AUTO_RESUME=1
   echo "Dataset was rebuilt; automatic checkpoint resume is disabled for this run."
