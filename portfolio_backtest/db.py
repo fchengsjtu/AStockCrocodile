@@ -157,6 +157,7 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
                 Price DECIMAL(18,6) NOT NULL,
                 GrossAmount DECIMAL(24,6) NOT NULL,
                 Fee DECIMAL(24,6) NOT NULL,
+                StampDuty DECIMAL(24,6) NOT NULL DEFAULT 0,
                 NetAmount DECIMAL(24,6) NOT NULL,
                 Reason VARCHAR(128) NOT NULL,
                 SelectionRule VARCHAR(512) NULL,
@@ -172,6 +173,7 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
         ensure_trade_rule_column(cur, HOLDING_TABLE, "StrategyName")
         ensure_trade_rule_column(cur, TRADE_TABLE, "StrategyName")
         ensure_actual_profit_column(cur)
+        ensure_stamp_duty_column(cur)
         ensure_unique_index(
             cur,
             DAILY_TABLE,
@@ -204,6 +206,16 @@ def ensure_actual_profit_column(cur) -> None:
             f"ALTER TABLE {DAILY_TABLE} "
             "ADD COLUMN ActualProfit DECIMAL(24,6) NOT NULL DEFAULT 0 "
             "AFTER CashAmount"
+        )
+
+
+def ensure_stamp_duty_column(cur) -> None:
+    cur.execute(f"SHOW COLUMNS FROM {TRADE_TABLE} LIKE 'StampDuty'")
+    if cur.fetchone() is None:
+        cur.execute(
+            f"ALTER TABLE {TRADE_TABLE} "
+            "ADD COLUMN StampDuty DECIMAL(24,6) NOT NULL DEFAULT 0 "
+            "AFTER Fee"
         )
 
 
@@ -308,6 +320,7 @@ def save_results(conn: pymysql.connections.Connection, daily: pd.DataFrame, hold
                 "Price",
                 "GrossAmount",
                 "Fee",
+                "StampDuty",
                 "NetAmount",
                 "Reason",
                 "SelectionRule",

@@ -114,6 +114,7 @@ def trade_record(
     shares: int,
     price: float,
     fee: float,
+    stamp_duty: float,
     reason: str,
 ) -> dict:
     gross = shares * price
@@ -130,6 +131,7 @@ def trade_record(
         "Price": price,
         "GrossAmount": gross,
         "Fee": fee,
+        "StampDuty": stamp_duty,
         "NetAmount": gross + fee if side == "BUY" else gross - fee,
         "Reason": reason,
         "SelectionRule": config.selection_rule,
@@ -148,10 +150,12 @@ def sell_position(
     shares = min(shares, position.shares)
     price = round_cent(price)
     gross = shares * price
-    fee = round_cent(gross * config.fee_rate)
+    commission = round_cent(gross * config.fee_rate)
+    stamp_duty = round_cent(gross * config.stamp_duty_rate)
+    fee = commission + stamp_duty
     position.shares -= shares
     cash_delta = gross - fee
-    record = trade_record(config, trade_date, position, "SELL", shares, price, fee, reason)
+    record = trade_record(config, trade_date, position, "SELL", shares, price, fee, stamp_duty, reason)
     return cash_delta, fee, record
 
 
@@ -332,7 +336,19 @@ def simulate_portfolio(
                     reason=getattr(signal, "Reason", None),
                 )
                 positions.append(position)
-                trades.append(trade_record(config, trade_date, position, "BUY", shares, price, fee, "next_day_average_entry"))
+                trades.append(
+                    trade_record(
+                        config,
+                        trade_date,
+                        position,
+                        "BUY",
+                        shares,
+                        price,
+                        fee,
+                        0.0,
+                        "next_day_average_entry",
+                    )
+                )
 
         snapshot, holding_rows = build_snapshot(
             config,

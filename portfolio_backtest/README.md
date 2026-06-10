@@ -9,7 +9,8 @@ Rules:
 - Initial cash: `1000000`.
 - For stocks selected on day T, buy on the next trading day using that day's weighted average price.
 - Each buy targets `100000` cash and rounds shares to the nearest 100-share lot.
-- Fee rate is `0.0002` (0.02%, two basis points) for both buys and sells.
+- Commission rate is `0.0002` (0.02%, two basis points) for both buys and sells.
+- Stamp duty is `0.0005` (0.05%, five basis points) of gross sell amount and is charged only on sells.
 - A position bought on day B can only be sold from the next trading day because of T+1.
 - During the first three sellable trading days, stop loss at `cost * 0.97`.
 - Take profit half at `cost * 1.10`, then sell the rest at `cost * 1.20`.
@@ -81,6 +82,7 @@ python -m portfolio_backtest.run `
   --initial-cash 1000000 `
   --buy-budget 100000 `
   --fee-rate 0.0002 `
+  --stamp-duty-rate 0.0005 `
   --random-seed 20260519
 ```
 

@@ -19,6 +19,7 @@ from .common import (
     DEFAULT_FEE_RATE,
     DEFAULT_INITIAL_CASH,
     DEFAULT_RANDOM_SEED,
+    DEFAULT_STAMP_DUTY_RATE,
     PortfolioBacktestConfig,
     exit_rule_text,
     filter_selection_candidates,
@@ -50,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--initial-cash", type=float, default=DEFAULT_INITIAL_CASH)
     parser.add_argument("--buy-budget", type=float, default=DEFAULT_BUY_BUDGET)
     parser.add_argument("--fee-rate", type=float, default=DEFAULT_FEE_RATE)
+    parser.add_argument("--stamp-duty-rate", type=float, default=DEFAULT_STAMP_DUTY_RATE)
     parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
     parser.add_argument("--backtest-name", default=DEFAULT_TRACK_NAME)
     parser.add_argument("--stop-loss-pct", type=float, default=0.03)
@@ -88,6 +90,7 @@ def run_tracker(args) -> tuple[int, int, int]:
             initial_cash=args.initial_cash,
             buy_budget=args.buy_budget,
             fee_rate=args.fee_rate,
+            stamp_duty_rate=args.stamp_duty_rate,
             random_seed=args.random_seed,
             backtest_name=args.backtest_name,
             trade_rule_name=trade_rule_name,

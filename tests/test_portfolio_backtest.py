@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from portfolio_backtest.common import BLACKBOX_STRATEGIES, DEFAULT_FEE_RATE, STOP_LOSS_RULE_NAMES, STOP_LOSS_SERIES, PortfolioBacktestConfig, buy_shares_for_budget, filter_selection_candidates, is_special_treatment_stock_name, round_cent, stop_loss_pct_from_rule_name, stop_loss_rule_name, weighted_average_price
+from portfolio_backtest.common import BLACKBOX_STRATEGIES, DEFAULT_FEE_RATE, DEFAULT_STAMP_DUTY_RATE, STOP_LOSS_RULE_NAMES, STOP_LOSS_SERIES, PortfolioBacktestConfig, buy_shares_for_budget, filter_selection_candidates, is_special_treatment_stock_name, round_cent, stop_loss_pct_from_rule_name, stop_loss_rule_name, weighted_average_price
 from portfolio_backtest import db as portfolio_db
 from portfolio_backtest import pool_run
 from portfolio_backtest import run as portfolio_run
@@ -19,6 +19,14 @@ class PortfolioBacktestTests(unittest.TestCase):
             ["--pool-strategy-name", "blackbox_finetune_recall60"]
         )
         self.assertEqual(pool_args.fee_rate, 0.0002)
+
+    def test_default_stamp_duty_is_five_basis_points_on_sells(self):
+        self.assertEqual(DEFAULT_STAMP_DUTY_RATE, 0.0005)
+        self.assertEqual(portfolio_run.build_parser().parse_args([]).stamp_duty_rate, 0.0005)
+        pool_args = pool_run.build_parser().parse_args(
+            ["--pool-strategy-name", "blackbox_finetune_recall60"]
+        )
+        self.assertEqual(pool_args.stamp_duty_rate, 0.0005)
 
     def test_special_treatment_names_are_excluded(self):
         self.assertTrue(is_special_treatment_stock_name("*ST示例"))
@@ -222,7 +230,10 @@ class PortfolioBacktestTests(unittest.TestCase):
         self.assertEqual(sell.TradeDate, date(2026, 1, 3))
         self.assertEqual(sell.Reason, "take_profit_10pct_half")
         self.assertAlmostEqual(buy.Fee, buy.GrossAmount * 0.0002)
-        self.assertAlmostEqual(sell.Fee, sell.GrossAmount * 0.0002)
+        self.assertEqual(buy.StampDuty, 0.0)
+        self.assertAlmostEqual(sell.StampDuty, sell.GrossAmount * 0.0005)
+        self.assertAlmostEqual(sell.Fee, sell.GrossAmount * 0.0007)
+        self.assertAlmostEqual(sell.NetAmount, sell.GrossAmount - sell.Fee)
         self.assertGreater(len(holdings), 0)
         self.assertIn("TradingFee", snapshots.columns)
         self.assertIn("ActualProfit", snapshots.columns)
