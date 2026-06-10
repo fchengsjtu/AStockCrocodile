@@ -12,7 +12,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from .common import BLACKBOX_STRATEGIES, PortfolioBacktestConfig
+from .common import (
+    BLACKBOX_STRATEGIES,
+    PortfolioBacktestConfig,
+    filter_selection_candidates,
+    is_special_treatment_stock_name,
+)
 
 
 @dataclass(frozen=True)
@@ -26,7 +31,7 @@ class BlackboxModules:
 def package_from_strategy(strategy_name: str) -> str:
     if strategy_name not in BLACKBOX_STRATEGIES:
         raise ValueError(f"unsupported blackbox strategy: {strategy_name}")
-    return strategy_name
+    return "blackbox_finetune_recall60"
 
 
 def load_modules(strategy_name: str) -> BlackboxModules:
@@ -95,7 +100,7 @@ def close_from_daily_window(daily: list[dict]) -> float | None:
         return None
 
 
-def build_blackbox_signals(conn, config: PortfolioBacktestConfig) -> pd.DataFrame:
+def load_blackbox_model(config: PortfolioBacktestConfig):
     modules = load_modules(config.strategy_name)
     try:
         modules.gpu.prepare_rtx3060(config.blackbox_cuda_device, require_device=not config.blackbox_allow_non_rtx3060)
@@ -108,33 +113,58 @@ def build_blackbox_signals(conn, config: PortfolioBacktestConfig) -> pd.DataFram
                 f"and the blackbox requirements into the active environment."
             ) from exc
         raise
-    output_dir = modules.common.default_output_dir() if hasattr(modules.common, "default_output_dir") else modules.common.DEFAULT_OUTPUT_DIR
-    adapter_dir = output_dir / "adapter"
+    if config.blackbox_adapter_dir:
+        adapter_dir = Path(config.blackbox_adapter_dir)
+        if not (adapter_dir / "adapter_config.json").exists() and (adapter_dir / "adapter" / "adapter_config.json").exists():
+            adapter_dir = adapter_dir / "adapter"
+    else:
+        output_dir = modules.common.default_output_dir() if hasattr(modules.common, "default_output_dir") else modules.common.DEFAULT_OUTPUT_DIR
+        adapter_dir = output_dir / "adapter"
+    if not (adapter_dir / "adapter_config.json").exists():
+        raise RuntimeError(f"blackbox adapter_config.json not found in {adapter_dir}")
     model, tokenizer = modules.inference.load_model(modules.common.DEFAULT_BASE_MODEL, adapter_dir)
+    return modules, model, tokenizer
 
+
+def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
+    modules, model, tokenizer = load_blackbox_model(config)
     trade_dates = load_trade_dates(conn, config.start_date, config.end_date, config.ktype)
-    rows = []
+    selected_history = []
     for trade_date in trade_dates:
+        rows = []
         symbols = load_symbols_for_date(conn, trade_date, config.ktype)
         names = load_stock_names(conn, symbols)
-        lookback_start = trade_date - timedelta(days=max(500, config.blackbox_weekly_window * 10, config.blackbox_daily_window * 4))
+        lookback_start = trade_date - timedelta(days=max(750, config.blackbox_monthly_window * 45, config.blackbox_weekly_window * 14, config.blackbox_daily_window * 5))
         batches = list(modules.common.iter_batches(symbols, config.batch_size))
         print(f"{config.strategy_name} predict date={trade_date} symbols={len(symbols)} batches={len(batches)}", flush=True)
         selected_count = 0
         for batch_index, batch in enumerate(batches, start=1):
             daily_map = modules.common.load_kline_map(conn, "dkandles", "D", batch, lookback_start, trade_date)
             weekly_map = modules.common.load_kline_map(conn, "wkandles", "W", batch, lookback_start, trade_date)
+            monthly_map = (
+                modules.common.load_kline_map(conn, "mkandles", "M", batch, lookback_start, trade_date)
+                if config.blackbox_monthly_window > 0
+                else {}
+            )
             batch_selected = 0
             for scode in batch:
+                if is_special_treatment_stock_name(names.get(scode)):
+                    continue
                 daily = modules.common.pick_window(daily_map.get(scode, []), trade_date, config.blackbox_daily_window)
                 if hasattr(modules.common, "pick_weekly_window"):
                     weekly = modules.common.pick_weekly_window(weekly_map.get(scode, []), daily_map.get(scode, []), trade_date, config.blackbox_weekly_window)
                 else:
                     weekly = modules.common.pick_window(weekly_map.get(scode, []), trade_date, config.blackbox_weekly_window)
-                if daily is None or weekly is None:
+                if hasattr(modules.common, "pick_monthly_window"):
+                    monthly = modules.common.pick_monthly_window(monthly_map.get(scode, []), trade_date, config.blackbox_monthly_window)
+                else:
+                    monthly = modules.common.pick_window(monthly_map.get(scode, []), trade_date, config.blackbox_monthly_window) if config.blackbox_monthly_window > 0 else []
+                if daily is None or weekly is None or monthly is None:
+                    continue
+                if hasattr(modules.common, "_sample_windows_are_valid") and not modules.common._sample_windows_are_valid(config.blackbox_sample_mode, weekly, monthly, daily):
                     continue
                 prompt = tokenizer.apply_chat_template(
-                    modules.common.build_messages(scode, trade_date, daily, weekly),
+                    modules.common.build_messages(scode, trade_date, daily, weekly, monthly, sample_mode=config.blackbox_sample_mode),
                     tokenize=False,
                     add_generation_prompt=True,
                 )
@@ -160,11 +190,27 @@ def build_blackbox_signals(conn, config: PortfolioBacktestConfig) -> pd.DataFram
                 selected_count += 1
             print(f"{config.strategy_name} batch {batch_index}/{len(batches)} selected={batch_selected}", flush=True)
         print(f"{config.strategy_name} date={trade_date} selected={selected_count}", flush=True)
+        result = pd.DataFrame(rows, columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])
+        if not result.empty:
+            candidate_history = pd.DataFrame(
+                [*selected_history, *result.to_dict("records")],
+                columns=result.columns,
+            )
+            filtered_history = filter_selection_candidates(
+                candidate_history,
+                trade_dates,
+                cooldown_trading_days=config.selection_cooldown_trading_days,
+                limit_per_day=config.limit_per_day,
+            )
+            result = filtered_history[filtered_history["TradeDate"] == trade_date].copy()
+            selected_history = filtered_history.to_dict("records")
+        yield trade_date, result.reset_index(drop=True)
 
+
+def build_blackbox_signals(conn, config: PortfolioBacktestConfig) -> pd.DataFrame:
+    rows = []
+    for _, frame in iter_blackbox_signal_days(conn, config):
+        if not frame.empty:
+            rows.extend(frame.to_dict("records"))
     result = pd.DataFrame(rows, columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])
-    if result.empty:
-        return result
-    result = result.sort_values(["TradeDate", "Score", "SCode"], ascending=[True, False, True])
-    if config.limit_per_day is not None and config.limit_per_day > 0:
-        result = result.groupby("TradeDate", group_keys=False).head(config.limit_per_day)
-    return result.reset_index(drop=True)
+    return result.reset_index(drop=True) if not result.empty else result

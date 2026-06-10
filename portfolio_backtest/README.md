@@ -9,17 +9,27 @@ Rules:
 - Initial cash: `1000000`.
 - For stocks selected on day T, buy on the next trading day using that day's weighted average price.
 - Each buy targets `100000` cash and rounds shares to the nearest 100-share lot.
-- Fee rate is `0.0005` for both buys and sells.
+- Fee rate is `0.0002` (0.02%, two basis points) for both buys and sells.
 - A position bought on day B can only be sold from the next trading day because of T+1.
 - During the first three sellable trading days, stop loss at `cost * 0.97`.
 - Take profit half at `cost * 1.10`, then sell the rest at `cost * 1.20`.
 - If neither stop loss nor take profit closes the position, sell remaining shares at the third sellable trading day's close.
 - If candidate buys exceed available cash, the program shuffles candidates with a fixed seed and buys until cash is full.
+- Stocks whose names contain `ST` or `PT` are excluded before the daily TopN limit is applied.
+- After a stock is selected, it is excluded for the following 13 market trading days.
 
 Run:
 
 ```powershell
 python -m portfolio_backtest.run --strategy-name ma_bullish_v1
+```
+
+Override the selection cooldown when needed:
+
+```powershell
+python -m portfolio_backtest.run `
+  --strategy-name ma_bullish_v1 `
+  --selection-cooldown-trading-days 13
 ```
 
 Weekly volume-drop strategy:
@@ -70,7 +80,7 @@ python -m portfolio_backtest.run `
   --strategy-name ma_bullish_v1 `
   --initial-cash 1000000 `
   --buy-budget 100000 `
-  --fee-rate 0.0005 `
+  --fee-rate 0.0002 `
   --random-seed 20260519
 ```
 

@@ -5,17 +5,87 @@ from datetime import date, timedelta
 import pandas as pd
 import pymysql
 
-from a_share_crawler import mysql_connect, none_if_nan
-from backtest_strategy import BacktestConfig, build_signals_stream, load_backtest_daily_for_symbols, load_symbols
+from llm_finetune.common import mysql_connect
 from stock_selector import STRATEGY_NEWS_HOT, STRATEGY_WEEKLY_VOLUME_DROP
 
 from .blackbox import build_blackbox_signals
-from .common import PortfolioBacktestConfig, is_blackbox_strategy
+from .common import PortfolioBacktestConfig, filter_selection_candidates, is_blackbox_strategy
 
 
 DAILY_TABLE = "portfolio_backtest_daily"
 HOLDING_TABLE = "portfolio_backtest_holdings"
 TRADE_TABLE = "portfolio_backtest_trades"
+
+
+def none_if_nan(value):
+    if pd.isna(value):
+        return None
+    return value
+
+
+def iter_batches(items: list[str], batch_size: int):
+    for index in range(0, len(items), max(1, batch_size)):
+        yield items[index : index + max(1, batch_size)]
+
+
+def normalize_daily_frame(rows) -> pd.DataFrame:
+    columns = ["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume", "MA5", "MA8", "MA13", "MA34", "MA55"]
+    df = pd.DataFrame(rows, columns=columns)
+    if df.empty:
+        return df
+    df["TradeDate"] = pd.to_datetime(df["TradeDate"]).dt.date
+    for column in columns[3:]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    return df
+
+
+def load_daily_for_symbols(
+    conn: pymysql.connections.Connection,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    ktype: str,
+    batch_size: int,
+) -> pd.DataFrame:
+    if not symbols:
+        return normalize_daily_frame([])
+    frames = []
+    for batch in iter_batches(symbols, batch_size):
+        placeholders = ",".join(["%s"] * len(batch))
+        sql = f"""
+            SELECT dk.SCode, si.SName, DATE(dk.KTime) AS TradeDate,
+                   dk.Open, dk.Close, dk.High, dk.Low, dk.Amount, dk.Volume,
+                   dk.MA5, dk.MA8, dk.MA13, dk.MA34, dk.MA55
+            FROM dkandles dk
+            LEFT JOIN stockinfo si ON si.SCode = dk.SCode
+            WHERE dk.KType = %s
+              AND dk.SCode IN ({placeholders})
+              AND dk.KTime >= %s AND dk.KTime < %s
+            ORDER BY dk.SCode, dk.KTime
+        """
+        params = [ktype, *batch, start_date, end_date + timedelta(days=1)]
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        frame = normalize_daily_frame(rows)
+        if not frame.empty:
+            frames.append(frame)
+    if not frames:
+        return normalize_daily_frame([])
+    return pd.concat(frames, ignore_index=True)
+
+
+def load_symbols(conn, table_name: str, ktype: str, start_date: date, end_date: date) -> list[str]:
+    sql = f"""
+        SELECT DISTINCT SCode
+        FROM {table_name}
+        WHERE KType = %s AND KTime >= %s AND KTime < %s
+        ORDER BY SCode
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (ktype, start_date, end_date + timedelta(days=1)))
+        rows = cur.fetchall()
+    return [row[0] for row in rows]
 
 
 def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
@@ -33,6 +103,7 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
                 TotalMarketValue DECIMAL(24,6) NOT NULL,
                 HoldingMarketValue DECIMAL(24,6) NOT NULL,
                 CashAmount DECIMAL(24,6) NOT NULL,
+                ActualProfit DECIMAL(24,6) NOT NULL DEFAULT 0,
                 DailyBuyAmount DECIMAL(24,6) NOT NULL,
                 DailySellAmount DECIMAL(24,6) NOT NULL,
                 TradingFee DECIMAL(24,6) NOT NULL,
@@ -100,6 +171,7 @@ def ensure_portfolio_tables(conn: pymysql.connections.Connection) -> None:
         ensure_trade_rule_column(cur, DAILY_TABLE, "StrategyName")
         ensure_trade_rule_column(cur, HOLDING_TABLE, "StrategyName")
         ensure_trade_rule_column(cur, TRADE_TABLE, "StrategyName")
+        ensure_actual_profit_column(cur)
         ensure_unique_index(
             cur,
             DAILY_TABLE,
@@ -122,6 +194,16 @@ def ensure_trade_rule_column(cur, table: str, after_column: str) -> None:
             f"ALTER TABLE {table} "
             "ADD COLUMN TradeRuleName VARCHAR(128) NOT NULL DEFAULT 'stop_loss_3pct_take_profit_10_20_hold_3d' "
             f"AFTER {after_column}"
+        )
+
+
+def ensure_actual_profit_column(cur) -> None:
+    cur.execute(f"SHOW COLUMNS FROM {DAILY_TABLE} LIKE 'ActualProfit'")
+    if cur.fetchone() is None:
+        cur.execute(
+            f"ALTER TABLE {DAILY_TABLE} "
+            "ADD COLUMN ActualProfit DECIMAL(24,6) NOT NULL DEFAULT 0 "
+            "AFTER CashAmount"
         )
 
 
@@ -180,6 +262,7 @@ def save_results(conn: pymysql.connections.Connection, daily: pd.DataFrame, hold
                 "TotalMarketValue",
                 "HoldingMarketValue",
                 "CashAmount",
+                "ActualProfit",
                 "DailyBuyAmount",
                 "DailySellAmount",
                 "TradingFee",
@@ -238,11 +321,13 @@ def save_results(conn: pymysql.connections.Connection, daily: pd.DataFrame, hold
 def load_strategy_signals(conn: pymysql.connections.Connection, config: PortfolioBacktestConfig) -> pd.DataFrame:
     if is_blackbox_strategy(config.strategy_name):
         return build_blackbox_signals(conn, config)
+    from backtest_strategy import BacktestConfig, build_signals_stream
+
     backtest_config = BacktestConfig(
         start_date=config.start_date.strftime("%Y%m%d"),
         end_date=config.end_date.strftime("%Y%m%d"),
         min_turnover_amount=config.min_turnover_amount,
-        limit_per_day=config.limit_per_day,
+        limit_per_day=None,
         ktype=config.ktype,
         output=None,
         strategy_name=config.strategy_name,
@@ -251,7 +336,29 @@ def load_strategy_signals(conn: pymysql.connections.Connection, config: Portfoli
         max_recommendations=config.max_recommendations,
         batch_size=config.batch_size,
     )
-    return build_signals_stream(conn, config.start_date, config.end_date, backtest_config)
+    signals = build_signals_stream(conn, config.start_date, config.end_date, backtest_config)
+    trade_dates = load_market_trade_dates(conn, config.start_date, config.end_date, config.ktype)
+    return filter_selection_candidates(
+        signals,
+        trade_dates,
+        cooldown_trading_days=config.selection_cooldown_trading_days,
+        limit_per_day=config.limit_per_day,
+    )
+
+
+def load_market_trade_dates(conn, start_date: date, end_date: date, ktype: str = "D") -> list[date]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT DATE(KTime)
+            FROM dkandles
+            WHERE KType = %s AND KTime >= %s AND KTime < %s
+            ORDER BY DATE(KTime)
+            """,
+            (ktype, start_date, end_date + timedelta(days=1)),
+        )
+        rows = cur.fetchall()
+    return [row[0] for row in rows]
 
 
 def load_daily_for_simulation(conn: pymysql.connections.Connection, signals: pd.DataFrame, config: PortfolioBacktestConfig) -> pd.DataFrame:
@@ -259,7 +366,9 @@ def load_daily_for_simulation(conn: pymysql.connections.Connection, signals: pd.
         return pd.DataFrame()
     symbols = sorted(signals["SCode"].dropna().astype(str).unique().tolist())
     load_end = config.end_date + timedelta(days=15)
-    return load_backtest_daily_for_symbols(conn, symbols, config.start_date, load_end, config.ktype, config.batch_size)
+    load_start = config.start_date - timedelta(days=180)
+    load_end = load_end + timedelta(days=32)
+    return load_daily_for_symbols(conn, symbols, load_start, load_end, config.ktype, config.batch_size)
 
 
 def available_symbols(conn: pymysql.connections.Connection, config: PortfolioBacktestConfig) -> list[str]:

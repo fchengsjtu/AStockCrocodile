@@ -14,15 +14,17 @@ from blackbox_finetune.prediction_store import first_prediction_date, latest_pre
 
 from .common import (
     BLACKBOX_STRATEGIES,
+    DEFAULT_SELECTION_COOLDOWN_TRADING_DAYS,
     DEFAULT_BUY_BUDGET,
     DEFAULT_FEE_RATE,
     DEFAULT_INITIAL_CASH,
     DEFAULT_RANDOM_SEED,
     PortfolioBacktestConfig,
     exit_rule_text,
+    filter_selection_candidates,
     stop_loss_rule_name,
 )
-from .db import clear_backtest_rows, connect, ensure_portfolio_tables, load_daily_for_simulation, save_results
+from .db import clear_backtest_rows, connect, ensure_portfolio_tables, load_daily_for_simulation, load_market_trade_dates, save_results
 from .simulator import simulate_portfolio
 
 
@@ -53,6 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stop-loss-pct", type=float, default=0.03)
     parser.add_argument("--trade-rule-name", default=None)
     parser.add_argument("--batch-size", type=int, default=80)
+    parser.add_argument(
+        "--selection-cooldown-trading-days",
+        type=int,
+        default=DEFAULT_SELECTION_COOLDOWN_TRADING_DAYS,
+    )
     parser.add_argument("--keep-existing", action="store_true")
     parser.add_argument("--no-save-db", action="store_true")
     parser.add_argument("--quiet", action="store_true")
@@ -87,8 +94,16 @@ def run_tracker(args) -> tuple[int, int, int]:
             stop_loss_pct=args.stop_loss_pct,
             exit_rule=exit_rule_text(args.stop_loss_pct),
             batch_size=max(1, args.batch_size),
+            selection_cooldown_trading_days=max(0, args.selection_cooldown_trading_days),
         )
         signals = load_prediction_signals(conn, args.strategy_name, start_date, end_date)
+        trade_dates = load_market_trade_dates(conn, start_date, end_date, config.ktype)
+        signals = filter_selection_candidates(
+            signals,
+            trade_dates,
+            cooldown_trading_days=config.selection_cooldown_trading_days,
+            limit_per_day=None,
+        )
         print(f"tracking signals strategy={args.strategy_name} rows={len(signals)} start={start_date} end={end_date}", flush=True)
         daily_df = load_daily_for_simulation(conn, signals, config)
         print(f"tracking daily rows={len(daily_df)} symbols={daily_df['SCode'].nunique() if not daily_df.empty else 0}", flush=True)

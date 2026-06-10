@@ -6,7 +6,7 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from .common import PortfolioBacktestConfig, buy_shares_for_budget, round_cent, weighted_average_price
+from .common import PortfolioBacktestConfig, buy_shares_for_budget, round_cent, stop_loss_rule_name, weighted_average_price
 
 
 @dataclass
@@ -175,7 +175,8 @@ def process_position_exit(
     take_20 = round_cent(position.cost_price * 1.20)
 
     if float(row.Low) <= stop_price and position.shares > 0:
-        cash, fee, trade = sell_position(config, trade_date, position, position.shares, stop_price, f"stop_loss_{config.stop_loss_pct * 100:g}pct")
+        reason = stop_loss_rule_name(config.stop_loss_pct).removesuffix("_take_profit_10_20_hold_3d")
+        cash, fee, trade = sell_position(config, trade_date, position, position.shares, stop_price, reason)
         return cash, fee, [trade]
 
     if not position.tp10_done and float(row.High) >= take_10 and position.shares > 0:
@@ -246,6 +247,7 @@ def build_snapshot(
         "TotalMarketValue": cash + holding_value,
         "HoldingMarketValue": holding_value,
         "CashAmount": cash,
+        "ActualProfit": cash + holding_value - config.initial_cash,
         "DailyBuyAmount": daily_buy_amount,
         "DailySellAmount": daily_sell_amount,
         "TradingFee": daily_fee,
@@ -348,6 +350,7 @@ def simulate_portfolio(
             print(
                 f"{trade_date} total={snapshot['TotalMarketValue']:.2f} "
                 f"holding={snapshot['HoldingMarketValue']:.2f} cash={snapshot['CashAmount']:.2f} "
+                f"profit={snapshot['ActualProfit']:.2f} "
                 f"fee={daily_fee:.2f} positions={snapshot['PositionCount']}",
                 flush=True,
             )
