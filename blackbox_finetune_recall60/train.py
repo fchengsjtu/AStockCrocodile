@@ -28,6 +28,7 @@ from blackbox_finetune_recall60.common import (
     normalize_precision_threshold,
     normalize_precision_top_k,
     precision_at_k,
+    REPORTED_PRECISION_KS,
 )
 from blackbox_finetune_recall60.gpu import prepare_rtx3060
 from blackbox_finetune_recall60.inference import score_prediction
@@ -222,7 +223,7 @@ def _evaluate_training_checkpoint(
     precision = tp / (tp + fp) if tp + fp else 0.0
     precision_top_k = normalize_precision_top_k(precision_top_k)
     precision_threshold = normalize_precision_threshold(precision_threshold)
-    precision_values = precision_at_k(scored_rows, sorted({5, 10, 20, precision_top_k}))
+    precision_values = precision_at_k(scored_rows, sorted({*REPORTED_PRECISION_KS, precision_top_k}))
     target_key = f"precision@{precision_top_k}"
     probabilities = [float(row["positive_probability"]) for row in scored_rows]
     average_probability, max_probability, next_threshold = _next_evaluation_threshold(probabilities, threshold)
@@ -263,6 +264,7 @@ def _evaluate_training_checkpoint(
         f"precision={precision:.4f} precision@5={precision_values['precision@5']:.4f} "
         f"precision@10={precision_values['precision@10']:.4f} "
         f"precision@20={precision_values['precision@20']:.4f} "
+        f"precision@50={precision_values['precision@50']:.4f} "
         f"avg_p={average_probability:.4f} max_p={max_probability:.4f} "
         f"next_threshold={next_threshold:.4f} "
         f"{target_key}={precision_values[target_key]:.4f} target={precision_threshold:.4f} "

@@ -19,6 +19,7 @@ from blackbox_finetune_recall60.common import (
     normalize_precision_top_k,
     precision_at_k,
     precision_target_tag,
+    REPORTED_PRECISION_KS,
     default_max_seq_length,
     default_output_dir,
     default_validation_dir,
@@ -46,7 +47,7 @@ def summarize_scored_rows(scored_rows: list[dict], precision_top_k: int) -> dict
             tn += 1
     precision = tp / (tp + fp) if tp + fp else 0.0
     positive_recall = tp / positives if positives else 0.0
-    ks = tuple(dict.fromkeys([5, 10, 20, precision_top_k]))
+    ks = tuple(dict.fromkeys((*REPORTED_PRECISION_KS, precision_top_k)))
     return {
         "samples": len(scored_rows),
         "positive_samples": positives,
@@ -116,7 +117,7 @@ def evaluate_dataset(
                 f"tp={chunk['tp']} fp={chunk['fp']} tn={chunk['tn']} fn={chunk['fn']} "
                 f"positive_recall={chunk['positive_recall']:.4f} precision={chunk['precision']:.4f} "
                 f"precision@5={chunk['precision@5']:.4f} precision@10={chunk['precision@10']:.4f} "
-                f"precision@20={chunk['precision@20']:.4f}",
+                f"precision@20={chunk['precision@20']:.4f} precision@50={chunk['precision@50']:.4f}",
                 flush=True,
             )
             chunk_start = idx

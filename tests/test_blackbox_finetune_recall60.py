@@ -248,6 +248,52 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(summary["precision"], 0.5)
         self.assertEqual(summary["positive_recall"], 0.5)
         self.assertEqual(summary["precision@2"], 0.5)
+        self.assertEqual(summary["precision@50"], 0.5)
+
+    def test_checkpoint_evaluation_reports_precision_at_50(self):
+        class FakeModel:
+            training = True
+
+            def eval(self):
+                self.training = False
+
+            def train(self):
+                self.training = True
+
+        class FakeTokenizer:
+            def apply_chat_template(self, *_args, **_kwargs):
+                return "prompt"
+
+        rows = [
+            {"metadata": {"scode": "000001", "anchor_date": "2026-01-01", "label": 1}},
+            {"metadata": {"scode": "000002", "anchor_date": "2026-01-02", "label": 0}},
+        ]
+        predictions = [
+            {"label": "positive", "positive_probability": 0.9},
+            {"label": "negative", "positive_probability": 0.1},
+        ]
+        with TemporaryDirectory() as temp_dir, patch.object(
+            train,
+            "compact_messages_from_sample",
+            return_value=[{"role": "user", "content": "x"}, {"role": "assistant", "content": "positive"}],
+        ), patch.object(train, "score_prediction", side_effect=predictions):
+            result = train._evaluate_training_checkpoint(
+                model=FakeModel(),
+                tokenizer=FakeTokenizer(),
+                rows=rows,
+                output_dir=Path(temp_dir),
+                update=100,
+                total_updates=1000,
+                progress=0.1,
+                trained_epochs=0.1,
+                threshold=0.5,
+                max_samples=0,
+                max_seq_length=3072,
+                precision_top_k=10,
+                precision_threshold=0.4,
+            )
+
+        self.assertEqual(result["precision@50"], 0.5)
 
     def test_precision_target_tag_uses_top_k_and_threshold(self):
         self.assertEqual(common.precision_target_tag(20, 0.30), "top20_precision030")
