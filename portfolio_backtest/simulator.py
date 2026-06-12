@@ -176,14 +176,48 @@ def process_position_exit(
     trades = []
     cash_delta = 0.0
     fee_total = 0.0
-    stop_price = round_cent(position.cost_price * (1.0 - config.stop_loss_pct))
     take_10 = round_cent(position.cost_price * 1.10)
     take_20 = round_cent(position.cost_price * 1.20)
 
-    if float(row.Low) <= stop_price and position.shares > 0:
-        reason = stop_loss_rule_name(config.stop_loss_pct).removesuffix("_take_profit_10_20_hold_3d")
-        cash, fee, trade = sell_position(config, trade_date, position, position.shares, stop_price, reason)
-        return cash, fee, [trade]
+    if abs(config.stop_loss_pct - 0.03) < 1e-12:
+        intraday_stop_price = round_cent(position.cost_price * 0.95)
+        close_stop_price = round_cent(position.cost_price * 0.97)
+        if float(row.Open) <= intraday_stop_price and position.shares > 0:
+            cash, fee, trade = sell_position(
+                config,
+                trade_date,
+                position,
+                position.shares,
+                float(row.Open),
+                "gap_open_stop_loss_5pct",
+            )
+            return cash, fee, [trade]
+        if float(row.Low) <= intraday_stop_price and position.shares > 0:
+            cash, fee, trade = sell_position(
+                config,
+                trade_date,
+                position,
+                position.shares,
+                intraday_stop_price,
+                "intraday_stop_loss_5pct",
+            )
+            return cash, fee, [trade]
+        if float(row.Close) <= close_stop_price and position.shares > 0:
+            cash, fee, trade = sell_position(
+                config,
+                trade_date,
+                position,
+                position.shares,
+                float(row.Close),
+                "close_stop_loss_3pct",
+            )
+            return cash, fee, [trade]
+    else:
+        stop_price = round_cent(position.cost_price * (1.0 - config.stop_loss_pct))
+        if float(row.Low) <= stop_price and position.shares > 0:
+            reason = stop_loss_rule_name(config.stop_loss_pct).removesuffix("_take_profit_10_20_hold_3d")
+            cash, fee, trade = sell_position(config, trade_date, position, position.shares, stop_price, reason)
+            return cash, fee, [trade]
 
     if not position.tp10_done and float(row.High) >= take_10 and position.shares > 0:
         half = max(1, position.original_shares // 2)

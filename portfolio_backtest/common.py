@@ -22,7 +22,13 @@ DEFAULT_SELECTION_RULE = (
     "during the previous 13 trading days; buy selected stocks on next trading day at "
     "same-day weighted average price."
 )
-DEFAULT_EXIT_RULE = "T+1 sell rule; within 3 tradable days after buy, stop loss at -3%, take profit half at +10%, take profit remaining half at +20%, otherwise sell remaining shares at day-3 close."
+DEFAULT_EXIT_RULE = (
+    "T+1 sell rule; within 3 tradable days after buy, sell at 95% of cost when the "
+    "intraday low reaches -5%, or at the open when it opens below 95% of cost; "
+    "otherwise sell at the close when the close reaches -3%; take profit half at "
+    "+10%, take profit remaining half at +20%, otherwise sell remaining shares at "
+    "day-3 close."
+)
 DEFAULT_TRADE_RULE_NAME = "stop_loss_3pct_take_profit_10_20_hold_3d"
 DEFAULT_STOP_LOSS_PCT = 0.03
 STOP_LOSS_SERIES = (0.03, 0.035, 0.04, 0.045, 0.05, 0.055, 0.06)
@@ -143,6 +149,8 @@ def stop_loss_pct_from_rule_name(rule_name: str) -> float:
 
 
 def exit_rule_text(stop_loss_pct: float) -> str:
+    if abs(stop_loss_pct - DEFAULT_STOP_LOSS_PCT) < 1e-12:
+        return DEFAULT_EXIT_RULE
     percent = stop_loss_pct * 100
     return (
         "T+1 sell rule; within 3 tradable days after buy, "

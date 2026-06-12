@@ -323,7 +323,7 @@ class PortfolioBacktestTests(unittest.TestCase):
             [
                 ["000001", "A", date(2026, 1, 1), 10, 10, 10, 10, 1000, 10000],
                 ["000001", "A", date(2026, 1, 2), 10, 10, 10, 10, 1000, 10000],
-                ["000001", "A", date(2026, 1, 3), 10, 10, 12, 9.6, 1000, 10000],
+                ["000001", "A", date(2026, 1, 3), 10, 10, 12, 9.4, 1000, 10000],
             ],
             columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"],
         )
@@ -331,9 +331,49 @@ class PortfolioBacktestTests(unittest.TestCase):
         _, _, trades = simulate_portfolio(signals, daily, config, verbose=False)
 
         sell = trades[trades["Side"] == "SELL"].iloc[0]
-        self.assertEqual(sell.Reason, "stop_loss_3pct")
-        self.assertEqual(round_cent(sell.Price), 9.70)
+        self.assertEqual(sell.Reason, "intraday_stop_loss_5pct")
+        self.assertEqual(round_cent(sell.Price), 9.50)
         self.assertEqual(sell.TradeRuleName, stop_loss_rule_name(0.03))
+
+    def test_gap_open_below_five_percent_stop_sells_at_open(self):
+        signals = pd.DataFrame(
+            [{"TradeDate": date(2026, 1, 1), "SCode": "000001", "SName": "A", "Close": 10.0, "Score": 1.0, "Reason": "x", "StrategyName": "test"}]
+        )
+        daily = pd.DataFrame(
+            [
+                ["000001", "A", date(2026, 1, 1), 10, 10, 10, 10, 1000, 10000],
+                ["000001", "A", date(2026, 1, 2), 10, 10, 10, 10, 1000, 10000],
+                ["000001", "A", date(2026, 1, 3), 9.30, 9.40, 9.50, 9.20, 1000, 10000],
+            ],
+            columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"],
+        )
+        config = PortfolioBacktestConfig(start_date=date(2026, 1, 1), end_date=date(2026, 1, 3), strategy_name="test")
+
+        _, _, trades = simulate_portfolio(signals, daily, config, verbose=False)
+
+        sell = trades[trades["Side"] == "SELL"].iloc[0]
+        self.assertEqual(sell.Reason, "gap_open_stop_loss_5pct")
+        self.assertEqual(round_cent(sell.Price), 9.30)
+
+    def test_close_below_three_percent_stop_sells_at_close(self):
+        signals = pd.DataFrame(
+            [{"TradeDate": date(2026, 1, 1), "SCode": "000001", "SName": "A", "Close": 10.0, "Score": 1.0, "Reason": "x", "StrategyName": "test"}]
+        )
+        daily = pd.DataFrame(
+            [
+                ["000001", "A", date(2026, 1, 1), 10, 10, 10, 10, 1000, 10000],
+                ["000001", "A", date(2026, 1, 2), 10, 10, 10, 10, 1000, 10000],
+                ["000001", "A", date(2026, 1, 3), 10, 9.60, 10.10, 9.60, 1000, 10000],
+            ],
+            columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"],
+        )
+        config = PortfolioBacktestConfig(start_date=date(2026, 1, 1), end_date=date(2026, 1, 3), strategy_name="test")
+
+        _, _, trades = simulate_portfolio(signals, daily, config, verbose=False)
+
+        sell = trades[trades["Side"] == "SELL"].iloc[0]
+        self.assertEqual(sell.Reason, "close_stop_loss_3pct")
+        self.assertEqual(round_cent(sell.Price), 9.60)
 
     def test_custom_stop_loss_rule_changes_exit_price_and_rule_name(self):
         signals = pd.DataFrame(

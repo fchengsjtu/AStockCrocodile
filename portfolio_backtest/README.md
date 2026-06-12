@@ -12,7 +12,11 @@ Rules:
 - Commission rate is `0.0002` (0.02%, two basis points) for both buys and sells.
 - Stamp duty is `0.0005` (0.05%, five basis points) of gross sell amount and is charged only on sells.
 - A position bought on day B can only be sold from the next trading day because of T+1.
-- During the first three sellable trading days, stop loss at `cost * 0.97`.
+- During the first three sellable trading days, the default 3% rule first
+  applies an intraday stop at `cost * 0.95`. If the stock opens at or below
+  that price, sell at the opening price; otherwise sell at `cost * 0.95` when
+  the daily low reaches it. If the intraday stop is not triggered but the
+  close is at or below `cost * 0.97`, sell at the closing price.
 - Take profit half at `cost * 1.10`, then sell the rest at `cost * 1.20`.
 - If neither stop loss nor take profit closes the position, sell remaining shares at the third sellable trading day's close.
 - If candidate buys exceed available cash, the program shuffles candidates with a fixed seed and buys until cash is full.
@@ -94,7 +98,9 @@ python -m portfolio_backtest.run `
   --trade-rule-series stop_loss
 ```
 
-This runs the same selection and take-profit logic with these stop-loss levels:
+This runs the same selection and take-profit logic with these stop-loss levels.
+The default `3%` rule uses the combined intraday 5% and closing 3% behavior
+described above; the other rules retain their configured intraday stop level:
 
 - `3%`
 - `3.5%`
