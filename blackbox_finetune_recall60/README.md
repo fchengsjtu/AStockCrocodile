@@ -80,25 +80,6 @@ Training automatically resumes from the latest `blackbox_finetune_recall60/runs/
 
 WSL/Linux defaults to `ON_THE_FLY_TOKENIZE=1`, so training tokenizes each batch on demand instead of loading the large `tokenized/*.pkl` cache into RAM. This avoids Linux `Killed` exits when the tokenized cache is larger than available memory. Set `ON_THE_FLY_TOKENIZE=0` only when RAM is ample and you prefer faster cached token loading.
 
-## Hard Negative Mining
-
-Hard negative mining is optional and is off by default. When enabled, every checkpoint first runs the normal validation evaluation, then scores active negative training samples with the current model. The highest-scoring negatives are kept as hard negatives, and the remaining negative slots are refilled from the training negative pool. Positive samples and the validation set are never refreshed.
-
-Recommended WSL/Linux settings:
-
-```bash
-export HARD_NEGATIVE_MINING=1
-export HARD_NEGATIVE_KEEP_RATIO=0.20
-export HARD_NEGATIVE_REFRESH_RATIO=0.80
-export HARD_NEGATIVE_SCORE_MAX_SAMPLES=0
-export NEGATIVE_RATIO=49
-bash blackbox_finetune_recall60/scripts/one_click_deploy.sh full
-```
-
-`NEGATIVE_RATIO=49` builds 49 negative samples for each positive sample, so positive samples account for about 2% of the combined dataset. At each checkpoint, hard negative mining scores active negatives and keeps the highest-scoring examples. `HARD_NEGATIVE_SCORE_MAX_SAMPLES=0` scores all active negatives at each checkpoint, but it can be very slow. Keep `ON_THE_FLY_TOKENIZE=1` when hard negative mining is enabled.
-
-After each hard-negative refresh, the active negative pool is saved beside the checkpoint as `active_negative_rows.jsonl`. When training resumes from that checkpoint, the trainer restores this saved pool before continuing. If the dataset was rebuilt and some saved rows no longer exist in the current candidate pool, those rows are ignored and the trainer falls back to valid rows only.
-
 ```powershell
 $env:NO_AUTO_RESUME='1'
 powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall60\scripts\one_click_deploy.ps1 full

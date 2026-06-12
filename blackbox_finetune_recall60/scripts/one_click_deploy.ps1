@@ -122,11 +122,6 @@ function Write-EnvironmentSnapshot {
     "EVAL_MIN_PRECISION_AT_20",
     "EVAL_MAX_SAMPLES",
     "EVAL_OUTPUT_DIR",
-    "HARD_NEGATIVE_MINING",
-    "HARD_NEGATIVE_KEEP_RATIO",
-     "HARD_NEGATIVE_REFRESH_RATIO",
-     "HARD_NEGATIVE_SCORE_MAX_SAMPLES",
-     "HARD_NEGATIVE_ACTIVE_RATIO",
     "EPOCHS",
     "GRADIENT_ACCUMULATION_STEPS",
     "LEARNING_RATE",
@@ -228,12 +223,6 @@ $PrecisionNumber = [Math]::Min([Math]::Max($PrecisionNumber, 0.0), 1.0)
 $PrecisionTag = "top{0}_precision{1:000}" -f [int]$EvalPrecisionTopK, [int][Math]::Round($EvalPrecisionNumber * 100)
 $FinalPrecisionTag = "top{0}_precision{1:000}" -f [int]$PrecisionTopK, [int][Math]::Round($PrecisionNumber * 100)
 $EvalOutputDir = if ($env:EVAL_OUTPUT_DIR) { $env:EVAL_OUTPUT_DIR } else { "$OutputDir/evaluations/$PrecisionTag" }
-$HardNegativeMining = if ($env:HARD_NEGATIVE_MINING) { Test-EnvFlag $env:HARD_NEGATIVE_MINING } else { $false }
-$HardNegativeKeepRatio = if ($env:HARD_NEGATIVE_KEEP_RATIO) { $env:HARD_NEGATIVE_KEEP_RATIO } else { "0.20" }
-$HardNegativeRefreshRatio = if ($env:HARD_NEGATIVE_REFRESH_RATIO) { $env:HARD_NEGATIVE_REFRESH_RATIO } else { "0.80" }
-$HardNegativeScoreMaxSamples = if ($env:HARD_NEGATIVE_SCORE_MAX_SAMPLES) { $env:HARD_NEGATIVE_SCORE_MAX_SAMPLES } else { "0" }
-$HardNegativeActiveRatio = if ($env:HARD_NEGATIVE_ACTIVE_RATIO) { $env:HARD_NEGATIVE_ACTIVE_RATIO } else { $NegativeRatio }
-
 if ($Mode -eq "smoke") {
   $DefaultTrainStart = "20200101"
   $DefaultTrainEnd = "20211231"
@@ -284,9 +273,6 @@ if ($EvalOutputDir) { $TrainArgs += @('--eval-output-dir', $EvalOutputDir) }
 if ($ResumeAdapterDir) { $TrainArgs += @('--resume-adapter-dir', $ResumeAdapterDir) }
 if (Test-EnvFlag $env:REBUILD_TOKEN_CACHE) { $TrainArgs += @('--rebuild-token-cache') }
 if (Test-EnvFlag $env:ON_THE_FLY_TOKENIZE) { $TrainArgs += @('--on-the-fly-tokenize') }
-if ($HardNegativeMining) {
-  $TrainArgs += @('--hard-negative-mining', '--hard-negative-keep-ratio', $HardNegativeKeepRatio, '--hard-negative-refresh-ratio', $HardNegativeRefreshRatio, '--hard-negative-score-max-samples', $HardNegativeScoreMaxSamples, '--hard-negative-active-ratio', $HardNegativeActiveRatio)
-}
 if (Test-EnvFlag $env:NO_AUTO_RESUME) { $TrainArgs += @('--no-auto-resume') }
 Invoke-Step @TrainArgs
 Invoke-Step -m blackbox_finetune_recall60.evaluate --base-model $BaseModel --adapter-dir "$OutputDir/adapter" --data-dir $ValidationDir --threshold 0.50 --precision-top-k $PrecisionTopK --precision-threshold $PrecisionThreshold --output-dir "$OutputDir/evaluations/$FinalPrecisionTag" --cuda-device $CudaDevice --max-seq-length $MaxSeqLength

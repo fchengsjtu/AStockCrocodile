@@ -66,3 +66,40 @@ MODEL_DIR/negative_reshuffle/run-YYYYMMDD-HHMMSS/
 ```
 
 The model scores only the current train/test negative samples. The highest-scoring configured portion is retained. All replacement negatives are sampled directly from MySQL over the original dataset date range, excluding every current negative sample, and are materialized with the selected sample mode. The adapter is copied unchanged as the starting model for subsequent training. The evaluation JSON is copied and enriched with the original and generated dataset/model paths. The evaluation dataset is copied unchanged. Positive rows remain in their original split.
+
+## Evaluate selected reshuffle checkpoints
+
+The checkpoint evaluation script defaults to cycle `cycle-01`, the full
+`20260101` through `20260531` evaluation period, and updates
+`0200, 1000, 1500, 1600, 2100, 2900, 3000, 4200, 4700, 4800`.
+
+Run it in WSL:
+
+```bash
+cd /mnt/d/Documents/StockInfoCrawler
+bash blackbox_negative_reshuffle/scripts/evaluate_checkpoints.sh
+```
+
+Optional positional arguments are cycle directory, start date, end date, and
+the shared JSONL result path:
+
+```bash
+bash blackbox_negative_reshuffle/scripts/evaluate_checkpoints.sh \
+  "/mnt/d/Models/precision10@0.4-3200/negative_reshuffle/cycle-01" \
+  20260101 \
+  20260531 \
+  "/mnt/d/Models/precision10@0.4-3200/negative_reshuffle/cycle-01/checkpoint-results.jsonl"
+```
+
+The script filters the evaluation dataset by `anchor_date`, evaluates every
+checkpoint in a separate Python process, retains each full `evaluation.json`
+and log, and appends one complete compact JSON record per checkpoint to:
+
+```text
+cycle-01/checkpoint_full_evaluations_20260101_20260531/results.jsonl
+```
+
+Set `DRY_RUN=1` to validate paths and print every command without loading a
+model. `CHECKPOINT_UPDATES`, `THRESHOLD`, `PRECISION_TOP_K`,
+`PRECISION_THRESHOLD`, `MAX_SEQ_LENGTH`, `BASE_MODEL`, and `CUDA_DEVICE` can
+be overridden through environment variables.

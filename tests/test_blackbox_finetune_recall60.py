@@ -20,18 +20,12 @@ PROJECT_ENV_KEYS = [
     "TEST_START_DATE",
     "TEST_END_DATE",
     "NEGATIVE_RATIO",
-    "NEGATIVE_POOL_RATIO",
     "RECALL_TARGET",
     "MIN_POSITIVE_RECALL",
     "PRECISION_TOP_K",
     "PRECISION_THRESHOLD",
     "MIN_PRECISION_AT_20",
     "PRECISION_AT_20_TARGET",
-    "HARD_NEGATIVE_MINING",
-    "HARD_NEGATIVE_KEEP_RATIO",
-    "HARD_NEGATIVE_REFRESH_RATIO",
-    "HARD_NEGATIVE_SCORE_MAX_SAMPLES",
-    "HARD_NEGATIVE_ACTIVE_RATIO",
     "EVAL_SAMPLE_METHOD",
 ]
 
@@ -82,14 +76,14 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.end_date, "20251231")
         self.assertEqual(args.output_dir, common.default_data_dir("long"))
         self.assertIn("recall60_long", str(args.output_dir))
-        self.assertEqual(args.negative_ratio, 100.0)
+        self.assertEqual(args.negative_ratio, 9.0)
 
     def test_negative_ratio_default_can_come_from_environment(self):
-        with patch.dict("os.environ", {"NEGATIVE_RATIO": "2.5", "NEGATIVE_POOL_RATIO": "11.0"}):
+        with patch.dict("os.environ", {"NEGATIVE_RATIO": "2.5"}):
             build_args = build_dataset.build_parser().parse_args([])
             validation_args = build_validation_dataset.build_parser().parse_args([])
 
-        self.assertEqual(build_args.negative_ratio, 11.0)
+        self.assertEqual(build_args.negative_ratio, 2.5)
         self.assertEqual(validation_args.negative_ratio, 2.5)
 
     def test_regularization_and_training_eval_args_can_come_from_environment(self):
@@ -107,11 +101,6 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
                 "PRECISION_TOP_K": "20",
                 "PRECISION_THRESHOLD": "0.30",
                 "ON_THE_FLY_TOKENIZE": "1",
-                "HARD_NEGATIVE_MINING": "1",
-                "HARD_NEGATIVE_KEEP_RATIO": "0.25",
-                "HARD_NEGATIVE_REFRESH_RATIO": "0.75",
-                "HARD_NEGATIVE_SCORE_MAX_SAMPLES": "123",
-                "HARD_NEGATIVE_ACTIVE_RATIO": "4.5",
             },
         ):
             args = train.build_parser().parse_args([])
@@ -126,84 +115,10 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.eval_precision_threshold, 0.35)
         self.assertEqual(args.eval_max_samples, 17)
         self.assertTrue(args.on_the_fly_tokenize)
-        self.assertTrue(args.hard_negative_mining)
-        self.assertEqual(args.hard_negative_keep_ratio, 0.25)
-        self.assertEqual(args.hard_negative_refresh_ratio, 0.75)
-        self.assertEqual(args.hard_negative_score_max_samples, 123)
-        self.assertEqual(args.hard_negative_active_ratio, 4.5)
         self.assertIsNone(eval_args.min_positive_recall)
         self.assertEqual(eval_args.precision_top_k, 20)
         self.assertEqual(eval_args.precision_threshold, 0.30)
         self.assertIn("recall80", str(args.output_dir))
-
-    def test_hard_negative_refresh_keeps_high_scoring_negatives_and_refills(self):
-        positives = [{"metadata": {"scode": "P1", "anchor_date": "2026-01-01", "label": 1}}]
-        active_negatives = [
-            {"metadata": {"scode": f"N{idx}", "anchor_date": "2026-01-01", "label": 0}}
-            for idx in range(10)
-        ]
-        pool_negatives = active_negatives + [
-            {"metadata": {"scode": f"F{idx}", "anchor_date": "2026-01-01", "label": 0}}
-            for idx in range(10)
-        ]
-        scored = [(1.0 - idx / 100.0, row) for idx, row in enumerate(active_negatives)]
-
-        refreshed, stats = train.refresh_hard_negative_rows(
-            positives,
-            active_negatives,
-            pool_negatives,
-            scored,
-            keep_ratio=0.2,
-            refresh_ratio=0.8,
-            seed=7,
-        )
-
-        negative_codes = {row["metadata"]["scode"] for row in refreshed if row["metadata"]["label"] == 0}
-        self.assertIn("N0", negative_codes)
-        self.assertIn("N1", negative_codes)
-        self.assertEqual(len(negative_codes), len(active_negatives))
-        self.assertTrue(any(code.startswith("F") for code in negative_codes))
-        self.assertEqual(stats["kept_hard_negatives"], 2)
-
-    def test_initial_active_negatives_use_ratio_from_candidate_pool(self):
-        positives = [{"metadata": {"scode": f"P{idx}", "anchor_date": "2026-01-01", "label": 1}} for idx in range(3)]
-        negative_pool = [
-            {"metadata": {"scode": f"N{idx}", "anchor_date": "2026-01-01", "label": 0}}
-            for idx in range(100)
-        ]
-
-        active = train.initialize_active_negative_rows(positives, negative_pool, active_negative_ratio=9.0, seed=11)
-
-        self.assertEqual(len(active), 27)
-        self.assertEqual(len({_row["metadata"]["scode"] for _row in active}), 27)
-
-    def test_active_negatives_are_saved_and_restored_from_checkpoint(self):
-        active = [
-            {"metadata": {"scode": "N1", "anchor_date": "2026-01-01", "label": 0}},
-            {"metadata": {"scode": "N2", "anchor_date": "2026-01-02", "label": 0}},
-        ]
-        pool = active + [{"metadata": {"scode": "N3", "anchor_date": "2026-01-03", "label": 0}}]
-
-        with TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "update-000100"
-            train.save_active_negative_rows(checkpoint_dir, active, {"kept_hard_negatives": 1})
-            restored = train.load_active_negative_rows_from_checkpoint(checkpoint_dir, pool)
-
-        self.assertEqual(restored, active)
-
-    def test_restore_active_negatives_drops_rows_not_in_current_pool(self):
-        active = [
-            {"metadata": {"scode": "N1", "anchor_date": "2026-01-01", "label": 0}},
-            {"metadata": {"scode": "OLD", "anchor_date": "2025-01-01", "label": 0}},
-        ]
-        pool = [{"metadata": {"scode": "N1", "anchor_date": "2026-01-01", "label": 0}}]
-
-        with TemporaryDirectory() as temp_dir:
-            checkpoint_dir = Path(temp_dir) / "update-000100"
-            train.save_active_negative_rows(checkpoint_dir, active)
-            restored = train.load_active_negative_rows_from_checkpoint(checkpoint_dir, pool)
-
-        self.assertEqual(restored, pool)
 
     def test_resolve_pretrained_source_validates_local_model_directory(self):
         with TemporaryDirectory() as temp_dir:
