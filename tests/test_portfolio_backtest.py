@@ -8,11 +8,27 @@ from portfolio_backtest.common import BLACKBOX_STRATEGIES, DEFAULT_FEE_RATE, DEF
 from portfolio_backtest import db as portfolio_db
 from portfolio_backtest import pool_run
 from portfolio_backtest import run as portfolio_run
-from portfolio_backtest.blackbox import candidate_from_prediction
+from portfolio_backtest.blackbox import candidate_from_prediction, format_top_predictions
 from portfolio_backtest.simulator import simulate_portfolio
 
 
 class PortfolioBacktestTests(unittest.TestCase):
+    def test_blackbox_top_predictions_prints_highest_five_codes_and_names(self):
+        frame = pd.DataFrame(
+            [
+                {"SCode": f"{index:06d}", "SName": f"Stock{index}", "Score": score}
+                for index, score in enumerate((0.2, 0.9, 0.4, 0.8, 0.7, 0.6), start=1)
+            ]
+        )
+
+        result = format_top_predictions(frame)
+
+        self.assertEqual(
+            result,
+            "000002:Stock2,000004:Stock4,000005:Stock5,000006:Stock6,000003:Stock3",
+        )
+        self.assertEqual(format_top_predictions(pd.DataFrame()), "<none>")
+
     def test_blackbox_candidate_is_kept_below_threshold_for_top_n_ranking(self):
         config = PortfolioBacktestConfig(
             start_date=date(2026, 1, 1),

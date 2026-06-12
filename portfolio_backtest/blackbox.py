@@ -125,6 +125,20 @@ def candidate_from_prediction(
     }
 
 
+def format_top_predictions(frame: pd.DataFrame, limit: int = 5) -> str:
+    if frame.empty:
+        return "<none>"
+    top_rows = frame.sort_values(
+        ["Score", "SCode"],
+        ascending=[False, True],
+        na_position="last",
+    ).head(max(0, limit))
+    return ",".join(
+        f"{row.SCode}:{row.SName if pd.notna(row.SName) and row.SName else '<unknown>'}"
+        for row in top_rows.itertuples(index=False)
+    ) or "<none>"
+
+
 def load_blackbox_model(config: PortfolioBacktestConfig):
     modules = load_modules(config.strategy_name)
     try:
@@ -236,6 +250,10 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
             )
             result = filtered_history[filtered_history["TradeDate"] == trade_date].copy()
             selected_history = filtered_history.to_dict("records")
+        print(
+            f"{config.strategy_name} date={trade_date} top5={format_top_predictions(result)}",
+            flush=True,
+        )
         yield trade_date, result.reset_index(drop=True)
 
 
