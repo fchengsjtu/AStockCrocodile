@@ -139,6 +139,26 @@ def format_top_predictions(frame: pd.DataFrame, limit: int = 5) -> str:
     ) or "<none>"
 
 
+def windows_are_scoreable(
+    daily: list[dict] | None,
+    weekly: list[dict] | None,
+    monthly: list[dict] | None,
+    daily_window: int,
+    weekly_window: int,
+    monthly_window: int,
+) -> bool:
+    return (
+        daily is not None
+        and len(daily) >= daily_window
+        and weekly is not None
+        and len(weekly) >= weekly_window
+        and (
+            monthly_window <= 0
+            or (monthly is not None and len(monthly) >= monthly_window)
+        )
+    )
+
+
 def load_blackbox_model(config: PortfolioBacktestConfig):
     modules = load_modules(config.strategy_name)
     try:
@@ -178,6 +198,9 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
         print(f"{config.strategy_name} predict date={trade_date} symbols={len(symbols)} batches={len(batches)}", flush=True)
         scored_count = 0
         threshold_count = 0
+        missing_daily_count = 0
+        missing_weekly_count = 0
+        missing_monthly_count = 0
         for batch_index, batch in enumerate(batches, start=1):
             daily_map = modules.common.load_kline_map(conn, "dkandles", "D", batch, lookback_start, trade_date)
             weekly_map = modules.common.load_kline_map(conn, "wkandles", "W", batch, lookback_start, trade_date)
@@ -200,9 +223,25 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
                     monthly = modules.common.pick_monthly_window(monthly_map.get(scode, []), trade_date, config.blackbox_monthly_window)
                 else:
                     monthly = modules.common.pick_window(monthly_map.get(scode, []), trade_date, config.blackbox_monthly_window) if config.blackbox_monthly_window > 0 else []
-                if daily is None or weekly is None or monthly is None:
+                if daily is None or len(daily) < config.blackbox_daily_window:
+                    missing_daily_count += 1
                     continue
-                if hasattr(modules.common, "_sample_windows_are_valid") and not modules.common._sample_windows_are_valid(config.blackbox_sample_mode, weekly, monthly, daily):
+                if weekly is None or len(weekly) < config.blackbox_weekly_window:
+                    missing_weekly_count += 1
+                    continue
+                if config.blackbox_monthly_window > 0 and (
+                    monthly is None or len(monthly) < config.blackbox_monthly_window
+                ):
+                    missing_monthly_count += 1
+                    continue
+                if not windows_are_scoreable(
+                    daily,
+                    weekly,
+                    monthly,
+                    config.blackbox_daily_window,
+                    config.blackbox_weekly_window,
+                    config.blackbox_monthly_window,
+                ):
                     continue
                 prompt = tokenizer.apply_chat_template(
                     modules.common.build_messages(scode, trade_date, daily, weekly, monthly, sample_mode=config.blackbox_sample_mode),
@@ -233,7 +272,8 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
             )
         print(
             f"{config.strategy_name} date={trade_date} scored={scored_count} "
-            f"above_threshold={threshold_count}",
+            f"above_threshold={threshold_count} missing_daily={missing_daily_count} "
+            f"missing_weekly={missing_weekly_count} missing_monthly={missing_monthly_count}",
             flush=True,
         )
         result = pd.DataFrame(rows, columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])

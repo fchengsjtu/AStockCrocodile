@@ -8,11 +8,21 @@ from portfolio_backtest.common import BLACKBOX_STRATEGIES, DEFAULT_FEE_RATE, DEF
 from portfolio_backtest import db as portfolio_db
 from portfolio_backtest import pool_run
 from portfolio_backtest import run as portfolio_run
-from portfolio_backtest.blackbox import candidate_from_prediction, format_top_predictions
+from portfolio_backtest.blackbox import candidate_from_prediction, format_top_predictions, windows_are_scoreable
 from portfolio_backtest.simulator import simulate_portfolio
 
 
 class PortfolioBacktestTests(unittest.TestCase):
+    def test_blackbox_backtest_scores_complete_windows_without_bottom_band_filter(self):
+        daily = [{"close": 100.0}] * 21
+        weekly = [{"low": 10.0, "high": 20.0}] * 13
+        monthly = [{"low": 10.0, "high": 20.0}] * 8
+
+        self.assertTrue(windows_are_scoreable(daily, weekly, monthly, 21, 13, 8))
+        self.assertFalse(windows_are_scoreable(daily[:-1], weekly, monthly, 21, 13, 8))
+        self.assertFalse(windows_are_scoreable(daily, weekly[:-1], monthly, 21, 13, 8))
+        self.assertFalse(windows_are_scoreable(daily, weekly, monthly[:-1], 21, 13, 8))
+
     def test_blackbox_top_predictions_prints_highest_five_codes_and_names(self):
         frame = pd.DataFrame(
             [
