@@ -53,6 +53,8 @@ def normalize_signals(signals: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_symbol_frames(daily_df: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    if daily_df.empty or "SCode" not in daily_df.columns:
+        return {}
     frames = {}
     for symbol, group in daily_df.groupby("SCode", sort=False):
         item = group.sort_values("TradeDate").reset_index(drop=True)
@@ -268,6 +270,8 @@ def simulate_portfolio(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     daily_df = normalize_daily_frame(daily_df)
     signals = normalize_signals(signals)
+    if daily_df.empty or "SCode" not in daily_df.columns or "TradeDate" not in daily_df.columns:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     symbol_frames = build_symbol_frames(daily_df)
     buy_schedule = build_buy_schedule(signals, symbol_frames)
     trade_dates = sorted(date_value for date_value in daily_df["TradeDate"].dropna().unique() if date_value >= config.start_date)

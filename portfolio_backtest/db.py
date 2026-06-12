@@ -376,7 +376,7 @@ def load_market_trade_dates(conn, start_date: date, end_date: date, ktype: str =
 
 def load_daily_for_simulation(conn: pymysql.connections.Connection, signals: pd.DataFrame, config: PortfolioBacktestConfig) -> pd.DataFrame:
     if signals.empty:
-        return pd.DataFrame()
+        return normalize_daily_frame([])
     symbols = sorted(signals["SCode"].dropna().astype(str).unique().tolist())
     load_end = config.end_date + timedelta(days=15)
     load_start = config.start_date - timedelta(days=180)

@@ -8,10 +8,67 @@ from portfolio_backtest.common import BLACKBOX_STRATEGIES, DEFAULT_FEE_RATE, DEF
 from portfolio_backtest import db as portfolio_db
 from portfolio_backtest import pool_run
 from portfolio_backtest import run as portfolio_run
+from portfolio_backtest.blackbox import candidate_from_prediction
 from portfolio_backtest.simulator import simulate_portfolio
 
 
 class PortfolioBacktestTests(unittest.TestCase):
+    def test_blackbox_candidate_is_kept_below_threshold_for_top_n_ranking(self):
+        config = PortfolioBacktestConfig(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            strategy_name="blackbox_finetune_recall60",
+            blackbox_threshold=0.45,
+        )
+
+        candidate = candidate_from_prediction(
+            config,
+            date(2026, 1, 5),
+            "000001",
+            "A",
+            10.0,
+            {
+                "label": "negative",
+                "positive_probability": 0.20,
+                "positive_loss": 1.5,
+                "negative_loss": 0.5,
+            },
+        )
+
+        self.assertEqual(candidate["Score"], 0.20)
+        self.assertIn("threshold_passed=False", candidate["Reason"])
+
+    def test_empty_streaming_day_returns_empty_results(self):
+        config = PortfolioBacktestConfig(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            strategy_name="blackbox_finetune_recall60",
+        )
+
+        snapshots, holdings, trades = simulate_portfolio(
+            pd.DataFrame(),
+            pd.DataFrame(),
+            config,
+            verbose=False,
+        )
+
+        self.assertTrue(snapshots.empty)
+        self.assertTrue(holdings.empty)
+        self.assertTrue(trades.empty)
+
+    def test_empty_signals_load_daily_frame_with_expected_schema(self):
+        config = PortfolioBacktestConfig(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 31),
+            strategy_name="blackbox_finetune_recall60",
+        )
+
+        result = portfolio_db.load_daily_for_simulation(object(), pd.DataFrame(), config)
+
+        self.assertTrue(result.empty)
+        self.assertIn("SCode", result.columns)
+        self.assertIn("TradeDate", result.columns)
+
     def test_default_fee_rate_is_two_basis_points(self):
         self.assertEqual(DEFAULT_FEE_RATE, 0.0002)
         self.assertEqual(portfolio_run.build_parser().parse_args([]).fee_rate, 0.0002)

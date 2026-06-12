@@ -128,6 +128,12 @@ fees, and position count into one JSON file:
 cycle-01/checkpoint_backtests_20260101_20260529/results.json
 ```
 
+For each trade date, every stock that passes the K-line completeness and
+abnormal-stock filters is scored. Candidates are sorted by positive
+probability and the highest `LIMIT_PER_DAY` stocks are selected. `THRESHOLD`
+is retained only for diagnostic counts and does not remove candidates before
+Top-N ranking.
+
 Optional positional arguments are cycle directory, start date, end date, and
 result JSON path. Set `DRY_RUN=1` to validate all checkpoint paths and commands
 without running model inference. Environment overrides include

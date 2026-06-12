@@ -100,6 +100,31 @@ def close_from_daily_window(daily: list[dict]) -> float | None:
         return None
 
 
+def candidate_from_prediction(
+    config: PortfolioBacktestConfig,
+    trade_date: date,
+    scode: str,
+    sname: str | None,
+    close_price: float | None,
+    prediction: dict,
+) -> dict:
+    probability = float(prediction["positive_probability"])
+    return {
+        "TradeDate": trade_date,
+        "SCode": scode,
+        "SName": sname,
+        "Close": close_price,
+        "Score": probability,
+        "Reason": (
+            f"{config.strategy_name}: probability={probability:.6f}; "
+            f"positive_loss={prediction['positive_loss']:.6f}; "
+            f"negative_loss={prediction['negative_loss']:.6f}; "
+            f"threshold_passed={probability >= config.blackbox_threshold}"
+        ),
+        "StrategyName": config.strategy_name,
+    }
+
+
 def load_blackbox_model(config: PortfolioBacktestConfig):
     modules = load_modules(config.strategy_name)
     try:
@@ -137,7 +162,8 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
         lookback_start = trade_date - timedelta(days=max(750, config.blackbox_monthly_window * 45, config.blackbox_weekly_window * 14, config.blackbox_daily_window * 5))
         batches = list(modules.common.iter_batches(symbols, config.batch_size))
         print(f"{config.strategy_name} predict date={trade_date} symbols={len(symbols)} batches={len(batches)}", flush=True)
-        selected_count = 0
+        scored_count = 0
+        threshold_count = 0
         for batch_index, batch in enumerate(batches, start=1):
             daily_map = modules.common.load_kline_map(conn, "dkandles", "D", batch, lookback_start, trade_date)
             weekly_map = modules.common.load_kline_map(conn, "wkandles", "W", batch, lookback_start, trade_date)
@@ -146,7 +172,8 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
                 if config.blackbox_monthly_window > 0
                 else {}
             )
-            batch_selected = 0
+            batch_scored = 0
+            batch_threshold_count = 0
             for scode in batch:
                 if is_special_treatment_stock_name(names.get(scode)):
                     continue
@@ -169,27 +196,32 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
                     add_generation_prompt=True,
                 )
                 pred = modules.inference.score_prediction(model, tokenizer, prompt, config.blackbox_max_seq_length, config.blackbox_threshold)
-                if pred["label"] != "positive":
-                    continue
                 close_price = close_from_daily_window(daily)
                 rows.append(
-                    {
-                        "TradeDate": trade_date,
-                        "SCode": scode,
-                        "SName": names.get(scode),
-                        "Close": close_price,
-                        "Score": pred["positive_probability"],
-                        "Reason": (
-                            f"{config.strategy_name}: probability={pred['positive_probability']:.6f}; "
-                            f"positive_loss={pred['positive_loss']:.6f}; negative_loss={pred['negative_loss']:.6f}"
-                        ),
-                        "StrategyName": config.strategy_name,
-                    }
+                    candidate_from_prediction(
+                        config,
+                        trade_date,
+                        scode,
+                        names.get(scode),
+                        close_price,
+                        pred,
+                    )
                 )
-                batch_selected += 1
-                selected_count += 1
-            print(f"{config.strategy_name} batch {batch_index}/{len(batches)} selected={batch_selected}", flush=True)
-        print(f"{config.strategy_name} date={trade_date} selected={selected_count}", flush=True)
+                batch_scored += 1
+                scored_count += 1
+                if float(pred["positive_probability"]) >= config.blackbox_threshold:
+                    batch_threshold_count += 1
+                    threshold_count += 1
+            print(
+                f"{config.strategy_name} batch {batch_index}/{len(batches)} "
+                f"scored={batch_scored} above_threshold={batch_threshold_count}",
+                flush=True,
+            )
+        print(
+            f"{config.strategy_name} date={trade_date} scored={scored_count} "
+            f"above_threshold={threshold_count}",
+            flush=True,
+        )
         result = pd.DataFrame(rows, columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])
         if not result.empty:
             candidate_history = pd.DataFrame(
