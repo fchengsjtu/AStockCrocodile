@@ -103,3 +103,33 @@ Set `DRY_RUN=1` to validate paths and print every command without loading a
 model. `CHECKPOINT_UPDATES`, `THRESHOLD`, `PRECISION_TOP_K`,
 `PRECISION_THRESHOLD`, `MAX_SEQ_LENGTH`, `BASE_MODEL`, and `CUDA_DEVICE` can
 be overridden through environment variables.
+
+## Backtest selected reshuffle checkpoints
+
+Run the same checkpoint list through the portfolio backtest for
+`20260101` through `20260529`:
+
+```bash
+cd /mnt/d/Documents/StockInfoCrawler
+bash blackbox_negative_reshuffle/scripts/backtest_checkpoints.sh
+```
+
+Each checkpoint receives a distinct `BacktestName`, for example:
+
+```text
+negative_reshuffle_cycle01_update_000200_20260101_20260529_limit5
+```
+
+The script writes each backtest to MySQL as usual, then exports daily total
+market value, holding market value, cash, actual profit, buy/sell amounts,
+fees, and position count into one JSON file:
+
+```text
+cycle-01/checkpoint_backtests_20260101_20260529/results.json
+```
+
+Optional positional arguments are cycle directory, start date, end date, and
+result JSON path. Set `DRY_RUN=1` to validate all checkpoint paths and commands
+without running model inference. Environment overrides include
+`CHECKPOINT_UPDATES`, `THRESHOLD`, `LIMIT_PER_DAY`, `TRADE_RULE`,
+`BACKTEST_PREFIX`, `SAMPLE_MODE`, `MAX_SEQ_LENGTH`, and `CUDA_DEVICE`.
