@@ -108,6 +108,30 @@ def mark_price(symbol_frames: dict[str, pd.DataFrame], symbol: str, trade_date: 
     return float(row.Close)
 
 
+def portfolio_value_before_buys(
+    cash: float,
+    positions: list[Position],
+    symbol_frames: dict[str, pd.DataFrame],
+    trade_date: date,
+) -> float:
+    holding_value = sum(
+        position.shares
+        * mark_price(symbol_frames, position.scode, trade_date, position.cost_price)
+        for position in positions
+    )
+    return cash + holding_value
+
+
+def daily_buy_cash_limit(
+    cash: float,
+    positions: list[Position],
+    symbol_frames: dict[str, pd.DataFrame],
+    trade_date: date,
+) -> float:
+    total_market_value = portfolio_value_before_buys(cash, positions, symbol_frames, trade_date)
+    return max(0.0, min(cash, total_market_value / 3.0))
+
+
 def trade_record(
     config: PortfolioBacktestConfig,
     trade_date: date,
@@ -340,6 +364,8 @@ def simulate_portfolio(
             if position.shares <= 0:
                 positions.remove(position)
 
+        buy_cash_limit = daily_buy_cash_limit(cash, positions, symbol_frames, trade_date)
+        daily_buy_cash_used = 0.0
         candidates = []
         for item in buy_schedule.get(trade_date, []):
             signal = item["signal"]
@@ -356,8 +382,11 @@ def simulate_portfolio(
             for item, price, shares, gross, fee, total_cost in candidates:
                 if total_cost > cash:
                     continue
+                if daily_buy_cash_used + total_cost > buy_cash_limit:
+                    continue
                 signal = item["signal"]
                 cash -= total_cost
+                daily_buy_cash_used += total_cost
                 daily_fee += fee
                 daily_buy_amount += gross
                 position = Position(

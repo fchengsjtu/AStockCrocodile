@@ -9,10 +9,70 @@ from portfolio_backtest import db as portfolio_db
 from portfolio_backtest import pool_run
 from portfolio_backtest import run as portfolio_run
 from portfolio_backtest.blackbox import candidate_from_prediction, format_top_predictions, windows_are_scoreable
-from portfolio_backtest.simulator import simulate_portfolio
+from portfolio_backtest.simulator import daily_buy_cash_limit, simulate_portfolio
 
 
 class PortfolioBacktestTests(unittest.TestCase):
+    def test_daily_buy_cash_limit_is_one_third_of_market_value_or_cash(self):
+        self.assertAlmostEqual(
+            daily_buy_cash_limit(
+                1_000_000.0,
+                [],
+                {},
+                date(2026, 1, 2),
+            ),
+            1_000_000.0 / 3.0,
+        )
+        self.assertAlmostEqual(
+            daily_buy_cash_limit(
+                80_000.0,
+                [],
+                {},
+                date(2026, 1, 2),
+            ),
+            80_000.0 / 3.0,
+        )
+
+    def test_daily_buys_do_not_exceed_one_third_of_prebuy_market_value(self):
+        signals = pd.DataFrame(
+            [
+                {
+                    "TradeDate": date(2026, 1, 1),
+                    "SCode": f"{index:06d}",
+                    "SName": f"S{index}",
+                    "Close": 10.0,
+                    "Score": 1.0,
+                    "Reason": "x",
+                    "StrategyName": "test",
+                }
+                for index in range(1, 6)
+            ]
+        )
+        daily = pd.DataFrame(
+            [
+                [f"{index:06d}", f"S{index}", trade_date, 10, 10, 10, 10, 1000, 10000]
+                for index in range(1, 6)
+                for trade_date in (date(2026, 1, 1), date(2026, 1, 2))
+            ],
+            columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"],
+        )
+        config = PortfolioBacktestConfig(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 2),
+            strategy_name="test",
+            initial_cash=1_000_000.0,
+        )
+
+        snapshots, _, trades = simulate_portfolio(signals, daily, config, verbose=False)
+
+        buys = trades[trades["Side"] == "BUY"]
+        self.assertEqual(len(buys), 3)
+        self.assertLessEqual(
+            float(buys["GrossAmount"].sum() + buys["Fee"].sum()),
+            1_000_000.0 / 3.0,
+        )
+        self.assertAlmostEqual(snapshots.iloc[-1]["DailyBuyAmount"], 300_000.0)
+
     def test_blackbox_backtest_scores_complete_windows_without_bottom_band_filter(self):
         daily = [{"close": 100.0}] * 21
         weekly = [{"low": 10.0, "high": 20.0}] * 13

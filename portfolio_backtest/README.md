@@ -9,6 +9,9 @@ Rules:
 - Initial cash: `1000000`.
 - For stocks selected on day T, buy on the next trading day using that day's weighted average price.
 - Each buy targets `100000` cash and rounds shares to the nearest 100-share lot.
+- Total new-buy cash outflow per day, including buy commissions, is capped at
+  the smaller of one third of the account's pre-buy total market value and
+  the available cash after that day's sells.
 - Commission rate is `0.0002` (0.02%, two basis points) for both buys and sells.
 - Stamp duty is `0.0005` (0.05%, five basis points) of gross sell amount and is charged only on sells.
 - A position bought on day B can only be sold from the next trading day because of T+1.
