@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 from typing import Iterable
@@ -102,9 +103,37 @@ def _evaluate_training_checkpoint(
     return result
 
 
-def _patch_base_trainer() -> None:
+def _validate_initial_binary_adapter(adapter_dir: Path) -> Path:
+    resolved = adapter_dir.expanduser().resolve()
+    if not resolved.is_dir():
+        raise FileNotFoundError(f"initial binary adapter directory does not exist: {resolved}")
+    if not (resolved / "adapter_config.json").is_file():
+        raise FileNotFoundError(f"initial binary adapter is missing adapter_config.json: {resolved}")
+    return resolved
+
+
+def _checkpoint_update_with_initial(
+    checkpoint_dir: Path | None,
+    initial_binary_adapter_dir: Path,
+    original_checkpoint_update,
+) -> int:
+    if checkpoint_dir is not None and checkpoint_dir.expanduser().resolve() == initial_binary_adapter_dir:
+        return 0
+    return original_checkpoint_update(checkpoint_dir)
+
+
+def _patch_base_trainer(initial_binary_adapter_dir: Path | None = None) -> None:
     base_train.compact_messages_from_sample = compact_messages_from_sample
     base_train._evaluate_training_checkpoint = _evaluate_training_checkpoint
+    if initial_binary_adapter_dir is None:
+        return
+    initial_path = _validate_initial_binary_adapter(initial_binary_adapter_dir)
+    original_checkpoint_update = base_train._checkpoint_update
+
+    def checkpoint_update(checkpoint_dir: Path | None) -> int:
+        return _checkpoint_update_with_initial(checkpoint_dir, initial_path, original_checkpoint_update)
+
+    base_train._checkpoint_update = checkpoint_update
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -116,13 +145,37 @@ def build_parser() -> argparse.ArgumentParser:
         output_dir=DEFAULT_OUTPUT_DIR,
         max_seq_length=DEFAULT_MAX_SEQ_LENGTH,
     )
+    parser.add_argument(
+        "--initial-binary-adapter-dir",
+        "--initial-adapter-dir",
+        dest="initial_binary_adapter_dir",
+        type=Path,
+        default=Path(os.environ["INITIAL_BINARY_ADAPTER_DIR"]) if os.environ.get("INITIAL_BINARY_ADAPTER_DIR") else None,
+        help=(
+            "Initialize trainable LoRA weights from an already trained binary-classification adapter, "
+            "but start three-class optimizer updates at step 0. This does not overwrite the source adapter."
+        ),
+    )
     return parser
 
 
 def main(argv: Iterable[str] | None = None) -> None:
-    _patch_base_trainer()
     args = build_parser().parse_args(argv)
+    if args.initial_binary_adapter_dir is not None and args.resume_adapter_dir is not None:
+        raise SystemExit("--initial-binary-adapter-dir and --resume-adapter-dir cannot be used together")
+    initial_binary_adapter_dir = (
+        _validate_initial_binary_adapter(args.initial_binary_adapter_dir)
+        if args.initial_binary_adapter_dir is not None
+        else None
+    )
+    _patch_base_trainer(initial_binary_adapter_dir)
     prepare_rtx3060(args.cuda_device, require_device=not args.allow_non_rtx3060)
+    if initial_binary_adapter_dir is not None:
+        print(
+            f"initializing three-class LoRA from binary adapter: {initial_binary_adapter_dir}; "
+            "optimizer and update counter start from 0",
+            flush=True,
+        )
     base_train.train_recall60_lora(
         base_model=args.base_model,
         data_dir=args.data_dir,
@@ -138,10 +191,10 @@ def main(argv: Iterable[str] | None = None) -> None:
         lora_rank=args.lora_rank,
         lora_dropout=args.lora_dropout,
         checkpoint_every=args.checkpoint_every,
-        resume_adapter_dir=args.resume_adapter_dir,
+        resume_adapter_dir=initial_binary_adapter_dir or args.resume_adapter_dir,
         nonfinite_patience=args.nonfinite_patience,
         rebuild_token_cache=args.rebuild_token_cache,
-        auto_resume=not args.no_auto_resume,
+        auto_resume=not args.no_auto_resume and initial_binary_adapter_dir is None,
         oom_patience=args.oom_patience,
         nonfinite_skip_limit=args.nonfinite_skip_limit,
         nonfinite_backoff_every=args.nonfinite_backoff_every,
@@ -158,4 +211,3 @@ def main(argv: Iterable[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-

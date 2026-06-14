@@ -66,6 +66,29 @@ python -m blackbox_finetune_threeclass.train \
   --cuda-device 0
 ```
 
+To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
+
+```bash
+python -m blackbox_finetune_threeclass.train \
+  --base-model Qwen/Qwen2.5-0.5B-Instruct \
+  --data-dir blackbox_finetune_threeclass/data_xlong_p1_n2_u10 \
+  --output-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-from-binary-lora \
+  --initial-binary-adapter-dir /mnt/d/Models/precision10@0.4-3200 \
+  --max-seq-length 3072 --epochs 0.3 \
+  --gradient-accumulation-steps 16 --learning-rate 5e-6 \
+  --checkpoint-every 100 --on-the-fly-tokenize \
+  --cuda-device 0
+```
+
+The source binary adapter is loaded as trainable LoRA initialization only. The optimizer and update counter start from zero, checkpoints are written under the new three-class output directory, and the binary model is not overwritten. Without `--initial-binary-adapter-dir`, training starts from a fresh LoRA adapter on the Qwen base model. Use `--resume-adapter-dir` only to continue an existing three-class checkpoint; the two options cannot be combined.
+
+The same initialization can be supplied to the one-click script:
+
+```bash
+export INITIAL_BINARY_ADAPTER_DIR='D:\Models\precision10@0.4-3200'
+bash blackbox_finetune_threeclass/scripts/one_click_deploy.sh full
+```
+
 Evaluate:
 
 ```bash

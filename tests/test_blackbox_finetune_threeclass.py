@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from blackbox_finetune_threeclass.build_dataset import (
     FutureBar,
@@ -17,6 +19,7 @@ from blackbox_finetune_threeclass.common import (
 from blackbox_finetune_threeclass.build_dataset import build_parser as build_dataset_parser
 from blackbox_finetune_threeclass.inference import probabilities_from_losses
 from blackbox_finetune_threeclass.metrics import summarize_scored_rows
+from blackbox_finetune_threeclass import train as threeclass_train
 
 
 def sample(label: int, index: int) -> dict:
@@ -76,6 +79,37 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(label_answer(CLASS_NEUTRAL), '{"c":"neutral"}')
         messages = compact_messages_from_sample(sample(CLASS_NEUTRAL, 1))
         self.assertEqual(messages[-1]["content"], '{"c":"neutral"}')
+
+    def test_initial_binary_adapter_starts_at_update_zero(self):
+        with TemporaryDirectory() as directory:
+            adapter_dir = Path(directory) / "update-003200"
+            adapter_dir.mkdir()
+            (adapter_dir / "adapter_config.json").write_text("{}", encoding="utf-8")
+            initial_path = threeclass_train._validate_initial_binary_adapter(adapter_dir)
+            original = threeclass_train.base_train._checkpoint_update
+            self.assertEqual(
+                threeclass_train._checkpoint_update_with_initial(adapter_dir, initial_path, original),
+                0,
+            )
+            self.assertEqual(
+                threeclass_train._checkpoint_update_with_initial(
+                    Path("checkpoints/update-000200"),
+                    initial_path,
+                    original,
+                ),
+                200,
+            )
+
+    def test_initial_binary_adapter_requires_adapter_config(self):
+        with TemporaryDirectory() as directory:
+            with self.assertRaises(FileNotFoundError):
+                threeclass_train._validate_initial_binary_adapter(Path(directory))
+
+    def test_initial_binary_adapter_argument_is_available(self):
+        args = threeclass_train.build_parser().parse_args(
+            ["--initial-binary-adapter-dir", "binary-adapter"]
+        )
+        self.assertEqual(args.initial_binary_adapter_dir, Path("binary-adapter"))
 
     def test_probabilities_are_normalized_and_follow_loss(self):
         probabilities = probabilities_from_losses({CLASS_NEGATIVE: 2.0, CLASS_NEUTRAL: 1.0, CLASS_POSITIVE: 0.5})
