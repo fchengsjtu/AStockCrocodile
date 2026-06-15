@@ -14,7 +14,7 @@ Each anchor uses only K-lines on or before the anchor date. The next three tradi
 Positive anchors for the same stock use the same 20-trading-day cooldown as recall60. Negative and neutral samples are not excluded merely because they are close to a positive anchor; their labels are determined only by the future-three-trading-day path. After recall60 K-line completeness and bottom-band filters are applied, the final dataset is rebalanced to exactly:
 
 ```text
-positive : negative : neutral = 1 : 2 : 10
+positive : negative : neutral = 1 : 4 : 10
 ```
 
 Training and test files are stratified, so both retain approximately the same class ratio.
@@ -45,12 +45,12 @@ Build training and validation datasets:
 
 ```bash
 python -m blackbox_finetune_threeclass.build_dataset \
-  --output-dir blackbox_finetune_threeclass/data_xlong_p1_n2_u10 \
+  --output-dir blackbox_finetune_threeclass/data_xlong_p1_n4_u10 \
   --start-date 20230101 --end-date 20241231 \
   --sample-mode xlong
 
 python -m blackbox_finetune_threeclass.build_validation_dataset \
-  --output-dir blackbox_finetune_threeclass/data_evaluation_xlong_p1_n2_u10 \
+  --output-dir blackbox_finetune_threeclass/data_evaluation_xlong_p1_n4_u10 \
   --start-date 20260101 --end-date 20260530 \
   --sample-mode xlong
 ```
@@ -60,11 +60,11 @@ Train:
 ```bash
 python -m blackbox_finetune_threeclass.train \
   --base-model Qwen/Qwen2.5-0.5B-Instruct \
-  --data-dir blackbox_finetune_threeclass/data_xlong_p1_n2_u10 \
-  --output-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-lora \
+  --data-dir blackbox_finetune_threeclass/data_xlong_p1_n4_u10 \
+  --output-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-p1_n4_u10-lora \
   --max-seq-length 3072 --epochs 0.3 \
   --gradient-accumulation-steps 16 --learning-rate 5e-6 \
-  --checkpoint-every 100 --on-the-fly-tokenize \
+  --checkpoint-every 100 --eval-max-samples 1500 --on-the-fly-tokenize \
   --cuda-device 0
 ```
 
@@ -93,7 +93,7 @@ To initialize from a good binary recall60 adapter while starting a new three-cla
 ```bash
 python -m blackbox_finetune_threeclass.train \
   --base-model Qwen/Qwen2.5-0.5B-Instruct \
-  --data-dir blackbox_finetune_threeclass/data_xlong_p1_n2_u10 \
+  --data-dir blackbox_finetune_threeclass/data_xlong_p1_n4_u10 \
   --output-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-from-binary-lora \
   --initial-binary-adapter-dir /mnt/d/Models/precision10@0.4-3200 \
   --max-seq-length 3072 --epochs 0.3 \
@@ -116,8 +116,8 @@ Evaluate:
 ```bash
 python -m blackbox_finetune_threeclass.evaluate \
   --base-model Qwen/Qwen2.5-0.5B-Instruct \
-  --adapter-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-lora/adapter \
-  --data-dir blackbox_finetune_threeclass/data_evaluation_xlong_p1_n2_u10 \
+  --adapter-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-p1_n4_u10-lora/adapter \
+  --data-dir blackbox_finetune_threeclass/data_evaluation_xlong_p1_n4_u10 \
   --max-seq-length 3072 --cuda-device 0
 ```
 
@@ -128,7 +128,7 @@ Predict one day:
 ```bash
 python -m blackbox_finetune_threeclass.predict_day \
   --date 20260612 \
-  --adapter-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-lora/adapter \
+  --adapter-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-p1_n4_u10-lora/adapter \
   --sample-mode xlong --max-seq-length 3072 \
   --negative-weight 0.5 --neutral-weight 0 \
   --limit 20 \

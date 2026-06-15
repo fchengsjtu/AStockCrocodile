@@ -282,21 +282,21 @@ def rebalance_materialized_samples(rows: list[dict], seed: int, positive_limit: 
     }
     positive_count = min(
         len(grouped[CLASS_POSITIVE]),
-        len(grouped[CLASS_NEGATIVE]) // 2,
+        len(grouped[CLASS_NEGATIVE]) // 4,
         len(grouped[CLASS_NEUTRAL]) // 10,
     )
     if positive_limit and positive_limit > 0:
         positive_count = min(positive_count, positive_limit)
     if positive_count <= 0:
         raise RuntimeError(
-            "Unable to create a 1:2:10 dataset after K-line filtering: "
+            "Unable to create a 1:4:10 dataset after K-line filtering: "
             f"positive={len(grouped[CLASS_POSITIVE])} "
             f"negative={len(grouped[CLASS_NEGATIVE])} neutral={len(grouped[CLASS_NEUTRAL])}"
         )
     selected: list[dict] = []
     for label, count in (
         (CLASS_POSITIVE, positive_count),
-        (CLASS_NEGATIVE, positive_count * 2),
+        (CLASS_NEGATIVE, positive_count * 4),
         (CLASS_NEUTRAL, positive_count * 10),
     ):
         ordered = sorted(
@@ -364,7 +364,7 @@ def build_threeclass_dataset(
         negative_rows = _materialize_until(
             conn,
             grouped[CLASS_NEGATIVE],
-            usable_positive_count * 2,
+            usable_positive_count * 4,
             seed,
             CLASS_NAMES[CLASS_NEGATIVE],
             daily_window,
@@ -405,7 +405,7 @@ def build_threeclass_dataset(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build positive/negative/neutral black-box samples at a strict 1:2:10 ratio")
+    parser = argparse.ArgumentParser(description="Build positive/negative/neutral black-box samples at a strict 1:4:10 ratio")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--start-date", default=os.environ.get("TRAIN_START_DATE", DEFAULT_TRAIN_START_DATE))
     parser.add_argument("--end-date", default=os.environ.get("TRAIN_END_DATE", DEFAULT_TRAIN_END_DATE))

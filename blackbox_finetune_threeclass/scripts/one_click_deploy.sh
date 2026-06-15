@@ -49,7 +49,7 @@ for name in \
   REBUILD_DATASET CANDIDATE_BATCH_SIZE MYSQL_QUERY_RETRIES; do
   printf '  %s=%s\n' "$name" "${!name}"
 done
-echo "  CLASS_RATIO=positive:negative:neutral=1:2:10"
+echo "  CLASS_RATIO=positive:negative:neutral=1:4:10"
 echo "  LABEL_RULE=first trigger in next 3 trading days: +20% / -6% / neither"
 echo "==========================================="
 

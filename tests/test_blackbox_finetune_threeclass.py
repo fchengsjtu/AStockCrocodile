@@ -128,7 +128,7 @@ class ThreeClassTests(unittest.TestCase):
             classify_future_path(10.0, [FutureBar(12.1, 9.3), FutureBar(10.0, 9.8), FutureBar(10.0, 9.8)])
         )
 
-    def test_rebalance_is_exactly_one_two_ten(self):
+    def test_rebalance_is_exactly_one_four_ten(self):
         rows = (
             [sample(CLASS_POSITIVE, index) for index in range(4)]
             + [sample(CLASS_NEGATIVE, index + 100) for index in range(20)]
@@ -136,7 +136,13 @@ class ThreeClassTests(unittest.TestCase):
         )
         selected = rebalance_materialized_samples(rows, seed=7)
         counts = {label: sum(int(row["metadata"]["label"]) == label for row in selected) for label in range(3)}
-        self.assertEqual(counts, {CLASS_NEGATIVE: 8, CLASS_NEUTRAL: 40, CLASS_POSITIVE: 4})
+        self.assertEqual(counts, {CLASS_NEGATIVE: 16, CLASS_NEUTRAL: 40, CLASS_POSITIVE: 4})
+
+    def test_training_defaults_use_requested_ratio_eval_size_and_learning_rate(self):
+        args = threeclass_train.build_parser().parse_args([])
+        self.assertEqual(args.data_dir, Path("blackbox_finetune_threeclass/data_xlong_p1_n4_u10"))
+        self.assertEqual(args.eval_max_samples, 1500)
+        self.assertEqual(args.learning_rate, 5e-6)
 
     def test_three_class_answers_are_compact(self):
         self.assertEqual(label_answer(CLASS_POSITIVE), '{"c":"positive"}')

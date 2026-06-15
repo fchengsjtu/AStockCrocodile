@@ -40,6 +40,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def _configure_asymmetric_loss(
     negative_ce_weight: float,
     fp_loss_weight: float,
@@ -363,6 +370,8 @@ def build_parser() -> argparse.ArgumentParser:
         data_dir=DEFAULT_DATA_DIR,
         output_dir=DEFAULT_OUTPUT_DIR,
         max_seq_length=DEFAULT_MAX_SEQ_LENGTH,
+        learning_rate=_env_float("LEARNING_RATE", 5e-6),
+        eval_max_samples=_env_int("EVAL_MAX_SAMPLES", 1500),
     )
     parser.add_argument(
         "--initial-binary-adapter-dir",
