@@ -68,6 +68,26 @@ python -m blackbox_finetune_threeclass.train \
   --cuda-device 0
 ```
 
+The training objective uses an asymmetric three-class loss:
+
+```text
+total_loss =
+    weighted_CE
+    + FP_LOSS_WEIGHT * negative_fp_loss
+    + RANK_LOSS_WEIGHT * negative_positive_ranking_loss
+```
+
+Defaults:
+
+```text
+NEGATIVE_CE_WEIGHT=2.0
+FP_LOSS_WEIGHT=0.5
+RANK_LOSS_WEIGHT=0.2
+RANK_MARGIN=0.2
+```
+
+Positive and neutral CE weights remain `1.0`. For a true negative sample, `negative_fp_loss` penalizes the model when the positive class token scores above the negative class token. The ranking term requires the negative class score to exceed the positive class score by `RANK_MARGIN`. Both terms are calculated from the same model forward pass, avoiding an extra inference pass. Training logs print `loss`, `ce`, `negative_fp`, and `rank`.
+
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 
 ```bash

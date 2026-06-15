@@ -9,12 +9,15 @@ from typing import Iterable
 
 from blackbox_finetune_recall60 import train as base_train
 from blackbox_finetune_threeclass.common import (
+    CLASS_NEGATIVE,
     CLASS_NAMES,
+    CLASS_POSITIVE,
     DEFAULT_BASE_MODEL,
     DEFAULT_DATA_DIR,
     DEFAULT_MAX_SEQ_LENGTH,
     DEFAULT_OUTPUT_DIR,
     compact_messages_from_sample,
+    label_answer,
 )
 from blackbox_finetune_threeclass.gpu import prepare_rtx3060
 from blackbox_finetune_threeclass.inference import score_prediction, selection_score
@@ -24,12 +27,135 @@ from blackbox_finetune_threeclass.metrics import (
     summarize_scored_rows,
 )
 
+_NEGATIVE_CE_WEIGHT = 2.0
+_FP_LOSS_WEIGHT = 0.5
+_RANK_LOSS_WEIGHT = 0.2
+_RANK_MARGIN = 0.2
+
 
 def _env_float(name: str, default: float) -> float:
     try:
         return float(os.environ.get(name, default))
     except (TypeError, ValueError):
         return default
+
+
+def _configure_asymmetric_loss(
+    negative_ce_weight: float,
+    fp_loss_weight: float,
+    rank_loss_weight: float,
+    rank_margin: float,
+) -> None:
+    global _NEGATIVE_CE_WEIGHT, _FP_LOSS_WEIGHT, _RANK_LOSS_WEIGHT, _RANK_MARGIN
+    _NEGATIVE_CE_WEIGHT = max(0.0, float(negative_ce_weight))
+    _FP_LOSS_WEIGHT = max(0.0, float(fp_loss_weight))
+    _RANK_LOSS_WEIGHT = max(0.0, float(rank_loss_weight))
+    _RANK_MARGIN = max(0.0, float(rank_margin))
+
+
+def _per_sample_answer_nll(logits, labels):
+    import torch
+    import torch.nn.functional as functional
+
+    shift_logits = logits[:, :-1, :].float()
+    shift_labels = labels[:, 1:]
+    token_losses = functional.cross_entropy(
+        shift_logits.reshape(-1, shift_logits.size(-1)),
+        shift_labels.reshape(-1),
+        ignore_index=-100,
+        reduction="none",
+    ).reshape(shift_labels.shape)
+    valid = shift_labels.ne(-100)
+    return (token_losses * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1)
+
+
+def _class_discrimination_tokens(tokenizer) -> tuple[int, int, int]:
+    negative_ids = tokenizer(label_answer(CLASS_NEGATIVE), add_special_tokens=False)["input_ids"]
+    positive_ids = tokenizer(label_answer(CLASS_POSITIVE), add_special_tokens=False)["input_ids"]
+    common_prefix = 0
+    for negative_id, positive_id in zip(negative_ids, positive_ids):
+        if negative_id != positive_id:
+            break
+        common_prefix += 1
+    if common_prefix >= len(negative_ids) or common_prefix >= len(positive_ids):
+        raise RuntimeError("negative and positive class answers do not contain distinct tokens")
+    return common_prefix, int(negative_ids[common_prefix]), int(positive_ids[common_prefix])
+
+
+def _negative_auxiliary_losses(negative_logits, positive_logits):
+    import torch.nn.functional as functional
+
+    score_delta = positive_logits.float() - negative_logits.float()
+    return functional.softplus(score_delta).mean(), functional.relu(_RANK_MARGIN + score_delta).mean()
+
+
+def _compute_asymmetric_training_loss(model, tokenizer, tensors: dict, batch: list[dict], max_seq_length: int):
+    import torch
+    import torch.nn.functional as functional
+
+    class_labels = tensors.pop("class_labels")
+    output = model(**tensors)
+    correct_nll = _per_sample_answer_nll(output.logits, tensors["labels"])
+    class_weights = torch.where(
+        class_labels.eq(CLASS_NEGATIVE),
+        torch.full_like(correct_nll, _NEGATIVE_CE_WEIGHT),
+        torch.ones_like(correct_nll),
+    )
+    weighted_ce = (correct_nll * class_weights).mean()
+
+    negative_indices = class_labels.eq(CLASS_NEGATIVE).nonzero(as_tuple=False).flatten().tolist()
+    if negative_indices:
+        common_prefix, negative_token_id, positive_token_id = _class_discrimination_tokens(tokenizer)
+        class_positions = []
+        for index in negative_indices:
+            prompt_length = int(tensors["labels"][index].eq(-100).sum().item())
+            class_positions.append(max(0, prompt_length + common_prefix - 1))
+        batch_indices = torch.tensor(negative_indices, device=output.logits.device)
+        position_indices = torch.tensor(class_positions, device=output.logits.device)
+        class_logits = output.logits[batch_indices, position_indices]
+        negative_logits = class_logits[:, negative_token_id]
+        positive_logits = class_logits[:, positive_token_id]
+        negative_fp_loss, ranking_loss = _negative_auxiliary_losses(
+            negative_logits,
+            positive_logits,
+        )
+    else:
+        negative_fp_loss = weighted_ce.new_zeros(())
+        ranking_loss = weighted_ce.new_zeros(())
+
+    total_loss = (
+        weighted_ce
+        + _FP_LOSS_WEIGHT * negative_fp_loss
+        + _RANK_LOSS_WEIGHT * ranking_loss
+    )
+    metrics = {
+        "ce": float(weighted_ce.detach().cpu()),
+        "negative_fp": float(negative_fp_loss.detach().cpu()),
+        "rank": float(ranking_loss.detach().cpu()),
+    }
+    return total_loss, metrics
+
+
+def _tokenize_threeclass_row(tokenizer, row: dict, max_seq_length: int) -> dict:
+    item = _ORIGINAL_TOKENIZE_ROW(tokenizer, row, max_seq_length)
+    item["class_label"] = int(row["metadata"]["label"])
+    return item
+
+
+def _collate_threeclass(tokenizer, batch: list[dict], device: str) -> dict:
+    import torch
+
+    tensors = _ORIGINAL_COLLATE(tokenizer, batch, device)
+    tensors["class_labels"] = torch.tensor(
+        [int(item["class_label"]) for item in batch],
+        dtype=torch.long,
+        device=device,
+    )
+    return tensors
+
+
+_ORIGINAL_TOKENIZE_ROW = base_train._tokenize_row
+_ORIGINAL_COLLATE = base_train._collate
 
 
 def _next_selection_score_threshold(
@@ -214,6 +340,10 @@ def _checkpoint_update_with_initial(
 def _patch_base_trainer(initial_binary_adapter_dir: Path | None = None) -> None:
     base_train.compact_messages_from_sample = compact_messages_from_sample
     base_train._evaluate_training_checkpoint = _evaluate_training_checkpoint
+    base_train._tokenize_row = _tokenize_threeclass_row
+    base_train._collate = _collate_threeclass
+    base_train._compute_training_loss = _compute_asymmetric_training_loss
+    base_train.TOKEN_CACHE_VERSION = f"{base_train.TOKEN_CACHE_VERSION}_threeclass_asymmetric_v1"
     if initial_binary_adapter_dir is None:
         return
     initial_path = _validate_initial_binary_adapter(initial_binary_adapter_dir)
@@ -245,6 +375,30 @@ def build_parser() -> argparse.ArgumentParser:
             "but start three-class optimizer updates at step 0. This does not overwrite the source adapter."
         ),
     )
+    parser.add_argument(
+        "--negative-ce-weight",
+        type=float,
+        default=_env_float("NEGATIVE_CE_WEIGHT", 2.0),
+        help="CE multiplier for true negative samples; positive and neutral remain 1.0.",
+    )
+    parser.add_argument(
+        "--fp-loss-weight",
+        type=float,
+        default=_env_float("FP_LOSS_WEIGHT", 0.5),
+        help="Weight for penalizing a positive answer on true negative samples.",
+    )
+    parser.add_argument(
+        "--rank-loss-weight",
+        type=float,
+        default=_env_float("RANK_LOSS_WEIGHT", 0.2),
+        help="Weight for the negative-versus-positive margin ranking loss.",
+    )
+    parser.add_argument(
+        "--rank-margin",
+        type=float,
+        default=_env_float("RANK_MARGIN", 0.2),
+        help="Required score margin between the negative and positive answers.",
+    )
     return parser
 
 
@@ -257,6 +411,12 @@ def main(argv: Iterable[str] | None = None) -> None:
         if args.initial_binary_adapter_dir is not None
         else None
     )
+    _configure_asymmetric_loss(
+        args.negative_ce_weight,
+        args.fp_loss_weight,
+        args.rank_loss_weight,
+        args.rank_margin,
+    )
     _patch_base_trainer(initial_binary_adapter_dir)
     prepare_rtx3060(args.cuda_device, require_device=not args.allow_non_rtx3060)
     if initial_binary_adapter_dir is not None:
@@ -265,6 +425,13 @@ def main(argv: Iterable[str] | None = None) -> None:
             "optimizer and update counter start from 0",
             flush=True,
         )
+    print(
+        "three-class asymmetric loss: "
+        f"total=weighted_ce+{_FP_LOSS_WEIGHT}*negative_fp+{_RANK_LOSS_WEIGHT}*ranking "
+        f"negative_ce_weight={_NEGATIVE_CE_WEIGHT} positive_ce_weight=1.0 neutral_ce_weight=1.0 "
+        f"rank_margin={_RANK_MARGIN}",
+        flush=True,
+    )
     base_train.train_recall60_lora(
         base_model=args.base_model,
         data_dir=args.data_dir,

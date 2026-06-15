@@ -105,6 +105,11 @@ def _collate(tokenizer, batch: list[dict], device: str) -> dict:
     }
 
 
+def _compute_training_loss(model, tokenizer, tensors: dict, batch: list[dict], max_seq_length: int):
+    output = model(**tensors)
+    return output.loss, {}
+
+
 def _format_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
     hours, remainder = divmod(seconds, 3600)
@@ -482,8 +487,13 @@ def train_recall60_lora(
             if on_the_fly_tokenize:
                 batch = [_tokenize_row(tokenizer, row, max_seq_length) for row in batch]
             tensors = _collate(tokenizer, batch, device)
-            output = model(**tensors)
-            raw_loss = output.loss
+            raw_loss, loss_metrics = _compute_training_loss(
+                model,
+                tokenizer,
+                tensors,
+                batch,
+                max_seq_length,
+            )
             if not torch.isfinite(raw_loss.detach()):
                 consecutive_nonfinite += 1
                 total_nonfinite_skips += 1
@@ -576,10 +586,12 @@ def train_recall60_lora(
             progress = update / total_updates
             remaining = elapsed * (1.0 - progress) / progress if progress > 0 else 0.0
             eta_epoch = time.localtime(time.time() + remaining)
+            loss_metric_text = "".join(f"{name}={value:.4f} " for name, value in loss_metrics.items())
             print(
                 f"train update {update}/{total_updates} "
                 f"({progress * 100:.2f}%) "
                 f"loss={float(raw_loss.detach().cpu()):.4f} "
+                f"{loss_metric_text}"
                 f"grad_norm={float(grad_norm.detach().cpu()):.4f} "
                 f"lr={optimizer.param_groups[0]['lr']:.2e} "
                 f"elapsed={_format_duration(elapsed)} "

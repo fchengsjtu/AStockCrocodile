@@ -176,6 +176,47 @@ class ThreeClassTests(unittest.TestCase):
         )
         self.assertEqual(args.initial_binary_adapter_dir, Path("binary-adapter"))
 
+    def test_asymmetric_loss_defaults_are_configurable(self):
+        args = threeclass_train.build_parser().parse_args([])
+        self.assertEqual(args.negative_ce_weight, 2.0)
+        self.assertEqual(args.fp_loss_weight, 0.5)
+        self.assertEqual(args.rank_loss_weight, 0.2)
+        self.assertEqual(args.rank_margin, 0.2)
+
+    def test_threeclass_tokenization_preserves_class_label(self):
+        class FakeTokenizer:
+            eos_token = "<eos>"
+            eos_token_id = 0
+
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
+                return "prompt"
+
+            def __call__(self, text, add_special_tokens=False):
+                return {"input_ids": [1, 2] if text == "prompt" else [3, 0]}
+
+        item = threeclass_train._tokenize_threeclass_row(
+            FakeTokenizer(),
+            sample(CLASS_NEGATIVE, 1),
+            32,
+        )
+        self.assertEqual(item["class_label"], CLASS_NEGATIVE)
+
+    def test_negative_auxiliary_losses_penalize_positive_logit(self):
+        import torch
+
+        threeclass_train._configure_asymmetric_loss(2.0, 0.5, 0.2, 0.2)
+        low_fp, low_rank = threeclass_train._negative_auxiliary_losses(
+            torch.tensor([2.0]),
+            torch.tensor([0.0]),
+        )
+        high_fp, high_rank = threeclass_train._negative_auxiliary_losses(
+            torch.tensor([0.0]),
+            torch.tensor([2.0]),
+        )
+        self.assertLess(float(low_fp), float(high_fp))
+        self.assertEqual(float(low_rank), 0.0)
+        self.assertGreater(float(high_rank), 2.0)
+
     def test_probabilities_are_normalized_and_follow_loss(self):
         probabilities = probabilities_from_losses({CLASS_NEGATIVE: 2.0, CLASS_NEUTRAL: 1.0, CLASS_POSITIVE: 0.5})
         self.assertAlmostEqual(sum(probabilities.values()), 1.0)
