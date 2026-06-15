@@ -3,13 +3,21 @@ from __future__ import annotations
 from blackbox_finetune_threeclass.common import CLASS_NAMES
 
 
-def positive_probability_top_rows(rows: list[dict], limit: int = 50) -> list[dict]:
+def _ranked_rows(rows: list[dict], score_key: str, limit: int) -> list[dict]:
     ordered = sorted(
         rows,
-        key=lambda row: float(row.get("positive_probability", 0.0)),
+        key=lambda row: float(row.get(score_key, 0.0)),
         reverse=True,
     )[: max(0, limit)]
     return [{**row, "rank": rank} for rank, row in enumerate(ordered, start=1)]
+
+
+def positive_probability_top_rows(rows: list[dict], limit: int = 50) -> list[dict]:
+    return _ranked_rows(rows, "positive_probability", limit)
+
+
+def selection_score_top_rows(rows: list[dict], limit: int = 50) -> list[dict]:
+    return _ranked_rows(rows, "selection_score", limit)
 
 
 def summarize_scored_rows(rows: list[dict], top_ks: tuple[int, ...] = (5, 10, 20, 50)) -> dict:
@@ -29,7 +37,8 @@ def summarize_scored_rows(rows: list[dict], top_ks: tuple[int, ...] = (5, 10, 20
         f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
         per_class[name] = {"precision": precision, "recall": recall, "f1": f1, "support": tp + fn}
     accuracy = sum(confusion[name][name] for name in confusion) / len(rows) if rows else 0.0
-    ordered = sorted(rows, key=lambda row: float(row.get("positive_probability", 0.0)), reverse=True)
+    ranking_key = "selection_score" if any("selection_score" in row for row in rows) else "positive_probability"
+    ordered = sorted(rows, key=lambda row: float(row.get(ranking_key, 0.0)), reverse=True)
     top_metrics = {}
     for k in top_ks:
         top = ordered[:k]

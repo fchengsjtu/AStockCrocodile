@@ -26,7 +26,11 @@ from blackbox_finetune_threeclass.predict_day import (
     build_parser as build_predict_parser,
     rank_predictions,
 )
-from blackbox_finetune_threeclass.metrics import positive_probability_top_rows, summarize_scored_rows
+from blackbox_finetune_threeclass.metrics import (
+    positive_probability_top_rows,
+    selection_score_top_rows,
+    summarize_scored_rows,
+)
 from blackbox_finetune_threeclass import train as threeclass_train
 
 
@@ -212,14 +216,47 @@ class ThreeClassTests(unittest.TestCase):
 
     def test_metrics_include_confusion_and_positive_precision(self):
         rows = [
-            {"actual_label": CLASS_POSITIVE, "predicted_label": CLASS_POSITIVE, "positive_probability": 0.9},
-            {"actual_label": CLASS_NEGATIVE, "predicted_label": CLASS_POSITIVE, "positive_probability": 0.8},
-            {"actual_label": CLASS_NEUTRAL, "predicted_label": CLASS_NEUTRAL, "positive_probability": 0.1},
+            {
+                "actual_label": CLASS_POSITIVE,
+                "predicted_label": CLASS_POSITIVE,
+                "positive_probability": 0.9,
+                "selection_score": 0.3,
+            },
+            {
+                "actual_label": CLASS_NEGATIVE,
+                "predicted_label": CLASS_POSITIVE,
+                "positive_probability": 0.8,
+                "selection_score": 0.1,
+            },
+            {
+                "actual_label": CLASS_NEUTRAL,
+                "predicted_label": CLASS_NEUTRAL,
+                "positive_probability": 0.1,
+                "selection_score": 0.2,
+            },
         ]
         summary = summarize_scored_rows(rows, (2,))
         self.assertAlmostEqual(summary["accuracy"], 2 / 3)
         self.assertEqual(summary["confusion_matrix"]["positive"]["positive"], 1)
         self.assertAlmostEqual(summary["positive_precision@2"], 0.5)
+
+    def test_positive_precision_uses_selection_score_ranking(self):
+        rows = [
+            {
+                "actual_label": CLASS_NEGATIVE,
+                "predicted_label": CLASS_POSITIVE,
+                "positive_probability": 0.95,
+                "selection_score": 0.1,
+            },
+            {
+                "actual_label": CLASS_POSITIVE,
+                "predicted_label": CLASS_POSITIVE,
+                "positive_probability": 0.70,
+                "selection_score": 0.6,
+            },
+        ]
+        summary = summarize_scored_rows(rows, (1,))
+        self.assertEqual(summary["positive_precision@1"], 1.0)
 
     def test_checkpoint_top50_rows_keep_three_probabilities_and_actual_class(self):
         rows = [
@@ -244,6 +281,15 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(top_rows[0]["actual_class"], "positive")
         self.assertIn("neutral_probability", top_rows[0])
         self.assertIn("negative_probability", top_rows[0])
+
+    def test_selection_score_top_rows_use_selection_score_order(self):
+        rows = [
+            {"scode": "000001", "positive_probability": 0.9, "selection_score": 0.2},
+            {"scode": "000002", "positive_probability": 0.7, "selection_score": 0.5},
+        ]
+        top_rows = selection_score_top_rows(rows, 50)
+        self.assertEqual(top_rows[0]["scode"], "000002")
+        self.assertEqual(top_rows[0]["rank"], 1)
 
     def test_checkpoint_evaluation_writes_positive_probability_top50(self):
         class FakeModel:
@@ -297,11 +343,14 @@ class ThreeClassTests(unittest.TestCase):
                 precision_threshold=0.4,
             )
             top = result["positive_probability_top50"]
+            selection_top = result["selection_score_top50"]
             self.assertEqual(top[0]["actual_class"], "positive")
             self.assertEqual(top[0]["positive_probability"], 0.8)
             self.assertEqual(top[0]["neutral_probability"], 0.1)
             self.assertEqual(top[0]["negative_probability"], 0.1)
             self.assertAlmostEqual(top[0]["selection_score"], 0.75)
+            self.assertEqual(selection_top[0]["actual_class"], "positive")
+            self.assertAlmostEqual(selection_top[0]["selection_score"], 0.75)
             self.assertAlmostEqual(result["average_selection_score"], 0.325)
             self.assertAlmostEqual(result["max_selection_score"], 0.75)
             self.assertAlmostEqual(result["threshold_position"], 0.8)

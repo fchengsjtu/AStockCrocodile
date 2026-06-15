@@ -127,7 +127,12 @@ SelectionScore =
 
 Defaults are `negative_weight=0.5` and `neutral_weight=0`. Every stock that passes the K-line/sample validity filters receives a score; there is no probability or score threshold. Candidates are ranked by `SelectionScore`, then `PositiveProbability`, and the first `--limit` rows are returned. `--positive-threshold` is accepted only for compatibility with older commands and no longer filters candidates.
 
-Every checkpoint evaluation writes and prints `positive_probability_top50`. Each row contains the stock code, anchor date, `PositiveProbability`, `NeutralProbability`, `NegativeProbability`, predicted class, and actual class.
+Every checkpoint evaluation writes and prints two independent Top 50 rankings:
+
+- `selection_score_top50`: ranked by `SelectionScore`. Checkpoint `positive_precision@5/10/20/50` and the precision gate use this ranking, matching daily stock selection.
+- `positive_probability_top50`: ranked only by `PositiveProbability`.
+
+Both rankings include the stock code, anchor date, all three class probabilities, `SelectionScore`, predicted class, and actual class. Comparing the two lists shows how `NEGATIVE_WEIGHT` and `NEUTRAL_WEIGHT` change the selected stocks.
 
 After each checkpoint evaluation, the next `eval_threshold` is calculated from all evaluated `SelectionScore` values:
 

@@ -18,7 +18,11 @@ from blackbox_finetune_threeclass.common import (
 )
 from blackbox_finetune_threeclass.gpu import prepare_rtx3060
 from blackbox_finetune_threeclass.inference import score_prediction, selection_score
-from blackbox_finetune_threeclass.metrics import positive_probability_top_rows, summarize_scored_rows
+from blackbox_finetune_threeclass.metrics import (
+    positive_probability_top_rows,
+    selection_score_top_rows,
+    summarize_scored_rows,
+)
 
 
 def _env_float(name: str, default: float) -> float:
@@ -111,6 +115,7 @@ def _evaluate_training_checkpoint(
         if was_training:
             model.train()
     summary = summarize_scored_rows(scored, tuple(sorted({5, 10, 20, 50, max(1, precision_top_k)})))
+    selection_score_top50 = selection_score_top_rows(scored, 50)
     positive_probability_top50 = positive_probability_top_rows(scored, 50)
     average_selection_score, max_selection_score, threshold_position, next_threshold = (
         _next_selection_score_threshold(
@@ -130,6 +135,7 @@ def _evaluate_training_checkpoint(
         "sample_method": sample_method,
         "sample_seed": sample_seed,
         **summary,
+        "selection_score_top50": selection_score_top50,
         "positive_probability_top50": positive_probability_top50,
         "precision_top_k": max(1, precision_top_k),
         "precision_threshold": precision_threshold,
@@ -146,14 +152,25 @@ def _evaluate_training_checkpoint(
     }
     output_path = output_dir / f"eval-update-{update:06d}-progress-{int(round(progress * 1000)):04d}.json"
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("checkpoint SelectionScore top50:", flush=True)
+    for row in selection_score_top50:
+        print(
+            f"  rank={row['rank']} scode={row.get('scode')} anchor_date={row.get('anchor_date')} "
+            f"SelectionScore={row['selection_score']:.6f} "
+            f"PositiveProbability={row['positive_probability']:.6f} "
+            f"NeutralProbability={row['neutral_probability']:.6f} "
+            f"NegativeProbability={row['negative_probability']:.6f} "
+            f"actual_class={row['actual_class']}",
+            flush=True,
+        )
     print("checkpoint PositiveProbability top50:", flush=True)
     for row in positive_probability_top50:
         print(
             f"  rank={row['rank']} scode={row.get('scode')} anchor_date={row.get('anchor_date')} "
             f"PositiveProbability={row['positive_probability']:.6f} "
+            f"SelectionScore={row['selection_score']:.6f} "
             f"NeutralProbability={row['neutral_probability']:.6f} "
             f"NegativeProbability={row['negative_probability']:.6f} "
-            f"SelectionScore={row['selection_score']:.6f} "
             f"actual_class={row['actual_class']}",
             flush=True,
         )
