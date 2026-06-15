@@ -3,6 +3,15 @@ from __future__ import annotations
 from blackbox_finetune_threeclass.common import CLASS_NAMES
 
 
+def positive_probability_top_rows(rows: list[dict], limit: int = 50) -> list[dict]:
+    ordered = sorted(
+        rows,
+        key=lambda row: float(row.get("positive_probability", 0.0)),
+        reverse=True,
+    )[: max(0, limit)]
+    return [{**row, "rank": rank} for rank, row in enumerate(ordered, start=1)]
+
+
 def summarize_scored_rows(rows: list[dict], top_ks: tuple[int, ...] = (5, 10, 20, 50)) -> dict:
     confusion = {
         CLASS_NAMES[actual]: {CLASS_NAMES[predicted]: 0 for predicted in CLASS_NAMES}
@@ -35,4 +44,3 @@ def summarize_scored_rows(rows: list[dict], top_ks: tuple[int, ...] = (5, 10, 20
         "per_class": per_class,
         **top_metrics,
     }
-

@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from blackbox_finetune_threeclass.build_dataset import (
     FutureBar,
@@ -17,8 +18,12 @@ from blackbox_finetune_threeclass.common import (
     label_answer,
 )
 from blackbox_finetune_threeclass.build_dataset import build_parser as build_dataset_parser
-from blackbox_finetune_threeclass.inference import probabilities_from_losses
-from blackbox_finetune_threeclass.metrics import summarize_scored_rows
+from blackbox_finetune_threeclass.inference import probabilities_from_losses, selection_score
+from blackbox_finetune_threeclass.predict_day import (
+    build_parser as build_predict_parser,
+    rank_predictions,
+)
+from blackbox_finetune_threeclass.metrics import positive_probability_top_rows, summarize_scored_rows
 from blackbox_finetune_threeclass import train as threeclass_train
 
 
@@ -117,6 +122,27 @@ class ThreeClassTests(unittest.TestCase):
         self.assertGreater(probabilities[CLASS_POSITIVE], probabilities[CLASS_NEUTRAL])
         self.assertGreater(probabilities[CLASS_NEUTRAL], probabilities[CLASS_NEGATIVE])
 
+    def test_selection_score_defaults_penalize_negative_probability(self):
+        self.assertAlmostEqual(selection_score(0.5, 0.4, 0.1), 0.3)
+        self.assertAlmostEqual(selection_score(0.5, 0.4, 0.1, 0.5, 1.0), 0.2)
+
+    def test_prediction_weight_defaults_are_configurable(self):
+        args = build_predict_parser().parse_args(["--date", "20260612"])
+        self.assertEqual(args.negative_weight, 0.5)
+        self.assertEqual(args.neutral_weight, 0.0)
+        self.assertEqual(args.positive_threshold, 0.0)
+
+    def test_prediction_ranking_uses_score_without_threshold_filter(self):
+        ranked = rank_predictions(
+            [
+                {"SCode": "000001", "SelectionScore": -0.2, "PositiveProbability": 0.1},
+                {"SCode": "000002", "SelectionScore": 0.3, "PositiveProbability": 0.4},
+                {"SCode": "000003", "SelectionScore": -0.1, "PositiveProbability": 0.2},
+            ],
+            3,
+        )
+        self.assertEqual(ranked["SCode"].tolist(), ["000002", "000003", "000001"])
+
     def test_metrics_include_confusion_and_positive_precision(self):
         rows = [
             {"actual_label": CLASS_POSITIVE, "predicted_label": CLASS_POSITIVE, "positive_probability": 0.9},
@@ -127,6 +153,88 @@ class ThreeClassTests(unittest.TestCase):
         self.assertAlmostEqual(summary["accuracy"], 2 / 3)
         self.assertEqual(summary["confusion_matrix"]["positive"]["positive"], 1)
         self.assertAlmostEqual(summary["positive_precision@2"], 0.5)
+
+    def test_checkpoint_top50_rows_keep_three_probabilities_and_actual_class(self):
+        rows = [
+            {
+                "scode": "000001",
+                "actual_class": "negative",
+                "positive_probability": 0.8,
+                "neutral_probability": 0.1,
+                "negative_probability": 0.1,
+            },
+            {
+                "scode": "000002",
+                "actual_class": "positive",
+                "positive_probability": 0.9,
+                "neutral_probability": 0.05,
+                "negative_probability": 0.05,
+            },
+        ]
+        top_rows = positive_probability_top_rows(rows, 50)
+        self.assertEqual(top_rows[0]["scode"], "000002")
+        self.assertEqual(top_rows[0]["rank"], 1)
+        self.assertEqual(top_rows[0]["actual_class"], "positive")
+        self.assertIn("neutral_probability", top_rows[0])
+        self.assertIn("negative_probability", top_rows[0])
+
+    def test_checkpoint_evaluation_writes_positive_probability_top50(self):
+        class FakeModel:
+            training = True
+
+            def eval(self):
+                self.training = False
+
+            def train(self):
+                self.training = True
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
+                return messages[-1]["content"]
+
+        rows = [sample(CLASS_POSITIVE, 1), sample(CLASS_NEGATIVE, 2)]
+        predictions = [
+            {
+                "label_id": CLASS_POSITIVE,
+                "label": "positive",
+                "positive_probability": 0.8,
+                "neutral_probability": 0.1,
+                "negative_probability": 0.1,
+            },
+            {
+                "label_id": CLASS_NEGATIVE,
+                "label": "negative",
+                "positive_probability": 0.2,
+                "neutral_probability": 0.2,
+                "negative_probability": 0.6,
+            },
+        ]
+        with TemporaryDirectory() as directory, patch.object(
+            threeclass_train,
+            "score_prediction",
+            side_effect=predictions,
+        ):
+            result = threeclass_train._evaluate_training_checkpoint(
+                model=FakeModel(),
+                tokenizer=FakeTokenizer(),
+                rows=rows,
+                output_dir=Path(directory),
+                update=100,
+                total_updates=1000,
+                progress=0.1,
+                trained_epochs=0.03,
+                threshold=0.0,
+                max_samples=0,
+                max_seq_length=3072,
+                precision_top_k=10,
+                precision_threshold=0.4,
+            )
+            top = result["positive_probability_top50"]
+            self.assertEqual(top[0]["actual_class"], "positive")
+            self.assertEqual(top[0]["positive_probability"], 0.8)
+            self.assertEqual(top[0]["neutral_probability"], 0.1)
+            self.assertEqual(top[0]["negative_probability"], 0.1)
+            self.assertTrue(list(Path(directory).glob("eval-update-000100-*.json")))
 
 
 if __name__ == "__main__":

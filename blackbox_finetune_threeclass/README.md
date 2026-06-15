@@ -108,9 +108,21 @@ python -m blackbox_finetune_threeclass.predict_day \
   --date 20260612 \
   --adapter-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-lora/adapter \
   --sample-mode xlong --max-seq-length 3072 \
-  --positive-threshold 0.40 --limit 20 \
+  --negative-weight 0.5 --neutral-weight 0 \
+  --limit 20 \
   --output data/threeclass_predictions_20260612.csv \
   --cuda-device 0
 ```
 
-Predictions are ranked by positive-class probability and also include negative and neutral probabilities.
+Prediction selection and ranking use:
+
+```text
+SelectionScore =
+    PositiveProbability
+    - negative_weight * NegativeProbability
+    - neutral_weight * NeutralProbability
+```
+
+Defaults are `negative_weight=0.5` and `neutral_weight=0`. Every stock that passes the K-line/sample validity filters receives a score; there is no probability or score threshold. Candidates are ranked by `SelectionScore`, then `PositiveProbability`, and the first `--limit` rows are returned. `--positive-threshold` is accepted only for compatibility with older commands and no longer filters candidates.
+
+Every checkpoint evaluation writes and prints `positive_probability_top50`. Each row contains the stock code, anchor date, `PositiveProbability`, `NeutralProbability`, `NegativeProbability`, predicted class, and actual class.

@@ -9,6 +9,7 @@ from typing import Iterable
 
 from blackbox_finetune_recall60 import train as base_train
 from blackbox_finetune_threeclass.common import (
+    CLASS_NAMES,
     DEFAULT_BASE_MODEL,
     DEFAULT_DATA_DIR,
     DEFAULT_MAX_SEQ_LENGTH,
@@ -17,7 +18,7 @@ from blackbox_finetune_threeclass.common import (
 )
 from blackbox_finetune_threeclass.gpu import prepare_rtx3060
 from blackbox_finetune_threeclass.inference import score_prediction
-from blackbox_finetune_threeclass.metrics import summarize_scored_rows
+from blackbox_finetune_threeclass.metrics import positive_probability_top_rows, summarize_scored_rows
 
 
 def _evaluate_training_checkpoint(
@@ -48,9 +49,15 @@ def _evaluate_training_checkpoint(
             prediction = score_prediction(model, tokenizer, prompt, max_seq_length)
             scored.append(
                 {
+                    "scode": row.get("metadata", {}).get("scode"),
+                    "anchor_date": row.get("metadata", {}).get("anchor_date"),
                     "actual_label": int(row["metadata"]["label"]),
+                    "actual_class": CLASS_NAMES[int(row["metadata"]["label"])],
                     "predicted_label": int(prediction["label_id"]),
+                    "predicted_class": prediction["label"],
                     "positive_probability": prediction["positive_probability"],
+                    "neutral_probability": prediction["neutral_probability"],
+                    "negative_probability": prediction["negative_probability"],
                 }
             )
             if index % 100 == 0 or index == len(eval_rows):
@@ -70,6 +77,7 @@ def _evaluate_training_checkpoint(
         if was_training:
             model.train()
     summary = summarize_scored_rows(scored, tuple(sorted({5, 10, 20, 50, max(1, precision_top_k)})))
+    positive_probability_top50 = positive_probability_top_rows(scored, 50)
     target_key = f"positive_precision@{max(1, precision_top_k)}"
     result = {
         "update": update,
@@ -81,6 +89,7 @@ def _evaluate_training_checkpoint(
         "sample_method": sample_method,
         "sample_seed": sample_seed,
         **summary,
+        "positive_probability_top50": positive_probability_top50,
         "precision_top_k": max(1, precision_top_k),
         "precision_threshold": precision_threshold,
         "passed": summary[target_key] >= precision_threshold,
@@ -89,6 +98,16 @@ def _evaluate_training_checkpoint(
     }
     output_path = output_dir / f"eval-update-{update:06d}-progress-{int(round(progress * 1000)):04d}.json"
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("checkpoint PositiveProbability top50:", flush=True)
+    for row in positive_probability_top50:
+        print(
+            f"  rank={row['rank']} scode={row.get('scode')} anchor_date={row.get('anchor_date')} "
+            f"PositiveProbability={row['positive_probability']:.6f} "
+            f"NeutralProbability={row['neutral_probability']:.6f} "
+            f"NegativeProbability={row['negative_probability']:.6f} "
+            f"actual_class={row['actual_class']}",
+            flush=True,
+        )
     print(
         f"evaluation saved: {output_path} accuracy={summary['accuracy']:.4f} "
         f"macro_f1={summary['macro_f1']:.4f} "

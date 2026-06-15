@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Iterable
@@ -25,7 +26,17 @@ from blackbox_finetune_threeclass.common import (
     sample_mode_config,
 )
 from blackbox_finetune_threeclass.gpu import prepare_rtx3060
-from blackbox_finetune_threeclass.inference import load_model, score_prediction
+from blackbox_finetune_threeclass.inference import load_model, score_prediction, selection_score
+
+
+def rank_predictions(predictions: list[dict], limit: int) -> pd.DataFrame:
+    result = pd.DataFrame(predictions)
+    if result.empty:
+        return result
+    return result.sort_values(
+        ["SelectionScore", "PositiveProbability"],
+        ascending=[False, False],
+    ).head(max(1, limit)).copy()
 
 
 def _load_symbols(conn, anchor) -> list[str]:
@@ -49,7 +60,8 @@ def predict_day(
     sample_mode: str,
     batch_size: int,
     limit: int,
-    positive_threshold: float,
+    negative_weight: float,
+    neutral_weight: float,
     max_seq_length: int,
     output: Path | None,
 ) -> pd.DataFrame:
@@ -87,8 +99,13 @@ def predict_day(
                 )
                 prediction = score_prediction(model, tokenizer, prompt, max_seq_length)
                 scored += 1
-                if prediction["positive_probability"] < positive_threshold:
-                    continue
+                score = selection_score(
+                    prediction["positive_probability"],
+                    prediction["negative_probability"],
+                    prediction["neutral_probability"],
+                    negative_weight,
+                    neutral_weight,
+                )
                 predictions.append(
                     {
                         "TradeDate": anchor,
@@ -97,12 +114,13 @@ def predict_day(
                         "PositiveProbability": prediction["positive_probability"],
                         "NegativeProbability": prediction["negative_probability"],
                         "NeutralProbability": prediction["neutral_probability"],
+                        "SelectionScore": score,
+                        "NegativeWeight": negative_weight,
+                        "NeutralWeight": neutral_weight,
                     }
                 )
             print(f"batch {batch_index}/{len(batches)} scored={scored}", flush=True)
-    result = pd.DataFrame(predictions)
-    if not result.empty:
-        result = result.sort_values("PositiveProbability", ascending=False).head(max(1, limit)).copy()
+    result = rank_predictions(predictions, limit)
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
         result.to_csv(output, index=False, encoding="utf-8-sig")
@@ -119,7 +137,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sample-mode", choices=["short", "long", "xlong", "xxlong"], default=DEFAULT_SAMPLE_MODE)
     parser.add_argument("--batch-size", type=int, default=40)
     parser.add_argument("--limit", type=int, default=20)
-    parser.add_argument("--positive-threshold", type=float, default=0.0)
+    parser.add_argument(
+        "--positive-threshold",
+        type=float,
+        default=0.0,
+        help="Deprecated compatibility option; prediction now ranks every scored candidate by SelectionScore.",
+    )
+    parser.add_argument(
+        "--negative-weight",
+        type=float,
+        default=float(os.environ.get("NEGATIVE_WEIGHT", "0.5")),
+        help="Penalty applied to negative probability in SelectionScore.",
+    )
+    parser.add_argument(
+        "--neutral-weight",
+        type=float,
+        default=float(os.environ.get("NEUTRAL_WEIGHT", "0.0")),
+        help="Penalty applied to neutral probability in SelectionScore.",
+    )
     parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--cuda-device", default="0")
@@ -137,7 +172,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.sample_mode,
         max(1, args.batch_size),
         max(1, args.limit),
-        min(max(args.positive_threshold, 0.0), 1.0),
+        max(0.0, args.negative_weight),
+        max(0.0, args.neutral_weight),
         max(64, args.max_seq_length),
         args.output,
     )
@@ -145,4 +181,3 @@ def main(argv: Iterable[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
-
