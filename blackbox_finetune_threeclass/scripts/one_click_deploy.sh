@@ -45,7 +45,7 @@ for name in \
   EVAL_PRECISION_THRESHOLD NEGATIVE_WEIGHT NEUTRAL_WEIGHT \
   SAMPLE_BOTTOM_BAND_RATIO ON_THE_FLY_TOKENIZE CUDA_DEVICE \
   HF_LOCAL_FILES_ONLY HF_HUB_OFFLINE TRANSFORMERS_OFFLINE TRUST_REMOTE_CODE \
-  REBUILD_DATASET; do
+  REBUILD_DATASET CANDIDATE_BATCH_SIZE MYSQL_QUERY_RETRIES; do
   printf '  %s=%s\n' "$name" "${!name}"
 done
 echo "  CLASS_RATIO=positive:negative:neutral=1:2:10"
@@ -60,6 +60,8 @@ if env_flag "$REBUILD_DATASET" || [[ ! -f "$DATA_DIR/train.jsonl" || ! -f "$DATA
     --end-date "$TRAIN_END_DATE" \
     --sample-mode "$SAMPLE_MODE" \
     --seed "$TRAIN_SEED" \
+    --candidate-batch-size "$CANDIDATE_BATCH_SIZE" \
+    --mysql-query-retries "$MYSQL_QUERY_RETRIES" \
     $POSITIVE_LIMIT
 else
   echo "Using cached training dataset: $DATA_DIR"
@@ -72,6 +74,8 @@ if env_flag "$REBUILD_DATASET" || [[ ! -f "$VALIDATION_DATA_DIR/test.jsonl" ]]; 
     --start-date "$VALIDATION_START_DATE" \
     --end-date "$VALIDATION_END_DATE" \
     --sample-mode "$SAMPLE_MODE" \
+    --candidate-batch-size "$CANDIDATE_BATCH_SIZE" \
+    --mysql-query-retries "$MYSQL_QUERY_RETRIES" \
     $POSITIVE_LIMIT
 else
   echo "Using cached validation dataset: $VALIDATION_DATA_DIR"

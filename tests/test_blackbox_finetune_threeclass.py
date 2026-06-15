@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 from blackbox_finetune_threeclass.build_dataset import (
     FutureBar,
+    _candidate_sql,
+    _load_candidate_rows,
     classify_future_path,
     rebalance_materialized_samples,
 )
@@ -16,6 +18,7 @@ from blackbox_finetune_threeclass.common import (
     CLASS_POSITIVE,
     compact_messages_from_sample,
     label_answer,
+    parse_date,
 )
 from blackbox_finetune_threeclass.build_dataset import build_parser as build_dataset_parser
 from blackbox_finetune_threeclass.inference import probabilities_from_losses, selection_score
@@ -48,6 +51,59 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.start_date, "20230101")
         self.assertEqual(args.end_date, "20241231")
         self.assertEqual(args.sample_mode, "xlong")
+        self.assertEqual(args.candidate_batch_size, 80)
+        self.assertEqual(args.mysql_query_retries, 3)
+
+    def test_candidate_sql_limits_window_query_to_symbol_batch(self):
+        sql = _candidate_sql(3)
+        self.assertIn("SCode IN (%s,%s,%s)", sql)
+        self.assertIn("LEAD(High, 3)", sql)
+
+    def test_candidate_query_reconnects_and_retries_lost_connection(self):
+        expected = [("000001", "2026-01-05", 10, 11, 9, 12, 9, 13, 9)]
+
+        class Cursor:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, sql, params):
+                self.connection.attempts += 1
+                if self.connection.attempts == 1:
+                    raise RuntimeError(2013, "lost connection")
+
+            def fetchall(self):
+                return expected
+
+        class Connection:
+            attempts = 0
+            ping_count = 0
+
+            def cursor(self):
+                return Cursor(self)
+
+            def ping(self, reconnect=False):
+                self.ping_count += int(reconnect)
+
+        connection = Connection()
+        with patch("blackbox_finetune_threeclass.build_dataset.time.sleep"):
+            rows = _load_candidate_rows(
+                connection,
+                ["000001"],
+                parse_date("20260101"),
+                parse_date("20260131"),
+                parse_date("20260101"),
+                parse_date("20260120"),
+                3,
+            )
+        self.assertEqual(rows, expected)
+        self.assertEqual(connection.attempts, 2)
+        self.assertEqual(connection.ping_count, 1)
 
     def test_future_path_uses_first_trigger(self):
         self.assertEqual(

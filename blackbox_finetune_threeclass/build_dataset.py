@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -64,8 +65,9 @@ def classify_future_path(
     return CLASS_NEUTRAL
 
 
-def _candidate_sql() -> str:
-    return """
+def _candidate_sql(symbol_count: int) -> str:
+    placeholders = ",".join(["%s"] * symbol_count)
+    return f"""
         SELECT SCode, TradeDate, ClosePrice,
                High1, Low1, High2, Low2, High3, Low3
         FROM (
@@ -80,6 +82,7 @@ def _candidate_sql() -> str:
                    LEAD(Low, 3) OVER (PARTITION BY SCode ORDER BY KTime) AS Low3
             FROM dkandles
             WHERE KType = 'D'
+              AND SCode IN ({placeholders})
               AND KTime >= %s
               AND KTime < %s
         ) ranked
@@ -88,44 +91,117 @@ def _candidate_sql() -> str:
     """
 
 
-def iter_classified_events(conn, start_date: date, end_date: date) -> Iterator[SampleEvent]:
+def load_candidate_symbols(conn, start_date: date, end_date: date) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT SCode
+            FROM dkandles
+            WHERE KType = 'D'
+              AND KTime >= %s
+              AND KTime < %s
+            ORDER BY SCode
+            """,
+            (start_date, end_date + timedelta(days=21)),
+        )
+        return [str(row[0]) for row in cur.fetchall()]
+
+
+def _load_candidate_rows(
+    conn,
+    symbols: list[str],
+    query_start: date,
+    query_end: date,
+    start_date: date,
+    end_date: date,
+    max_retries: int,
+) -> list[tuple]:
+    params = [*symbols, query_start, query_end, start_date, end_date]
+    for attempt in range(1, max(1, max_retries) + 1):
+        try:
+            with conn.cursor() as cur:
+                cur.execute(_candidate_sql(len(symbols)), params)
+                return list(cur.fetchall())
+        except Exception as exc:
+            error_code = exc.args[0] if getattr(exc, "args", None) else None
+            if error_code not in {2006, 2013, 2055} or attempt >= max(1, max_retries):
+                raise
+            delay = min(5, attempt)
+            print(
+                f"candidate query lost MySQL connection attempt={attempt}/{max_retries} "
+                f"symbols={len(symbols)} error={exc}; reconnecting in {delay}s",
+                flush=True,
+            )
+            time.sleep(delay)
+            conn.ping(reconnect=True)
+    return []
+
+
+def iter_classified_events(
+    conn,
+    start_date: date,
+    end_date: date,
+    candidate_batch_size: int = 80,
+    mysql_query_retries: int = 3,
+) -> Iterator[SampleEvent]:
     query_start = start_date
     query_end = end_date + timedelta(days=20)
     last_positive_index: dict[str, int] = {}
     symbol_indexes: dict[str, int] = {}
-    with conn.cursor() as cur:
-        cur.execute(_candidate_sql(), (query_start, query_end, start_date, end_date))
-        while True:
-            rows = cur.fetchmany(5000)
-            if not rows:
-                break
-            for row in rows:
-                scode = str(row[0])
-                symbol_index = symbol_indexes.get(scode, -1) + 1
-                symbol_indexes[scode] = symbol_index
-                values = row[3:9]
-                if any(value is None for value in values):
+    symbols = load_candidate_symbols(conn, start_date, end_date)
+    batches = [
+        symbols[start : start + max(1, candidate_batch_size)]
+        for start in range(0, len(symbols), max(1, candidate_batch_size))
+    ]
+    print(
+        f"candidate scan symbols={len(symbols)} batches={len(batches)} "
+        f"batch_size={max(1, candidate_batch_size)} retries={max(1, mysql_query_retries)}",
+        flush=True,
+    )
+    for batch_index, batch in enumerate(batches, start=1):
+        rows = _load_candidate_rows(
+            conn,
+            batch,
+            query_start,
+            query_end,
+            start_date,
+            end_date,
+            mysql_query_retries,
+        )
+        batch_events = 0
+        for row in rows:
+            scode = str(row[0])
+            symbol_index = symbol_indexes.get(scode, -1) + 1
+            symbol_indexes[scode] = symbol_index
+            values = row[3:9]
+            if any(value is None for value in values):
+                continue
+            future = [
+                FutureBar(float(row[3]), float(row[4])),
+                FutureBar(float(row[5]), float(row[6])),
+                FutureBar(float(row[7]), float(row[8])),
+            ]
+            label = classify_future_path(float(row[2] or 0), future)
+            if label is None:
+                continue
+            if label == CLASS_POSITIVE:
+                previous = last_positive_index.get(scode)
+                if previous is not None and symbol_index - previous <= POSITIVE_COOLDOWN_TRADING_DAYS:
                     continue
-                future = [
-                    FutureBar(float(row[3]), float(row[4])),
-                    FutureBar(float(row[5]), float(row[6])),
-                    FutureBar(float(row[7]), float(row[8])),
-                ]
-                label = classify_future_path(float(row[2] or 0), future)
-                if label is None:
-                    continue
-                if label == CLASS_POSITIVE:
-                    previous = last_positive_index.get(scode)
-                    if previous is not None and symbol_index - previous <= POSITIVE_COOLDOWN_TRADING_DAYS:
-                        continue
-                    last_positive_index[scode] = symbol_index
-                yield SampleEvent(
-                    scode=scode,
-                    anchor_date=parse_date(row[1]),
-                    label=label,
-                    source=CLASS_NAMES[label],
-                    gain_rate=None,
-                )
+                last_positive_index[scode] = symbol_index
+            batch_events += 1
+            yield SampleEvent(
+                scode=scode,
+                anchor_date=parse_date(row[1]),
+                label=label,
+                source=CLASS_NAMES[label],
+                gain_rate=None,
+            )
+        print(
+            f"candidate batch={batch_index}/{len(batches)} symbols={len(batch)} "
+            f"rows={len(rows)} classified={batch_events}",
+            flush=True,
+        )
 
 
 def _ranked_events(events: list[SampleEvent], seed: int, tag: str) -> list[SampleEvent]:
@@ -243,6 +319,8 @@ def build_threeclass_dataset(
     monthly_window: int | None,
     batch_size: int,
     sample_mode: str,
+    candidate_batch_size: int,
+    mysql_query_retries: int,
 ) -> tuple[int, int]:
     with mysql_connect() as conn:
         grouped: dict[int, list[SampleEvent]] = {
@@ -250,7 +328,16 @@ def build_threeclass_dataset(
             CLASS_NEGATIVE: [],
             CLASS_NEUTRAL: [],
         }
-        for index, event in enumerate(iter_classified_events(conn, start_date, end_date), start=1):
+        for index, event in enumerate(
+            iter_classified_events(
+                conn,
+                start_date,
+                end_date,
+                candidate_batch_size,
+                mysql_query_retries,
+            ),
+            start=1,
+        ):
             grouped[event.label].append(event)
             if index % 100000 == 0:
                 print(
@@ -330,6 +417,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weekly-window", type=int)
     parser.add_argument("--monthly-window", type=int)
     parser.add_argument("--batch-size", type=int, default=80)
+    parser.add_argument(
+        "--candidate-batch-size",
+        type=int,
+        default=int(os.environ.get("CANDIDATE_BATCH_SIZE", "80")),
+        help="Number of symbols per future-path SQL query.",
+    )
+    parser.add_argument(
+        "--mysql-query-retries",
+        type=int,
+        default=int(os.environ.get("MYSQL_QUERY_RETRIES", "3")),
+        help="Reconnect and retry a candidate SQL batch after MySQL connection-loss errors.",
+    )
     return parser
 
 
@@ -347,6 +446,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         monthly_window=max(0, args.monthly_window) if args.monthly_window is not None else None,
         batch_size=max(1, args.batch_size),
         sample_mode=args.sample_mode,
+        candidate_batch_size=max(1, args.candidate_batch_size),
+        mysql_query_retries=max(1, args.mysql_query_retries),
     )
 
 

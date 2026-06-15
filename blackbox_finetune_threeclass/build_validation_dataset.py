@@ -28,6 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weekly-window", type=int)
     parser.add_argument("--monthly-window", type=int)
     parser.add_argument("--batch-size", type=int, default=80)
+    parser.add_argument("--candidate-batch-size", type=int, default=int(os.environ.get("CANDIDATE_BATCH_SIZE", "80")))
+    parser.add_argument("--mysql-query-retries", type=int, default=int(os.environ.get("MYSQL_QUERY_RETRIES", "3")))
     return parser
 
 
@@ -45,9 +47,10 @@ def main(argv: Iterable[str] | None = None) -> None:
         monthly_window=max(0, args.monthly_window) if args.monthly_window is not None else None,
         batch_size=max(1, args.batch_size),
         sample_mode=args.sample_mode,
+        candidate_batch_size=max(1, args.candidate_batch_size),
+        mysql_query_retries=max(1, args.mysql_query_retries),
     )
 
 
 if __name__ == "__main__":
     main()
-

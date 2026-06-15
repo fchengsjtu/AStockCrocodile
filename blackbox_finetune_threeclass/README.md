@@ -37,6 +37,8 @@ bash blackbox_finetune_threeclass/scripts/one_click_deploy.sh diagnose
 
 Set `REBUILD_DATASET=1` to rebuild data. Otherwise existing `train.jsonl` and `test.jsonl` files are reused.
 
+Candidate classification is queried from MySQL in symbol batches to avoid one full-market window query timing out. `CANDIDATE_BATCH_SIZE` defaults to `80`; lower it to `40` or `20` on a slow MySQL host. `MYSQL_QUERY_RETRIES` defaults to `3` and reconnects the current batch after MySQL errors 2006/2013/2055.
+
 ## Manual commands
 
 Build training and validation datasets:
