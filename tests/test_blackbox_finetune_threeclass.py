@@ -182,6 +182,17 @@ class ThreeClassTests(unittest.TestCase):
         self.assertAlmostEqual(selection_score(0.5, 0.4, 0.1), 0.3)
         self.assertAlmostEqual(selection_score(0.5, 0.4, 0.1, 0.5, 1.0), 0.2)
 
+    def test_next_eval_threshold_uses_top_twenty_percent_position(self):
+        average, maximum, position, threshold = threeclass_train._next_selection_score_threshold(
+            [0.1, 0.3, 0.5],
+            current_threshold=0.0,
+            top_ratio=0.2,
+        )
+        self.assertAlmostEqual(average, 0.3)
+        self.assertAlmostEqual(maximum, 0.5)
+        self.assertAlmostEqual(position, 0.8)
+        self.assertAlmostEqual(threshold, 0.46)
+
     def test_prediction_weight_defaults_are_configurable(self):
         args = build_predict_parser().parse_args(["--date", "20260612"])
         self.assertEqual(args.negative_weight, 0.5)
@@ -290,6 +301,11 @@ class ThreeClassTests(unittest.TestCase):
             self.assertEqual(top[0]["positive_probability"], 0.8)
             self.assertEqual(top[0]["neutral_probability"], 0.1)
             self.assertEqual(top[0]["negative_probability"], 0.1)
+            self.assertAlmostEqual(top[0]["selection_score"], 0.75)
+            self.assertAlmostEqual(result["average_selection_score"], 0.325)
+            self.assertAlmostEqual(result["max_selection_score"], 0.75)
+            self.assertAlmostEqual(result["threshold_position"], 0.8)
+            self.assertAlmostEqual(result["next_threshold"], 0.665)
             self.assertTrue(list(Path(directory).glob("eval-update-000100-*.json")))
 
 

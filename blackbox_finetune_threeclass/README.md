@@ -128,3 +128,13 @@ SelectionScore =
 Defaults are `negative_weight=0.5` and `neutral_weight=0`. Every stock that passes the K-line/sample validity filters receives a score; there is no probability or score threshold. Candidates are ranked by `SelectionScore`, then `PositiveProbability`, and the first `--limit` rows are returned. `--positive-threshold` is accepted only for compatibility with older commands and no longer filters candidates.
 
 Every checkpoint evaluation writes and prints `positive_probability_top50`. Each row contains the stock code, anchor date, `PositiveProbability`, `NeutralProbability`, `NegativeProbability`, predicted class, and actual class.
+
+After each checkpoint evaluation, the next `eval_threshold` is calculated from all evaluated `SelectionScore` values:
+
+```text
+average = mean(SelectionScore)
+maximum = max(SelectionScore)
+next_eval_threshold = average + (1 - EVAL_THRESHOLD_TOP_RATIO) * (maximum - average)
+```
+
+`EVAL_THRESHOLD_TOP_RATIO` defaults to `0.2`, so the next threshold is at the Top 20% position between the average and maximum score. With the default value this is `average + 0.8 * (maximum - average)`. The evaluation JSON records the current threshold, average score, maximum score, position, and next threshold.

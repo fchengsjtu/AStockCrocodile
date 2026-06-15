@@ -17,8 +17,31 @@ from blackbox_finetune_threeclass.common import (
     compact_messages_from_sample,
 )
 from blackbox_finetune_threeclass.gpu import prepare_rtx3060
-from blackbox_finetune_threeclass.inference import score_prediction
+from blackbox_finetune_threeclass.inference import score_prediction, selection_score
 from blackbox_finetune_threeclass.metrics import positive_probability_top_rows, summarize_scored_rows
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _next_selection_score_threshold(
+    scores: list[float],
+    current_threshold: float,
+    top_ratio: float = 0.2,
+) -> tuple[float, float, float, float]:
+    normalized_top_ratio = min(max(float(top_ratio), 0.0), 1.0)
+    threshold_position = 1.0 - normalized_top_ratio
+    if not scores:
+        value = float(current_threshold)
+        return value, value, threshold_position, value
+    average_score = sum(scores) / len(scores)
+    max_score = max(scores)
+    next_threshold = average_score + threshold_position * (max_score - average_score)
+    return average_score, max_score, threshold_position, next_threshold
 
 
 def _evaluate_training_checkpoint(
@@ -41,12 +64,22 @@ def _evaluate_training_checkpoint(
     was_training = model.training
     model.eval()
     scored: list[dict] = []
+    negative_weight = max(0.0, _env_float("NEGATIVE_WEIGHT", 0.5))
+    neutral_weight = max(0.0, _env_float("NEUTRAL_WEIGHT", 0.0))
+    threshold_top_ratio = min(max(_env_float("EVAL_THRESHOLD_TOP_RATIO", 0.2), 0.0), 1.0)
     started = time.monotonic()
     try:
         for index, row in enumerate(eval_rows, start=1):
             messages = compact_messages_from_sample(row)
             prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
             prediction = score_prediction(model, tokenizer, prompt, max_seq_length)
+            score = selection_score(
+                prediction["positive_probability"],
+                prediction["negative_probability"],
+                prediction["neutral_probability"],
+                negative_weight,
+                neutral_weight,
+            )
             scored.append(
                 {
                     "scode": row.get("metadata", {}).get("scode"),
@@ -58,6 +91,7 @@ def _evaluate_training_checkpoint(
                     "positive_probability": prediction["positive_probability"],
                     "neutral_probability": prediction["neutral_probability"],
                     "negative_probability": prediction["negative_probability"],
+                    "selection_score": score,
                 }
             )
             if index % 100 == 0 or index == len(eval_rows):
@@ -78,6 +112,13 @@ def _evaluate_training_checkpoint(
             model.train()
     summary = summarize_scored_rows(scored, tuple(sorted({5, 10, 20, 50, max(1, precision_top_k)})))
     positive_probability_top50 = positive_probability_top_rows(scored, 50)
+    average_selection_score, max_selection_score, threshold_position, next_threshold = (
+        _next_selection_score_threshold(
+            [float(row["selection_score"]) for row in scored],
+            threshold,
+            threshold_top_ratio,
+        )
+    )
     target_key = f"positive_precision@{max(1, precision_top_k)}"
     result = {
         "update": update,
@@ -94,7 +135,14 @@ def _evaluate_training_checkpoint(
         "precision_threshold": precision_threshold,
         "passed": summary[target_key] >= precision_threshold,
         "max_seq_length": max_seq_length,
-        "next_threshold": threshold,
+        "threshold": threshold,
+        "negative_weight": negative_weight,
+        "neutral_weight": neutral_weight,
+        "average_selection_score": average_selection_score,
+        "max_selection_score": max_selection_score,
+        "eval_threshold_top_ratio": threshold_top_ratio,
+        "threshold_position": threshold_position,
+        "next_threshold": next_threshold,
     }
     output_path = output_dir / f"eval-update-{update:06d}-progress-{int(round(progress * 1000)):04d}.json"
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -105,6 +153,7 @@ def _evaluate_training_checkpoint(
             f"PositiveProbability={row['positive_probability']:.6f} "
             f"NeutralProbability={row['neutral_probability']:.6f} "
             f"NegativeProbability={row['negative_probability']:.6f} "
+            f"SelectionScore={row['selection_score']:.6f} "
             f"actual_class={row['actual_class']}",
             flush=True,
         )
@@ -115,6 +164,10 @@ def _evaluate_training_checkpoint(
         f"positive_precision@10={summary['positive_precision@10']:.4f} "
         f"positive_precision@20={summary['positive_precision@20']:.4f} "
         f"positive_precision@50={summary['positive_precision@50']:.4f} "
+        f"avg_selection_score={average_selection_score:.6f} "
+        f"max_selection_score={max_selection_score:.6f} "
+        f"threshold_position={threshold_position:.4f} "
+        f"next_threshold={next_threshold:.6f} "
         f"{target_key}={summary[target_key]:.4f} target={precision_threshold:.4f} "
         f"passed={result['passed']}",
         flush=True,
