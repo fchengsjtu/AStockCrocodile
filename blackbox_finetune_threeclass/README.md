@@ -86,7 +86,7 @@ RANK_LOSS_WEIGHT=0.2
 RANK_MARGIN=0.2
 ```
 
-Positive and neutral CE weights remain `1.0`. For a true negative sample, `negative_fp_loss` penalizes the model when the positive class token scores above the negative class token. The ranking term requires the negative class score to exceed the positive class score by `RANK_MARGIN`. Both terms are calculated from the same model forward pass, avoiding an extra inference pass. Training logs print `loss`, `ce`, `negative_fp`, and `rank`.
+Positive and neutral CE weights remain `1.0`. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. The ranking term requires the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. Training logs print `loss`, `ce`, `negative_fp`, and `rank`. A negative sample requires an additional positive-answer forward pass, so training is slower and uses more GPU memory than plain CE.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 

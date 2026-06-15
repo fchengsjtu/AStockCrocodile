@@ -207,17 +207,17 @@ class ThreeClassTests(unittest.TestCase):
         )
         self.assertEqual(item["class_label"], CLASS_NEGATIVE)
 
-    def test_negative_auxiliary_losses_penalize_positive_logit(self):
+    def test_negative_auxiliary_losses_penalize_preferred_positive_answer(self):
         import torch
 
         threeclass_train._configure_asymmetric_loss(2.0, 0.5, 0.2, 0.2)
         low_fp, low_rank = threeclass_train._negative_auxiliary_losses(
-            torch.tensor([2.0]),
             torch.tensor([0.0]),
+            torch.tensor([2.0]),
         )
         high_fp, high_rank = threeclass_train._negative_auxiliary_losses(
-            torch.tensor([0.0]),
             torch.tensor([2.0]),
+            torch.tensor([0.0]),
         )
         self.assertLess(float(low_fp), float(high_fp))
         self.assertEqual(float(low_rank), 0.0)

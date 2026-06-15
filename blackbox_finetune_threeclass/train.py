@@ -76,24 +76,37 @@ def _per_sample_answer_nll(logits, labels):
     return (token_losses * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1)
 
 
-def _class_discrimination_tokens(tokenizer) -> tuple[int, int, int]:
-    negative_ids = tokenizer(label_answer(CLASS_NEGATIVE), add_special_tokens=False)["input_ids"]
-    positive_ids = tokenizer(label_answer(CLASS_POSITIVE), add_special_tokens=False)["input_ids"]
-    common_prefix = 0
-    for negative_id, positive_id in zip(negative_ids, positive_ids):
-        if negative_id != positive_id:
-            break
-        common_prefix += 1
-    if common_prefix >= len(negative_ids) or common_prefix >= len(positive_ids):
-        raise RuntimeError("negative and positive class answers do not contain distinct tokens")
-    return common_prefix, int(negative_ids[common_prefix]), int(positive_ids[common_prefix])
-
-
-def _negative_auxiliary_losses(negative_logits, positive_logits):
+def _negative_auxiliary_losses(negative_nll, positive_nll):
     import torch.nn.functional as functional
 
-    score_delta = positive_logits.float() - negative_logits.float()
+    # Inference assigns probability proportional to exp(-answer_nll).
+    # A positive delta therefore means the positive answer is preferred.
+    score_delta = negative_nll.float() - positive_nll.float()
     return functional.softplus(score_delta).mean(), functional.relu(_RANK_MARGIN + score_delta).mean()
+
+
+def _positive_answer_tensors(tokenizer, tensors: dict, negative_indices: list[int], max_seq_length: int) -> dict:
+    answer_ids = tokenizer(
+        label_answer(CLASS_POSITIVE) + tokenizer.eos_token,
+        add_special_tokens=False,
+    )["input_ids"]
+    if len(answer_ids) >= max_seq_length:
+        answer_ids = answer_ids[: max_seq_length - 1] + [tokenizer.eos_token_id]
+    items = []
+    for index in negative_indices:
+        prompt_mask = tensors["attention_mask"][index].bool() & tensors["labels"][index].eq(-100)
+        prompt_ids = tensors["input_ids"][index][prompt_mask].detach().cpu().tolist()
+        prompt_budget = max(1, max_seq_length - len(answer_ids))
+        prompt_ids = prompt_ids[-prompt_budget:]
+        input_ids = (prompt_ids + answer_ids)[:max_seq_length]
+        items.append(
+            {
+                "input_ids": input_ids,
+                "labels": ([-100] * len(prompt_ids) + answer_ids)[:max_seq_length],
+                "attention_mask": [1] * len(input_ids),
+            }
+        )
+    return _ORIGINAL_COLLATE(tokenizer, items, str(tensors["input_ids"].device))
 
 
 def _compute_asymmetric_training_loss(model, tokenizer, tensors: dict, batch: list[dict], max_seq_length: int):
@@ -112,19 +125,21 @@ def _compute_asymmetric_training_loss(model, tokenizer, tensors: dict, batch: li
 
     negative_indices = class_labels.eq(CLASS_NEGATIVE).nonzero(as_tuple=False).flatten().tolist()
     if negative_indices:
-        common_prefix, negative_token_id, positive_token_id = _class_discrimination_tokens(tokenizer)
-        class_positions = []
-        for index in negative_indices:
-            prompt_length = int(tensors["labels"][index].eq(-100).sum().item())
-            class_positions.append(max(0, prompt_length + common_prefix - 1))
-        batch_indices = torch.tensor(negative_indices, device=output.logits.device)
-        position_indices = torch.tensor(class_positions, device=output.logits.device)
-        class_logits = output.logits[batch_indices, position_indices]
-        negative_logits = class_logits[:, negative_token_id]
-        positive_logits = class_logits[:, positive_token_id]
+        positive_tensors = _positive_answer_tensors(
+            tokenizer,
+            tensors,
+            negative_indices,
+            max_seq_length,
+        )
+        positive_output = model(**positive_tensors)
+        positive_nll = _per_sample_answer_nll(
+            positive_output.logits,
+            positive_tensors["labels"],
+        )
+        negative_nll = correct_nll[negative_indices]
         negative_fp_loss, ranking_loss = _negative_auxiliary_losses(
-            negative_logits,
-            positive_logits,
+            negative_nll,
+            positive_nll,
         )
     else:
         negative_fp_loss = weighted_ce.new_zeros(())
