@@ -139,11 +139,12 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
             {"actual_label": 0, "positive_probability": 0.50},
         ]
 
-        result = common.precision_at_k(scored, (5, 10, 20))
+        result = common.precision_at_k(scored, (5, 10, 20, 100))
 
         self.assertEqual(result["precision@5"], 0.6)
         self.assertEqual(result["precision@10"], 0.5)
         self.assertEqual(result["precision@20"], 0.5)
+        self.assertEqual(result["precision@100"], 0.5)
 
     def test_evaluation_summary_counts_predicted_labels(self):
         scored = [
