@@ -25,6 +25,7 @@ from blackbox_finetune_recall60.common import (
     compact_messages_from_sample,
     default_max_seq_length,
     default_output_dir,
+    label_answer,
     normalize_precision_threshold,
     normalize_precision_top_k,
     precision_at_k,
@@ -105,9 +106,106 @@ def _collate(tokenizer, batch: list[dict], device: str) -> dict:
     }
 
 
-def _compute_training_loss(model, tokenizer, tensors: dict, batch: list[dict], max_seq_length: int):
+def _label_from_training_row(row: dict) -> int | None:
+    metadata = row.get("metadata") if isinstance(row, dict) else None
+    if isinstance(metadata, dict) and "label" in metadata:
+        try:
+            return int(metadata["label"])
+        except (TypeError, ValueError):
+            return None
+    if "label" in row:
+        try:
+            return int(row["label"])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _differentiable_answer_loss(model, tokenizer, row: dict, label: int, max_seq_length: int, device: str):
+    import torch
+
+    messages = compact_messages_from_sample(row)
+    prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
+    answer = label_answer(int(label))
+    answer = answer + tokenizer.eos_token
+    prompt_ids = tokenizer(prompt, add_special_tokens=False, return_tensors="pt")["input_ids"]
+    answer_ids = tokenizer(answer, add_special_tokens=False, return_tensors="pt")["input_ids"]
+    if answer_ids.shape[1] >= max_seq_length:
+        answer_ids = answer_ids[:, : max_seq_length - 1]
+        answer_ids[0, -1] = tokenizer.eos_token_id
+    prompt_budget = max(1, max_seq_length - answer_ids.shape[1])
+    if prompt_ids.shape[1] > prompt_budget:
+        prompt_ids = prompt_ids[:, -prompt_budget:]
+    prompt_ids = prompt_ids.to(device)
+    answer_ids = answer_ids.to(device)
+    input_ids = torch.cat([prompt_ids, answer_ids], dim=1)
+    labels = torch.full_like(input_ids, -100)
+    labels[:, prompt_ids.shape[1] :] = answer_ids
+    return model(input_ids=input_ids, labels=labels).loss
+
+
+def _clamp_fp_penalty_cutoff(value: float, minimum: float, maximum: float) -> float:
+    low = min(max(float(minimum), 0.0), 1.0)
+    high = min(max(float(maximum), 0.0), 1.0)
+    if high < low:
+        low, high = high, low
+    return min(max(float(value), low), high)
+
+
+def _update_fp_penalty_cutoff(
+    current_cutoff: float,
+    next_threshold: float,
+    max_probability: float,
+    ema_alpha: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    alpha = min(max(float(ema_alpha), 0.0), 1.0)
+    raw_cutoff = 0.5 * (float(next_threshold) + float(max_probability))
+    smoothed = (1.0 - alpha) * float(current_cutoff) + alpha * raw_cutoff
+    return _clamp_fp_penalty_cutoff(smoothed, minimum, maximum)
+
+
+def _compute_training_loss(
+    model,
+    tokenizer,
+    tensors: dict,
+    batch: list[dict],
+    raw_batch: list[dict] | None,
+    max_seq_length: int,
+    fp_dynamic_penalty: bool = False,
+    fp_penalty_weight: float = 0.0,
+    fp_penalty_cutoff: float = 0.5,
+):
     output = model(**tensors)
-    return output.loss, {}
+    metrics = {}
+    if not fp_dynamic_penalty or fp_penalty_weight <= 0 or not raw_batch:
+        return output.loss, metrics
+    try:
+        import torch
+    except Exception:
+        return output.loss, metrics
+
+    penalties = []
+    probabilities = []
+    cutoff = min(max(float(fp_penalty_cutoff), 0.0), 1.0)
+    for row in raw_batch:
+        if _label_from_training_row(row) != 0:
+            continue
+        positive_loss = _differentiable_answer_loss(model, tokenizer, row, 1, max_seq_length, tensors["input_ids"].device)
+        negative_loss = _differentiable_answer_loss(model, tokenizer, row, 0, max_seq_length, tensors["input_ids"].device)
+        positive_probability = torch.sigmoid(negative_loss - positive_loss)
+        probabilities.append(positive_probability.detach())
+        penalties.append(torch.relu(positive_probability - cutoff).pow(2))
+    if not penalties:
+        return output.loss, metrics
+    fp_penalty = torch.stack(penalties).mean()
+    loss = output.loss + float(fp_penalty_weight) * fp_penalty
+    metrics["fp_penalty"] = float(fp_penalty.detach().cpu())
+    metrics["fp_cutoff"] = cutoff
+    if probabilities:
+        metrics["fp_neg_p"] = float(torch.stack(probabilities).mean().cpu())
+    return loss, metrics
 
 
 def _format_duration(seconds: float) -> str:
@@ -376,6 +474,11 @@ def train_recall60_lora(
     evaluation_precision_top_k: int,
     evaluation_precision_threshold: float,
     on_the_fly_tokenize: bool,
+    fp_dynamic_penalty: bool,
+    fp_penalty_weight: float,
+    fp_threshold_ema_alpha: float,
+    fp_threshold_min: float,
+    fp_threshold_max: float,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -456,6 +559,7 @@ def train_recall60_lora(
     torch.manual_seed(train_seed)
     torch.cuda.manual_seed_all(train_seed)
     rng = random.Random(train_seed)
+    fp_penalty_cutoff = _clamp_fp_penalty_cutoff(evaluation_threshold, fp_threshold_min, fp_threshold_max)
     print(
         f"manual RTX3060 LoRA train rows={len(train_items)} valid={len(valid_rows)} "
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
@@ -463,7 +567,10 @@ def train_recall60_lora(
         f"max_seq_length={max_seq_length} on_the_fly_tokenize={on_the_fly_tokenize} "
         f"checkpoint_every={checkpoint_every} checkpoint_evaluate=True eval_threshold={evaluation_threshold} "
         f"eval_precision_top_k={evaluation_precision_top_k} "
-        f"eval_precision_threshold={evaluation_precision_threshold} eval_max_samples={evaluation_max_samples}",
+        f"eval_precision_threshold={evaluation_precision_threshold} eval_max_samples={evaluation_max_samples} "
+        f"fp_dynamic_penalty={fp_dynamic_penalty} fp_penalty_weight={fp_penalty_weight} "
+        f"fp_threshold_ema_alpha={fp_threshold_ema_alpha} fp_threshold_min={fp_threshold_min} "
+        f"fp_threshold_max={fp_threshold_max} fp_penalty_cutoff={fp_penalty_cutoff}",
         flush=True,
     )
     if start_update >= total_updates:
@@ -481,18 +588,26 @@ def train_recall60_lora(
     for micro_step in range(start_micro_step, total_micro_steps):
         update = (micro_step + 1) // max(1, gradient_accumulation_steps)
         try:
-            batch = [train_items[(micro_step * batch_size + offset) % len(train_items)] for offset in range(batch_size)]
+            raw_batch = [train_items[(micro_step * batch_size + offset) % len(train_items)] for offset in range(batch_size)]
             if micro_step % len(train_items) == 0:
                 rng.shuffle(train_items)
             if on_the_fly_tokenize:
-                batch = [_tokenize_row(tokenizer, row, max_seq_length) for row in batch]
+                batch = [_tokenize_row(tokenizer, row, max_seq_length) for row in raw_batch]
+                penalty_rows = raw_batch
+            else:
+                batch = raw_batch
+                penalty_rows = None
             tensors = _collate(tokenizer, batch, device)
             raw_loss, loss_metrics = _compute_training_loss(
                 model,
                 tokenizer,
                 tensors,
                 batch,
+                penalty_rows,
                 max_seq_length,
+                fp_dynamic_penalty=fp_dynamic_penalty,
+                fp_penalty_weight=fp_penalty_weight,
+                fp_penalty_cutoff=fp_penalty_cutoff,
             )
             if not torch.isfinite(raw_loss.detach()):
                 consecutive_nonfinite += 1
@@ -621,8 +736,18 @@ def train_recall60_lora(
                     precision_threshold=evaluation_precision_threshold,
                 )
                 evaluation_threshold = float(evaluation_result["next_threshold"])
+                if fp_dynamic_penalty:
+                    fp_penalty_cutoff = _update_fp_penalty_cutoff(
+                        current_cutoff=fp_penalty_cutoff,
+                        next_threshold=float(evaluation_result["next_threshold"]),
+                        max_probability=float(evaluation_result["max_positive_probability"]),
+                        ema_alpha=fp_threshold_ema_alpha,
+                        minimum=fp_threshold_min,
+                        maximum=fp_threshold_max,
+                    )
                 print(
-                    f"evaluation threshold updated for next checkpoint: {evaluation_threshold:.6f}",
+                    f"evaluation threshold updated for next checkpoint: {evaluation_threshold:.6f} "
+                    f"fp_penalty_cutoff={fp_penalty_cutoff:.6f}",
                     flush=True,
                 )
 
@@ -660,6 +785,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-precision-threshold", type=float, default=_env_float("EVAL_PRECISION_THRESHOLD", 0.40), help="Required precision@K value for an evaluation checkpoint to pass.")
     parser.add_argument("--eval-max-samples", type=int, default=_env_int("EVAL_MAX_SAMPLES", 0), help="Max test samples for in-training evaluation; 0 means all.")
     parser.add_argument("--eval-output-dir", type=Path, default=None, help="Directory for in-training evaluation JSON files; default is output-dir/evaluations.")
+    parser.add_argument("--fp-dynamic-penalty", action="store_true", default=_env_bool("FP_DYNAMIC_PENALTY", False), help="Enable extra loss for negative samples whose positive probability exceeds the dynamic FP cutoff.")
+    parser.add_argument("--fp-penalty-weight", type=float, default=_env_float("FP_PENALTY_WEIGHT", 0.1), help="Weight of the high-scoring negative-sample penalty.")
+    parser.add_argument("--fp-threshold-ema-alpha", type=float, default=_env_float("FP_THRESHOLD_EMA_ALPHA", 0.2), help="EMA alpha used when updating the dynamic FP cutoff after checkpoint evaluation.")
+    parser.add_argument("--fp-threshold-min", type=float, default=_env_float("FP_THRESHOLD_MIN", 0.5), help="Lower bound for the dynamic FP penalty cutoff.")
+    parser.add_argument("--fp-threshold-max", type=float, default=_env_float("FP_THRESHOLD_MAX", 0.8), help="Upper bound for the dynamic FP penalty cutoff.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
     parser.add_argument("--nonfinite-skip-limit", type=int, default=100, help="Abort after this many total non-finite losses or gradients.")
@@ -709,6 +839,11 @@ def main(argv: Iterable[str] | None = None) -> None:
         evaluation_precision_top_k=args.eval_precision_top_k,
         evaluation_precision_threshold=args.eval_precision_threshold,
         on_the_fly_tokenize=args.on_the_fly_tokenize,
+        fp_dynamic_penalty=args.fp_dynamic_penalty,
+        fp_penalty_weight=args.fp_penalty_weight,
+        fp_threshold_ema_alpha=args.fp_threshold_ema_alpha,
+        fp_threshold_min=args.fp_threshold_min,
+        fp_threshold_max=args.fp_threshold_max,
     )
 
 

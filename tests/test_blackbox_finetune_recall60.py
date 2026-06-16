@@ -27,6 +27,11 @@ PROJECT_ENV_KEYS = [
     "MIN_PRECISION_AT_20",
     "PRECISION_AT_20_TARGET",
     "EVAL_SAMPLE_METHOD",
+    "FP_DYNAMIC_PENALTY",
+    "FP_PENALTY_WEIGHT",
+    "FP_THRESHOLD_EMA_ALPHA",
+    "FP_THRESHOLD_MIN",
+    "FP_THRESHOLD_MAX",
 ]
 
 
@@ -68,6 +73,20 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertAlmostEqual(max_probability, 0.6)
         self.assertAlmostEqual(next_threshold, 0.56)
 
+    def test_dynamic_fp_penalty_cutoff_uses_ema_and_bounds(self):
+        updated = train._update_fp_penalty_cutoff(
+            current_cutoff=0.50,
+            next_threshold=0.60,
+            max_probability=0.80,
+            ema_alpha=0.2,
+            minimum=0.5,
+            maximum=0.8,
+        )
+
+        self.assertAlmostEqual(updated, 0.54)
+        self.assertEqual(train._clamp_fp_penalty_cutoff(0.2, 0.5, 0.8), 0.5)
+        self.assertEqual(train._clamp_fp_penalty_cutoff(0.9, 0.5, 0.8), 0.8)
+
     def test_training_defaults_use_2020_to_2025(self):
         with without_project_env():
             args = build_dataset.build_parser().parse_args([])
@@ -97,6 +116,11 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
                 "EVAL_PRECISION_TOP_K": "12",
                 "EVAL_PRECISION_THRESHOLD": "0.35",
                 "EVAL_MAX_SAMPLES": "17",
+                "FP_DYNAMIC_PENALTY": "1",
+                "FP_PENALTY_WEIGHT": "0.2",
+                "FP_THRESHOLD_EMA_ALPHA": "0.3",
+                "FP_THRESHOLD_MIN": "0.4",
+                "FP_THRESHOLD_MAX": "0.9",
                 "RECALL_TARGET": "80",
                 "PRECISION_TOP_K": "20",
                 "PRECISION_THRESHOLD": "0.30",
@@ -114,6 +138,11 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.eval_precision_top_k, 12)
         self.assertEqual(args.eval_precision_threshold, 0.35)
         self.assertEqual(args.eval_max_samples, 17)
+        self.assertTrue(args.fp_dynamic_penalty)
+        self.assertEqual(args.fp_penalty_weight, 0.2)
+        self.assertEqual(args.fp_threshold_ema_alpha, 0.3)
+        self.assertEqual(args.fp_threshold_min, 0.4)
+        self.assertEqual(args.fp_threshold_max, 0.9)
         self.assertTrue(args.on_the_fly_tokenize)
         self.assertIsNone(eval_args.min_positive_recall)
         self.assertEqual(eval_args.precision_top_k, 20)

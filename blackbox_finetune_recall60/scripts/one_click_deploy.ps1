@@ -122,6 +122,11 @@ function Write-EnvironmentSnapshot {
     "EVAL_MIN_PRECISION_AT_20",
     "EVAL_MAX_SAMPLES",
     "EVAL_OUTPUT_DIR",
+    "FP_DYNAMIC_PENALTY",
+    "FP_PENALTY_WEIGHT",
+    "FP_THRESHOLD_EMA_ALPHA",
+    "FP_THRESHOLD_MIN",
+    "FP_THRESHOLD_MAX",
     "EPOCHS",
     "GRADIENT_ACCUMULATION_STEPS",
     "LEARNING_RATE",
@@ -214,6 +219,11 @@ $EvalThreshold = if ($env:EVAL_THRESHOLD) { $env:EVAL_THRESHOLD } else { "0.48" 
 $EvalPrecisionTopK = if ($env:EVAL_PRECISION_TOP_K) { $env:EVAL_PRECISION_TOP_K } else { $PrecisionTopK }
 $EvalPrecisionThreshold = if ($env:EVAL_PRECISION_THRESHOLD) { $env:EVAL_PRECISION_THRESHOLD } elseif ($env:EVAL_MIN_PRECISION_AT_20) { $env:EVAL_MIN_PRECISION_AT_20 } else { $PrecisionThreshold }
 $EvalMaxSamples = if ($env:EVAL_MAX_SAMPLES) { $env:EVAL_MAX_SAMPLES } else { "0" }
+$FpDynamicPenalty = if ($env:FP_DYNAMIC_PENALTY) { Test-EnvFlag $env:FP_DYNAMIC_PENALTY } else { $false }
+$FpPenaltyWeight = if ($env:FP_PENALTY_WEIGHT) { $env:FP_PENALTY_WEIGHT } else { "0.1" }
+$FpThresholdEmaAlpha = if ($env:FP_THRESHOLD_EMA_ALPHA) { $env:FP_THRESHOLD_EMA_ALPHA } else { "0.2" }
+$FpThresholdMin = if ($env:FP_THRESHOLD_MIN) { $env:FP_THRESHOLD_MIN } else { "0.5" }
+$FpThresholdMax = if ($env:FP_THRESHOLD_MAX) { $env:FP_THRESHOLD_MAX } else { "0.8" }
 $EvalPrecisionNumber = [double]$EvalPrecisionThreshold
 if ($EvalPrecisionNumber -gt 1) { $EvalPrecisionNumber = $EvalPrecisionNumber / 100.0 }
 $EvalPrecisionNumber = [Math]::Min([Math]::Max($EvalPrecisionNumber, 0.0), 1.0)
@@ -270,6 +280,8 @@ $TrainArgs = @(
 )
 if (-not $Use4Bit) { $TrainArgs += @('--no-4bit') }
 if ($EvalOutputDir) { $TrainArgs += @('--eval-output-dir', $EvalOutputDir) }
+if ($FpDynamicPenalty) { $TrainArgs += @('--fp-dynamic-penalty') }
+$TrainArgs += @('--fp-penalty-weight', $FpPenaltyWeight, '--fp-threshold-ema-alpha', $FpThresholdEmaAlpha, '--fp-threshold-min', $FpThresholdMin, '--fp-threshold-max', $FpThresholdMax)
 if ($ResumeAdapterDir) { $TrainArgs += @('--resume-adapter-dir', $ResumeAdapterDir) }
 if (Test-EnvFlag $env:REBUILD_TOKEN_CACHE) { $TrainArgs += @('--rebuild-token-cache') }
 if (Test-EnvFlag $env:ON_THE_FLY_TOKENIZE) { $TrainArgs += @('--on-the-fly-tokenize') }

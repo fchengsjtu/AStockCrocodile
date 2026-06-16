@@ -208,6 +208,11 @@ EVAL_PRECISION_THRESHOLD="${EVAL_PRECISION_THRESHOLD:-${EVAL_MIN_PRECISION_AT_20
 EVAL_SAMPLE_METHOD="${EVAL_SAMPLE_METHOD:-random}"
 EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-1000}"
 export EVAL_SAMPLE_METHOD
+FP_DYNAMIC_PENALTY="${FP_DYNAMIC_PENALTY:-0}"
+FP_PENALTY_WEIGHT="${FP_PENALTY_WEIGHT:-0.1}"
+FP_THRESHOLD_EMA_ALPHA="${FP_THRESHOLD_EMA_ALPHA:-0.2}"
+FP_THRESHOLD_MIN="${FP_THRESHOLD_MIN:-0.5}"
+FP_THRESHOLD_MAX="${FP_THRESHOLD_MAX:-0.8}"
 PRECISION_TAG="$(python - "$EVAL_PRECISION_TOP_K" "$EVAL_PRECISION_THRESHOLD" <<'PY'
 import sys
 k = max(1, int(float(sys.argv[1])))
@@ -292,6 +297,11 @@ Project blackbox environment:
   EVAL_MAX_SAMPLES=$EVAL_MAX_SAMPLES
   EVAL_PRECISION_TOP_K=$EVAL_PRECISION_TOP_K
   EVAL_PRECISION_THRESHOLD=$EVAL_PRECISION_THRESHOLD
+  FP_DYNAMIC_PENALTY=$FP_DYNAMIC_PENALTY
+  FP_PENALTY_WEIGHT=$FP_PENALTY_WEIGHT
+  FP_THRESHOLD_EMA_ALPHA=$FP_THRESHOLD_EMA_ALPHA
+  FP_THRESHOLD_MIN=$FP_THRESHOLD_MIN
+  FP_THRESHOLD_MAX=$FP_THRESHOLD_MAX
   RESUME_ADAPTER_DIR=${RESUME_ADAPTER_DIR:-<unset>}
   INITIAL_ADAPTER_DIR=${INITIAL_ADAPTER_DIR:-<unset>}
   USE_4BIT=$USE_4BIT
@@ -334,6 +344,25 @@ if train_supports_arg "--eval-precision-threshold"; then
   TRAIN_ARGS+=(--eval-precision-threshold "$EVAL_PRECISION_THRESHOLD")
 else
   echo "Current train.py does not support --eval-precision-threshold; skipping it."
+fi
+if env_flag "$FP_DYNAMIC_PENALTY"; then
+  if train_supports_arg "--fp-dynamic-penalty"; then
+    TRAIN_ARGS+=(--fp-dynamic-penalty)
+  else
+    echo "Current train.py does not support --fp-dynamic-penalty; skipping it."
+  fi
+fi
+if train_supports_arg "--fp-penalty-weight"; then
+  TRAIN_ARGS+=(--fp-penalty-weight "$FP_PENALTY_WEIGHT")
+fi
+if train_supports_arg "--fp-threshold-ema-alpha"; then
+  TRAIN_ARGS+=(--fp-threshold-ema-alpha "$FP_THRESHOLD_EMA_ALPHA")
+fi
+if train_supports_arg "--fp-threshold-min"; then
+  TRAIN_ARGS+=(--fp-threshold-min "$FP_THRESHOLD_MIN")
+fi
+if train_supports_arg "--fp-threshold-max"; then
+  TRAIN_ARGS+=(--fp-threshold-max "$FP_THRESHOLD_MAX")
 fi
 if [[ -n "$EVAL_OUTPUT_DIR" ]]; then
   TRAIN_ARGS+=(--eval-output-dir "$EVAL_OUTPUT_DIR")

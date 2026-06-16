@@ -80,6 +80,18 @@ Training automatically resumes from the latest `blackbox_finetune_recall60/runs/
 
 WSL/Linux defaults to `ON_THE_FLY_TOKENIZE=1`, so training tokenizes each batch on demand instead of loading the large `tokenized/*.pkl` cache into RAM. This avoids Linux `Killed` exits when the tokenized cache is larger than available memory. Set `ON_THE_FLY_TOKENIZE=0` only when RAM is ample and you prefer faster cached token loading.
 
+Optional high-scoring negative penalty is disabled by default. Enable it only when you want training to softly penalize negative samples whose current positive probability exceeds the dynamic false-positive cutoff. After every checkpoint evaluation, the cutoff is updated from `0.5 * (next_threshold + max_p)` with EMA smoothing and then clamped by the configured bounds:
+
+```bash
+export FP_DYNAMIC_PENALTY=1
+export FP_PENALTY_WEIGHT=0.1
+export FP_THRESHOLD_EMA_ALPHA=0.2
+export FP_THRESHOLD_MIN=0.5
+export FP_THRESHOLD_MAX=0.8
+```
+
+With the switch off, training loss is unchanged. The penalty requires on-the-fly raw samples, so keep `ON_THE_FLY_TOKENIZE=1` when using it.
+
 ```powershell
 $env:NO_AUTO_RESUME='1'
 powershell -ExecutionPolicy Bypass -File .\blackbox_finetune_recall60\scripts\one_click_deploy.ps1 full
