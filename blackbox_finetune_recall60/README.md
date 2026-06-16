@@ -86,8 +86,8 @@ Optional high-scoring negative penalty is disabled by default. Enable it only wh
 export FP_DYNAMIC_PENALTY=1
 export FP_PENALTY_WEIGHT=0.1
 export FP_THRESHOLD_EMA_ALPHA=0.2
-export FP_THRESHOLD_MIN=0.5
-export FP_THRESHOLD_MAX=0.8
+export FP_THRESHOLD_MIN=0.45
+export FP_THRESHOLD_MAX=0.65
 ```
 
 With the switch off, training loss is unchanged. The penalty requires on-the-fly raw samples, so keep `ON_THE_FLY_TOKENIZE=1` when using it.

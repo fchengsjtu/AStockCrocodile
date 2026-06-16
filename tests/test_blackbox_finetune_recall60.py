@@ -79,13 +79,13 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
             next_threshold=0.60,
             max_probability=0.80,
             ema_alpha=0.2,
-            minimum=0.5,
-            maximum=0.8,
+            minimum=0.45,
+            maximum=0.65,
         )
 
         self.assertAlmostEqual(updated, 0.54)
-        self.assertEqual(train._clamp_fp_penalty_cutoff(0.2, 0.5, 0.8), 0.5)
-        self.assertEqual(train._clamp_fp_penalty_cutoff(0.9, 0.5, 0.8), 0.8)
+        self.assertEqual(train._clamp_fp_penalty_cutoff(0.2, 0.45, 0.65), 0.45)
+        self.assertEqual(train._clamp_fp_penalty_cutoff(0.9, 0.45, 0.65), 0.65)
 
     def test_training_defaults_use_2020_to_2025(self):
         with without_project_env():
