@@ -87,6 +87,23 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(train._clamp_fp_penalty_cutoff(0.2, 0.45, 0.65), 0.45)
         self.assertEqual(train._clamp_fp_penalty_cutoff(0.9, 0.45, 0.65), 0.65)
 
+    def test_high_scoring_negative_penalty_is_linear(self):
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch is not installed")
+
+        penalty = train._high_scoring_negative_penalty(torch.tensor(0.45), 0.40)
+
+        self.assertAlmostEqual(float(penalty), 0.05, places=6)
+
+    def test_dynamic_fp_penalty_defaults_are_stronger(self):
+        with without_project_env():
+            args = train.build_parser().parse_args([])
+
+        self.assertEqual(args.fp_penalty_weight, 1.0)
+        self.assertEqual(args.fp_threshold_min, 0.40)
+
     def test_training_defaults_use_2020_to_2025(self):
         with without_project_env():
             args = build_dataset.build_parser().parse_args([])

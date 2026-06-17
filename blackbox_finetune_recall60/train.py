@@ -200,7 +200,7 @@ def _compute_training_loss(
         negative_loss = _differentiable_answer_loss(model, tokenizer, row, 0, max_seq_length, tensors["input_ids"].device)
         positive_probability = torch.sigmoid(negative_loss - positive_loss)
         probabilities.append(positive_probability.detach())
-        penalties.append(torch.relu(positive_probability - cutoff).pow(2))
+        penalties.append(_high_scoring_negative_penalty(positive_probability, cutoff))
     if not penalties:
         return output.loss, metrics
     fp_penalty = torch.stack(penalties).mean()
@@ -210,6 +210,10 @@ def _compute_training_loss(
     if probabilities:
         metrics["fp_neg_p"] = float(torch.stack(probabilities).mean().cpu())
     return loss, metrics
+
+
+def _high_scoring_negative_penalty(positive_probability, cutoff: float):
+    return positive_probability.sub(float(cutoff)).relu()
 
 
 def _format_duration(seconds: float) -> str:
@@ -796,9 +800,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-max-samples", type=int, default=_env_int("EVAL_MAX_SAMPLES", 0), help="Max test samples for in-training evaluation; 0 means all.")
     parser.add_argument("--eval-output-dir", type=Path, default=None, help="Directory for in-training evaluation JSON files; default is output-dir/evaluations.")
     parser.add_argument("--fp-dynamic-penalty", action="store_true", default=_env_bool("FP_DYNAMIC_PENALTY", False), help="Enable extra loss for negative samples whose positive probability exceeds the dynamic FP cutoff.")
-    parser.add_argument("--fp-penalty-weight", type=float, default=_env_float("FP_PENALTY_WEIGHT", 0.1), help="Weight of the high-scoring negative-sample penalty.")
+    parser.add_argument("--fp-penalty-weight", type=float, default=_env_float("FP_PENALTY_WEIGHT", 1.0), help="Weight of the high-scoring negative-sample penalty.")
     parser.add_argument("--fp-threshold-ema-alpha", type=float, default=_env_float("FP_THRESHOLD_EMA_ALPHA", 0.2), help="EMA alpha used when updating the dynamic FP cutoff after checkpoint evaluation.")
-    parser.add_argument("--fp-threshold-min", type=float, default=_env_float("FP_THRESHOLD_MIN", 0.45), help="Lower bound for the dynamic FP penalty cutoff.")
+    parser.add_argument("--fp-threshold-min", type=float, default=_env_float("FP_THRESHOLD_MIN", 0.40), help="Lower bound for the dynamic FP penalty cutoff.")
     parser.add_argument("--fp-threshold-max", type=float, default=_env_float("FP_THRESHOLD_MAX", 0.65), help="Upper bound for the dynamic FP penalty cutoff.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
