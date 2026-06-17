@@ -272,7 +272,7 @@ Invoke-DatasetBuildIfNeeded -Dir $ValidationDir -Label "validation" -ForceValue 
 
 $TrainArgs = @(
   '-m', 'blackbox_finetune_recall60.train', '--base-model', $BaseModel, '--data-dir', $DataDir, '--output-dir', $OutputDir,
-  '--max-seq-length', $MaxSeqLength, '--epochs', $Epochs, '--batch-size', '1', '--gradient-accumulation-steps', $GradSteps,
+  '--checkpoint-eval-data-dir', $ValidationDir, '--max-seq-length', $MaxSeqLength, '--epochs', $Epochs, '--batch-size', '1', '--gradient-accumulation-steps', $GradSteps,
   '--learning-rate', $LearningRate, '--weight-decay', $WeightDecay, '--max-grad-norm', $MaxGradNorm, '--lora-rank', $LoraRank, '--lora-dropout', $LoraDropout, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
   '--nonfinite-skip-limit', $NonfiniteSkipLimit, '--nonfinite-backoff-every', $NonfiniteBackoffEvery, '--lr-backoff-factor', $LrBackoffFactor,
   '--min-learning-rate', $MinLearningRate, '--eval-threshold', $EvalThreshold, '--eval-precision-top-k', $EvalPrecisionTopK, '--eval-precision-threshold', $EvalPrecisionThreshold, '--eval-max-samples', $EvalMaxSamples,

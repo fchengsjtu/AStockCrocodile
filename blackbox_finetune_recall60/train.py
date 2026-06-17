@@ -69,6 +69,10 @@ def _missing_dataset_error(data_dir: Path) -> FileNotFoundError:
     return FileNotFoundError(f"missing dataset files under {data_dir}; run blackbox_finetune_recall60.build_dataset first")
 
 
+def _checkpoint_eval_path(data_dir: Path, checkpoint_eval_data_dir: Path | None) -> Path:
+    return (checkpoint_eval_data_dir or data_dir) / "test.jsonl"
+
+
 def _tokenize_row(tokenizer, row: dict, max_seq_length: int) -> dict:
     messages = compact_messages_from_sample(row)
     prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
@@ -448,6 +452,7 @@ def train_recall60_lora(
     base_model: str,
     data_dir: Path,
     output_dir: Path,
+    checkpoint_eval_data_dir: Path | None,
     max_seq_length: int,
     epochs: float,
     batch_size: int,
@@ -484,6 +489,9 @@ def train_recall60_lora(
     test_path = data_dir / "test.jsonl"
     if not train_path.exists() or not test_path.exists():
         raise _missing_dataset_error(data_dir)
+    checkpoint_eval_path = _checkpoint_eval_path(data_dir, checkpoint_eval_data_dir)
+    if not checkpoint_eval_path.exists():
+        raise FileNotFoundError(f"missing checkpoint evaluation dataset: {checkpoint_eval_path}")
     try:
         import torch
         from peft import LoraConfig, PeftModel, get_peft_model
@@ -492,7 +500,7 @@ def train_recall60_lora(
         raise RuntimeError("missing training dependencies; run one_click_deploy.ps1 first") from exc
 
     rows = read_jsonl(train_path)
-    valid_rows = read_jsonl(test_path)
+    valid_rows = read_jsonl(checkpoint_eval_path)
     if not rows or not valid_rows:
         raise RuntimeError(f"dataset is empty or incomplete: train={len(rows)} test={len(valid_rows)}")
 
@@ -562,6 +570,7 @@ def train_recall60_lora(
     fp_penalty_cutoff = _clamp_fp_penalty_cutoff(evaluation_threshold, fp_threshold_min, fp_threshold_max)
     print(
         f"manual RTX3060 LoRA train rows={len(train_items)} valid={len(valid_rows)} "
+        f"checkpoint_eval_data_dir={checkpoint_eval_data_dir or data_dir} "
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
         f"train_seed={train_seed} lr={learning_rate} weight_decay={weight_decay} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
         f"max_seq_length={max_seq_length} on_the_fly_tokenize={on_the_fly_tokenize} "
@@ -763,6 +772,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--output-dir", type=Path, default=default_output_dir())
+    parser.add_argument("--checkpoint-eval-data-dir", type=Path, default=None, help="Dataset directory whose test.jsonl is used for checkpoint evaluation. Defaults to --data-dir.")
     parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH, help="Override token length; default follows sample mode")
     parser.add_argument("--epochs", type=float, default=_env_float("EPOCHS", 0.3))
     parser.add_argument("--batch-size", type=int, default=1)
@@ -813,6 +823,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         base_model=args.base_model,
         data_dir=args.data_dir,
         output_dir=args.output_dir,
+        checkpoint_eval_data_dir=args.checkpoint_eval_data_dir,
         max_seq_length=max(64, args.max_seq_length or default_max_seq_length()),
         epochs=args.epochs,
         batch_size=args.batch_size,

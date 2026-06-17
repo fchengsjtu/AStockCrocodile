@@ -240,6 +240,13 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
 
         self.assertEqual(result["precision@50"], 0.5)
 
+    def test_checkpoint_eval_path_prefers_external_evaluation_dir(self):
+        data_dir = Path("cycle-02") / "datasets" / "training"
+        eval_dir = Path("cycle-02") / "datasets" / "evaluation"
+
+        self.assertEqual(train._checkpoint_eval_path(data_dir, eval_dir), eval_dir / "test.jsonl")
+        self.assertEqual(train._checkpoint_eval_path(data_dir, None), data_dir / "test.jsonl")
+
     def test_precision_target_tag_uses_top_k_and_threshold(self):
         self.assertEqual(common.precision_target_tag(20, 0.30), "top20_precision030")
         self.assertEqual(common.precision_target_tag(5, 30), "top5_precision030")
