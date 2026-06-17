@@ -176,15 +176,50 @@ def _compute_training_loss(
     fp_dynamic_penalty: bool = False,
     fp_penalty_weight: float = 0.0,
     fp_penalty_cutoff: float = 0.5,
+    down6_ce_weight: float = 1.0,
+    neutral_ce_weight: float = 1.0,
+    down6_low_score_penalty: bool = False,
+    down6_score_floor: float = 0.45,
+    down6_low_score_weight: float = 0.0,
 ):
     output = model(**tensors)
     metrics = {}
-    if not fp_dynamic_penalty or fp_penalty_weight <= 0 or not raw_batch:
-        return output.loss, metrics
     try:
         import torch
     except Exception:
         return output.loss, metrics
+
+    base_loss = output.loss
+    if raw_batch:
+        weighted_losses = []
+        weights = []
+        down6_penalties = []
+        down6_probabilities = []
+        for row in raw_batch:
+            label = _label_from_training_row(row)
+            if label not in {0, 1}:
+                continue
+            true_loss = _differentiable_answer_loss(model, tokenizer, row, label, max_seq_length, tensors["input_ids"].device)
+            weight = float(down6_ce_weight) if label == 1 else float(neutral_ce_weight)
+            weighted_losses.append(true_loss * max(weight, 0.0))
+            weights.append(max(weight, 0.0))
+            if down6_low_score_penalty and down6_low_score_weight > 0 and label == 1:
+                negative_loss = _differentiable_answer_loss(model, tokenizer, row, 0, max_seq_length, tensors["input_ids"].device)
+                down6_probability = torch.sigmoid(negative_loss - true_loss)
+                down6_probabilities.append(down6_probability.detach())
+                down6_penalties.append(torch.relu(float(down6_score_floor) - down6_probability).pow(2))
+        if weighted_losses and sum(weights) > 0:
+            base_loss = torch.stack(weighted_losses).sum() / sum(weights)
+            metrics["weighted_ce"] = float(base_loss.detach().cpu())
+        if down6_penalties:
+            down6_penalty = torch.stack(down6_penalties).mean()
+            base_loss = base_loss + float(down6_low_score_weight) * down6_penalty
+            metrics["down6_low_penalty"] = float(down6_penalty.detach().cpu())
+            metrics["down6_floor"] = min(max(float(down6_score_floor), 0.0), 1.0)
+            metrics["down6_p"] = float(torch.stack(down6_probabilities).mean().cpu())
+
+    if not fp_dynamic_penalty or fp_penalty_weight <= 0 or not raw_batch:
+        return base_loss, metrics
 
     penalties = []
     probabilities = []
@@ -200,7 +235,7 @@ def _compute_training_loss(
     if not penalties:
         return output.loss, metrics
     fp_penalty = torch.stack(penalties).mean()
-    loss = output.loss + float(fp_penalty_weight) * fp_penalty
+    loss = base_loss + float(fp_penalty_weight) * fp_penalty
     metrics["fp_penalty"] = float(fp_penalty.detach().cpu())
     metrics["fp_cutoff"] = cutoff
     if probabilities:
@@ -267,6 +302,7 @@ def _evaluate_training_checkpoint(
     max_seq_length: int,
     precision_top_k: int,
     precision_threshold: float,
+    down6_score_floor: float,
 ) -> dict:
     eval_rows, sample_method, sample_seed = _sample_eval_rows(rows, max_samples, update)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -324,6 +360,13 @@ def _evaluate_training_checkpoint(
             model.train()
     positive_recall = tp / positives if positives else 0.0
     precision = tp / (tp + fp) if tp + fp else 0.0
+    floor = min(max(float(down6_score_floor), 0.0), 1.0)
+    down6_low_score_count = sum(
+        1
+        for row in scored_rows
+        if int(row["actual_label"]) == 1 and float(row["positive_probability"]) < floor
+    )
+    down6_low_score_rate = down6_low_score_count / positives if positives else 0.0
     precision_top_k = normalize_precision_top_k(precision_top_k)
     precision_threshold = normalize_precision_threshold(precision_threshold)
     precision_values = precision_at_k(scored_rows, sorted({*REPORTED_PRECISION_KS, precision_top_k}))
@@ -348,6 +391,9 @@ def _evaluate_training_checkpoint(
         "fn": fn,
         "positive_recall": positive_recall,
         "precision": precision,
+        "down6_score_floor": floor,
+        "down6_low_score_count": down6_low_score_count,
+        "down6_low_score_rate": down6_low_score_rate,
         **precision_values,
         "threshold": threshold,
         "average_positive_probability": average_probability,
@@ -364,7 +410,8 @@ def _evaluate_training_checkpoint(
         json.dump(result, file, ensure_ascii=False, indent=2)
     print(
         f"evaluation saved: {output_path} positive_recall={positive_recall:.4f} "
-        f"precision={precision:.4f} precision@5={precision_values['precision@5']:.4f} "
+        f"precision={precision:.4f} down6_low_score_rate={down6_low_score_rate:.4f} "
+        f"precision@5={precision_values['precision@5']:.4f} "
         f"precision@10={precision_values['precision@10']:.4f} "
         f"precision@20={precision_values['precision@20']:.4f} "
         f"precision@50={precision_values['precision@50']:.4f} "
@@ -479,6 +526,11 @@ def train_down6_neutral_lora(
     fp_threshold_ema_alpha: float,
     fp_threshold_min: float,
     fp_threshold_max: float,
+    down6_ce_weight: float,
+    neutral_ce_weight: float,
+    down6_low_score_penalty: bool,
+    down6_score_floor: float,
+    down6_low_score_weight: float,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     test_path = data_dir / "test.jsonl"
@@ -570,7 +622,10 @@ def train_down6_neutral_lora(
         f"eval_precision_threshold={evaluation_precision_threshold} eval_max_samples={evaluation_max_samples} "
         f"fp_dynamic_penalty={fp_dynamic_penalty} fp_penalty_weight={fp_penalty_weight} "
         f"fp_threshold_ema_alpha={fp_threshold_ema_alpha} fp_threshold_min={fp_threshold_min} "
-        f"fp_threshold_max={fp_threshold_max} fp_penalty_cutoff={fp_penalty_cutoff}",
+        f"fp_threshold_max={fp_threshold_max} fp_penalty_cutoff={fp_penalty_cutoff} "
+        f"down6_ce_weight={down6_ce_weight} neutral_ce_weight={neutral_ce_weight} "
+        f"down6_low_score_penalty={down6_low_score_penalty} "
+        f"down6_score_floor={down6_score_floor} down6_low_score_weight={down6_low_score_weight}",
         flush=True,
     )
     if start_update >= total_updates:
@@ -608,6 +663,11 @@ def train_down6_neutral_lora(
                 fp_dynamic_penalty=fp_dynamic_penalty,
                 fp_penalty_weight=fp_penalty_weight,
                 fp_penalty_cutoff=fp_penalty_cutoff,
+                down6_ce_weight=down6_ce_weight,
+                neutral_ce_weight=neutral_ce_weight,
+                down6_low_score_penalty=down6_low_score_penalty,
+                down6_score_floor=down6_score_floor,
+                down6_low_score_weight=down6_low_score_weight,
             )
             if not torch.isfinite(raw_loss.detach()):
                 consecutive_nonfinite += 1
@@ -734,6 +794,7 @@ def train_down6_neutral_lora(
                     max_seq_length=max_seq_length,
                     precision_top_k=evaluation_precision_top_k,
                     precision_threshold=evaluation_precision_threshold,
+                    down6_score_floor=down6_score_floor,
                 )
                 evaluation_threshold = float(evaluation_result["next_threshold"])
                 if fp_dynamic_penalty:
@@ -790,6 +851,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fp-threshold-ema-alpha", type=float, default=_env_float("FP_THRESHOLD_EMA_ALPHA", 0.2), help="EMA alpha used when updating the dynamic FP cutoff after checkpoint evaluation.")
     parser.add_argument("--fp-threshold-min", type=float, default=_env_float("FP_THRESHOLD_MIN", 0.45), help="Lower bound for the dynamic FP penalty cutoff.")
     parser.add_argument("--fp-threshold-max", type=float, default=_env_float("FP_THRESHOLD_MAX", 0.65), help="Upper bound for the dynamic FP penalty cutoff.")
+    parser.add_argument("--down6-ce-weight", type=float, default=_env_float("DOWN6_CE_WEIGHT", 3.0), help="Cross-entropy weight for down6 samples.")
+    parser.add_argument("--neutral-ce-weight", type=float, default=_env_float("NEUTRAL_CE_WEIGHT", 1.0), help="Cross-entropy weight for neutral samples.")
+    parser.add_argument("--down6-low-score-penalty", action="store_true", default=_env_bool("DOWN6_LOW_SCORE_PENALTY", True), help="Penalize true down6 samples whose P(down6) is below --down6-score-floor.")
+    parser.add_argument("--down6-score-floor", type=float, default=_env_float("DOWN6_SCORE_FLOOR", 0.45), help="Target floor for true down6 sample probability.")
+    parser.add_argument("--down6-low-score-weight", type=float, default=_env_float("DOWN6_LOW_SCORE_WEIGHT", 0.2), help="Weight for the true down6 low-score penalty.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
     parser.add_argument("--nonfinite-skip-limit", type=int, default=100, help="Abort after this many total non-finite losses or gradients.")
@@ -844,6 +910,11 @@ def main(argv: Iterable[str] | None = None) -> None:
         fp_threshold_ema_alpha=args.fp_threshold_ema_alpha,
         fp_threshold_min=args.fp_threshold_min,
         fp_threshold_max=args.fp_threshold_max,
+        down6_ce_weight=args.down6_ce_weight,
+        neutral_ce_weight=args.neutral_ce_weight,
+        down6_low_score_penalty=args.down6_low_score_penalty,
+        down6_score_floor=args.down6_score_floor,
+        down6_low_score_weight=args.down6_low_score_weight,
     )
 
 

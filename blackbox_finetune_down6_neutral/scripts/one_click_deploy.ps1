@@ -108,6 +108,11 @@ function Write-EnvironmentSnapshot {
     "FP_THRESHOLD_EMA_ALPHA",
     "FP_THRESHOLD_MIN",
     "FP_THRESHOLD_MAX",
+    "DOWN6_CE_WEIGHT",
+    "NEUTRAL_CE_WEIGHT",
+    "DOWN6_LOW_SCORE_PENALTY",
+    "DOWN6_SCORE_FLOOR",
+    "DOWN6_LOW_SCORE_WEIGHT",
     "EPOCHS",
     "GRADIENT_ACCUMULATION_STEPS",
     "LEARNING_RATE",
@@ -205,6 +210,11 @@ $FpPenaltyWeight = if ($env:FP_PENALTY_WEIGHT) { $env:FP_PENALTY_WEIGHT } else {
 $FpThresholdEmaAlpha = if ($env:FP_THRESHOLD_EMA_ALPHA) { $env:FP_THRESHOLD_EMA_ALPHA } else { "0.2" }
 $FpThresholdMin = if ($env:FP_THRESHOLD_MIN) { $env:FP_THRESHOLD_MIN } else { "0.45" }
 $FpThresholdMax = if ($env:FP_THRESHOLD_MAX) { $env:FP_THRESHOLD_MAX } else { "0.65" }
+$Down6CeWeight = if ($env:DOWN6_CE_WEIGHT) { $env:DOWN6_CE_WEIGHT } else { "3.0" }
+$NeutralCeWeight = if ($env:NEUTRAL_CE_WEIGHT) { $env:NEUTRAL_CE_WEIGHT } else { "1.0" }
+$Down6LowScorePenalty = if ($env:DOWN6_LOW_SCORE_PENALTY) { Test-EnvFlag $env:DOWN6_LOW_SCORE_PENALTY } else { $true }
+$Down6ScoreFloor = if ($env:DOWN6_SCORE_FLOOR) { $env:DOWN6_SCORE_FLOOR } else { "0.45" }
+$Down6LowScoreWeight = if ($env:DOWN6_LOW_SCORE_WEIGHT) { $env:DOWN6_LOW_SCORE_WEIGHT } else { "0.2" }
 $EvalPrecisionNumber = [double]$EvalPrecisionThreshold
 if ($EvalPrecisionNumber -gt 1) { $EvalPrecisionNumber = $EvalPrecisionNumber / 100.0 }
 $EvalPrecisionNumber = [Math]::Min([Math]::Max($EvalPrecisionNumber, 0.0), 1.0)
@@ -263,10 +273,12 @@ if (-not $Use4Bit) { $TrainArgs += @('--no-4bit') }
 if ($EvalOutputDir) { $TrainArgs += @('--eval-output-dir', $EvalOutputDir) }
 if ($FpDynamicPenalty) { $TrainArgs += @('--fp-dynamic-penalty') }
 $TrainArgs += @('--fp-penalty-weight', $FpPenaltyWeight, '--fp-threshold-ema-alpha', $FpThresholdEmaAlpha, '--fp-threshold-min', $FpThresholdMin, '--fp-threshold-max', $FpThresholdMax)
+$TrainArgs += @('--down6-ce-weight', $Down6CeWeight, '--neutral-ce-weight', $NeutralCeWeight, '--down6-score-floor', $Down6ScoreFloor, '--down6-low-score-weight', $Down6LowScoreWeight)
+if ($Down6LowScorePenalty) { $TrainArgs += @('--down6-low-score-penalty') }
 if ($ResumeAdapterDir) { $TrainArgs += @('--resume-adapter-dir', $ResumeAdapterDir) }
 if (Test-EnvFlag $env:REBUILD_TOKEN_CACHE) { $TrainArgs += @('--rebuild-token-cache') }
 if (Test-EnvFlag $env:ON_THE_FLY_TOKENIZE) { $TrainArgs += @('--on-the-fly-tokenize') }
 if (Test-EnvFlag $env:NO_AUTO_RESUME) { $TrainArgs += @('--no-auto-resume') }
 Invoke-Step @TrainArgs
-Invoke-Step -m blackbox_finetune_down6_neutral.evaluate --base-model $BaseModel --adapter-dir "$OutputDir/adapter" --data-dir $ValidationDir --threshold 0.50 --precision-top-k $PrecisionTopK --precision-threshold $PrecisionThreshold --output-dir "$OutputDir/evaluations/$FinalPrecisionTag" --cuda-device $CudaDevice --max-seq-length $MaxSeqLength
+Invoke-Step -m blackbox_finetune_down6_neutral.evaluate --base-model $BaseModel --adapter-dir "$OutputDir/adapter" --data-dir $ValidationDir --threshold 0.50 --precision-top-k $PrecisionTopK --precision-threshold $PrecisionThreshold --output-dir "$OutputDir/evaluations/$FinalPrecisionTag" --cuda-device $CudaDevice --max-seq-length $MaxSeqLength --down6-score-floor $Down6ScoreFloor
 Invoke-Step -m unittest tests.test_blackbox_finetune_down6_neutral -v

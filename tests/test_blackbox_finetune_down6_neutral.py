@@ -18,6 +18,11 @@ PROJECT_ENV_KEYS = [
     "TEST_END_DATE",
     "NEUTRAL_RATIO",
     "NEGATIVE_RATIO",
+    "DOWN6_CE_WEIGHT",
+    "NEUTRAL_CE_WEIGHT",
+    "DOWN6_LOW_SCORE_PENALTY",
+    "DOWN6_SCORE_FLOOR",
+    "DOWN6_LOW_SCORE_WEIGHT",
 ]
 
 
@@ -87,6 +92,28 @@ class BlackboxFinetuneDown6NeutralTests(unittest.TestCase):
         self.assertEqual(args.learning_rate, 5e-6)
         self.assertEqual(args.gradient_accumulation_steps, 16)
         self.assertEqual(args.eval_threshold, 0.48)
+        self.assertEqual(args.down6_ce_weight, 3.0)
+        self.assertEqual(args.neutral_ce_weight, 1.0)
+        self.assertTrue(args.down6_low_score_penalty)
+        self.assertEqual(args.down6_score_floor, 0.45)
+        self.assertEqual(args.down6_low_score_weight, 0.2)
+
+    def test_evaluation_reports_down6_low_score_rate(self):
+        from blackbox_finetune_down6_neutral import evaluate
+
+        summary = evaluate.summarize_scored_rows(
+            [
+                {"actual_label": 1, "predicted_label": 1, "positive_probability": 0.60},
+                {"actual_label": 1, "predicted_label": 0, "positive_probability": 0.20},
+                {"actual_label": 0, "predicted_label": 0, "positive_probability": 0.10},
+            ],
+            precision_top_k=2,
+            down6_score_floor=0.45,
+        )
+
+        self.assertEqual(summary["positive_samples"], 2)
+        self.assertEqual(summary["down6_low_score_count"], 1)
+        self.assertEqual(summary["down6_low_score_rate"], 0.5)
 
 
 if __name__ == "__main__":

@@ -177,6 +177,11 @@ FP_PENALTY_WEIGHT="${FP_PENALTY_WEIGHT:-0.1}"
 FP_THRESHOLD_EMA_ALPHA="${FP_THRESHOLD_EMA_ALPHA:-0.2}"
 FP_THRESHOLD_MIN="${FP_THRESHOLD_MIN:-0.45}"
 FP_THRESHOLD_MAX="${FP_THRESHOLD_MAX:-0.65}"
+DOWN6_CE_WEIGHT="${DOWN6_CE_WEIGHT:-3.0}"
+NEUTRAL_CE_WEIGHT="${NEUTRAL_CE_WEIGHT:-1.0}"
+DOWN6_LOW_SCORE_PENALTY="${DOWN6_LOW_SCORE_PENALTY:-1}"
+DOWN6_SCORE_FLOOR="${DOWN6_SCORE_FLOOR:-0.45}"
+DOWN6_LOW_SCORE_WEIGHT="${DOWN6_LOW_SCORE_WEIGHT:-0.2}"
 PRECISION_TAG="$(python - "$EVAL_PRECISION_TOP_K" "$EVAL_PRECISION_THRESHOLD" <<'PY'
 import sys
 k = max(1, int(float(sys.argv[1])))
@@ -266,6 +271,11 @@ Project blackbox environment:
   FP_THRESHOLD_EMA_ALPHA=$FP_THRESHOLD_EMA_ALPHA
   FP_THRESHOLD_MIN=$FP_THRESHOLD_MIN
   FP_THRESHOLD_MAX=$FP_THRESHOLD_MAX
+  DOWN6_CE_WEIGHT=$DOWN6_CE_WEIGHT
+  NEUTRAL_CE_WEIGHT=$NEUTRAL_CE_WEIGHT
+  DOWN6_LOW_SCORE_PENALTY=$DOWN6_LOW_SCORE_PENALTY
+  DOWN6_SCORE_FLOOR=$DOWN6_SCORE_FLOOR
+  DOWN6_LOW_SCORE_WEIGHT=$DOWN6_LOW_SCORE_WEIGHT
   RESUME_ADAPTER_DIR=${RESUME_ADAPTER_DIR:-<unset>}
   INITIAL_ADAPTER_DIR=${INITIAL_ADAPTER_DIR:-<unset>}
   USE_4BIT=$USE_4BIT
@@ -328,6 +338,23 @@ fi
 if train_supports_arg "--fp-threshold-max"; then
   TRAIN_ARGS+=(--fp-threshold-max "$FP_THRESHOLD_MAX")
 fi
+if train_supports_arg "--down6-ce-weight"; then
+  TRAIN_ARGS+=(--down6-ce-weight "$DOWN6_CE_WEIGHT")
+fi
+if train_supports_arg "--neutral-ce-weight"; then
+  TRAIN_ARGS+=(--neutral-ce-weight "$NEUTRAL_CE_WEIGHT")
+fi
+if env_flag "$DOWN6_LOW_SCORE_PENALTY"; then
+  if train_supports_arg "--down6-low-score-penalty"; then
+    TRAIN_ARGS+=(--down6-low-score-penalty)
+  fi
+fi
+if train_supports_arg "--down6-score-floor"; then
+  TRAIN_ARGS+=(--down6-score-floor "$DOWN6_SCORE_FLOOR")
+fi
+if train_supports_arg "--down6-low-score-weight"; then
+  TRAIN_ARGS+=(--down6-low-score-weight "$DOWN6_LOW_SCORE_WEIGHT")
+fi
 if [[ -n "$EVAL_OUTPUT_DIR" ]]; then
   TRAIN_ARGS+=(--eval-output-dir "$EVAL_OUTPUT_DIR")
 fi
@@ -359,7 +386,7 @@ if env_flag "${NO_AUTO_RESUME:-}"; then
 fi
 python -m blackbox_finetune_down6_neutral.train "${TRAIN_ARGS[@]}"
 if env_flag "${RUN_FINAL_EVAL:-}"; then
-  python -m blackbox_finetune_down6_neutral.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --precision-top-k "$PRECISION_TOP_K" --precision-threshold "$PRECISION_THRESHOLD" --output-dir "$OUTPUT_DIR/evaluations/$FINAL_PRECISION_TAG" --cuda-device "$CUDA_DEVICE" --max-seq-length "$MAX_SEQ_LENGTH"
+  python -m blackbox_finetune_down6_neutral.evaluate --base-model "$BASE_MODEL" --adapter-dir "$OUTPUT_DIR/adapter" --data-dir "$VALIDATION_DATA_DIR" --threshold 0.50 --precision-top-k "$PRECISION_TOP_K" --precision-threshold "$PRECISION_THRESHOLD" --output-dir "$OUTPUT_DIR/evaluations/$FINAL_PRECISION_TAG" --cuda-device "$CUDA_DEVICE" --max-seq-length "$MAX_SEQ_LENGTH" --down6-score-floor "$DOWN6_SCORE_FLOOR"
 else
   echo "Skipping final evaluation by default. Set RUN_FINAL_EVAL=1 to evaluate after training."
 fi

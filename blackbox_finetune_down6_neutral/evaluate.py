@@ -30,13 +30,17 @@ from blackbox_finetune_down6_neutral.inference import load_model, score_predicti
 EVALUATION_CHUNK_SIZE = 1000
 
 
-def summarize_scored_rows(scored_rows: list[dict], precision_top_k: int) -> dict:
+def summarize_scored_rows(scored_rows: list[dict], precision_top_k: int, down6_score_floor: float = 0.45) -> dict:
     tp = fp = tn = fn = positives = 0
+    floor = min(max(float(down6_score_floor), 0.0), 1.0)
+    down6_low_score_count = 0
     for row in scored_rows:
         actual_positive = int(row["actual_label"]) == 1
         predicted_positive = int(row["predicted_label"]) == 1
         if actual_positive:
             positives += 1
+            if float(row.get("positive_probability", 0.0)) < floor:
+                down6_low_score_count += 1
         if predicted_positive and actual_positive:
             tp += 1
         elif predicted_positive and not actual_positive:
@@ -47,6 +51,7 @@ def summarize_scored_rows(scored_rows: list[dict], precision_top_k: int) -> dict
             tn += 1
     precision = tp / (tp + fp) if tp + fp else 0.0
     positive_recall = tp / positives if positives else 0.0
+    down6_low_score_rate = down6_low_score_count / positives if positives else 0.0
     ks = tuple(dict.fromkeys((*REPORTED_PRECISION_KS, precision_top_k)))
     return {
         "samples": len(scored_rows),
@@ -57,6 +62,9 @@ def summarize_scored_rows(scored_rows: list[dict], precision_top_k: int) -> dict
         "fn": fn,
         "positive_recall": positive_recall,
         "precision": precision,
+        "down6_score_floor": floor,
+        "down6_low_score_count": down6_low_score_count,
+        "down6_low_score_rate": down6_low_score_rate,
         **precision_at_k(scored_rows, ks),
     }
 
@@ -72,6 +80,7 @@ def evaluate_dataset(
     max_seq_length: int,
     output_dir: Path | None = None,
     min_positive_recall: float | None = None,
+    down6_score_floor: float = 0.45,
 ) -> dict:
     precision_top_k = normalize_precision_top_k(precision_top_k)
     precision_threshold = normalize_precision_threshold(precision_threshold)
@@ -101,7 +110,7 @@ def evaluate_dataset(
         print(f"eval {idx}/{len(rows)} actual={int(actual_positive)} pred={pred['label']} p={pred['positive_probability']:.4f}", flush=True)
         if idx % EVALUATION_CHUNK_SIZE == 0 or idx == len(rows):
             chunk_rows = scored_rows[chunk_start:idx]
-            chunk = summarize_scored_rows(chunk_rows, precision_top_k)
+            chunk = summarize_scored_rows(chunk_rows, precision_top_k, down6_score_floor)
             chunk.update(
                 {
                     "chunk_index": len(chunks) + 1,
@@ -116,12 +125,13 @@ def evaluate_dataset(
                 f"samples={chunk['samples']} positives={chunk['positive_samples']} "
                 f"tp={chunk['tp']} fp={chunk['fp']} tn={chunk['tn']} fn={chunk['fn']} "
                 f"positive_recall={chunk['positive_recall']:.4f} precision={chunk['precision']:.4f} "
+                f"down6_low_score_rate={chunk['down6_low_score_rate']:.4f} "
                 f"precision@5={chunk['precision@5']:.4f} precision@10={chunk['precision@10']:.4f} "
                 f"precision@20={chunk['precision@20']:.4f} precision@50={chunk['precision@50']:.4f}",
                 flush=True,
             )
             chunk_start = idx
-    summary = summarize_scored_rows(scored_rows, precision_top_k)
+    summary = summarize_scored_rows(scored_rows, precision_top_k, down6_score_floor)
     target_key = f"precision@{precision_top_k}"
     result = {
         **summary,
@@ -159,6 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-samples", type=int)
     parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH, help="Override token length; default follows sample mode")
     parser.add_argument("--output-dir", type=Path, help="Directory to write evaluation.json. Default is adapter parent/evaluations/<precision target tag>.")
+    parser.add_argument("--down6-score-floor", type=float, default=0.45, help="Report the share of true down6 samples below this probability floor.")
     parser.add_argument("--cuda-device", default="0", help="CUDA device id. Default binds the RTX3060 as cuda:0.")
     parser.add_argument("--allow-non-rtx3060", action="store_true", help="Allow CUDA devices whose name is not RTX 3060.")
     return parser
@@ -182,6 +193,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         max(64, args.max_seq_length or default_max_seq_length()),
         args.output_dir,
         args.min_positive_recall,
+        args.down6_score_floor,
     )
 
 
