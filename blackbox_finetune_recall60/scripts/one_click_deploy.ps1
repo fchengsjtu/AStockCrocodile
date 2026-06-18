@@ -117,6 +117,7 @@ function Write-EnvironmentSnapshot {
     "RESUME_ADAPTER_DIR",
     "CHECKPOINT_EVERY",
     "EVAL_THRESHOLD",
+    "EVAL_THRESHOLD_POSITION",
     "EVAL_PRECISION_TOP_K",
     "EVAL_PRECISION_THRESHOLD",
     "EVAL_MIN_PRECISION_AT_20",
@@ -216,6 +217,7 @@ $DefaultMaxSeqLength = if ($SampleMode -eq "short") { "1024" } elseif ($SampleMo
 $DefaultCheckpointEvery = "500"
 $CheckpointEvery = if ($env:CHECKPOINT_EVERY) { $env:CHECKPOINT_EVERY } else { $DefaultCheckpointEvery }
 $EvalThreshold = if ($env:EVAL_THRESHOLD) { $env:EVAL_THRESHOLD } else { "0.48" }
+$EvalThresholdPosition = if ($env:EVAL_THRESHOLD_POSITION) { $env:EVAL_THRESHOLD_POSITION } else { "0.2" }
 $EvalPrecisionTopK = if ($env:EVAL_PRECISION_TOP_K) { $env:EVAL_PRECISION_TOP_K } else { $PrecisionTopK }
 $EvalPrecisionThreshold = if ($env:EVAL_PRECISION_THRESHOLD) { $env:EVAL_PRECISION_THRESHOLD } elseif ($env:EVAL_MIN_PRECISION_AT_20) { $env:EVAL_MIN_PRECISION_AT_20 } else { $PrecisionThreshold }
 $EvalMaxSamples = if ($env:EVAL_MAX_SAMPLES) { $env:EVAL_MAX_SAMPLES } else { "0" }
@@ -275,7 +277,7 @@ $TrainArgs = @(
   '--checkpoint-eval-data-dir', $ValidationDir, '--max-seq-length', $MaxSeqLength, '--epochs', $Epochs, '--batch-size', '1', '--gradient-accumulation-steps', $GradSteps,
   '--learning-rate', $LearningRate, '--weight-decay', $WeightDecay, '--max-grad-norm', $MaxGradNorm, '--lora-rank', $LoraRank, '--lora-dropout', $LoraDropout, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
   '--nonfinite-skip-limit', $NonfiniteSkipLimit, '--nonfinite-backoff-every', $NonfiniteBackoffEvery, '--lr-backoff-factor', $LrBackoffFactor,
-  '--min-learning-rate', $MinLearningRate, '--eval-threshold', $EvalThreshold, '--eval-precision-top-k', $EvalPrecisionTopK, '--eval-precision-threshold', $EvalPrecisionThreshold, '--eval-max-samples', $EvalMaxSamples,
+  '--min-learning-rate', $MinLearningRate, '--eval-threshold', $EvalThreshold, '--eval-threshold-position', $EvalThresholdPosition, '--eval-precision-top-k', $EvalPrecisionTopK, '--eval-precision-threshold', $EvalPrecisionThreshold, '--eval-max-samples', $EvalMaxSamples,
   '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice
 )
 if (-not $Use4Bit) { $TrainArgs += @('--no-4bit') }

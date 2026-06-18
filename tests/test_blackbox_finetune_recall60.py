@@ -27,6 +27,7 @@ PROJECT_ENV_KEYS = [
     "MIN_PRECISION_AT_20",
     "PRECISION_AT_20_TARGET",
     "EVAL_SAMPLE_METHOD",
+    "EVAL_THRESHOLD_POSITION",
     "FP_DYNAMIC_PENALTY",
     "FP_PENALTY_WEIGHT",
     "FP_THRESHOLD_EMA_ALPHA",
@@ -72,6 +73,15 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertAlmostEqual(average_probability, 0.4)
         self.assertAlmostEqual(max_probability, 0.6)
         self.assertAlmostEqual(next_threshold, 0.44)
+
+    def test_next_evaluation_threshold_position_is_configurable(self):
+        _, _, next_threshold = train._next_evaluation_threshold(
+            [0.2, 0.4, 0.6],
+            current_threshold=0.48,
+            threshold_position=0.8,
+        )
+
+        self.assertAlmostEqual(next_threshold, 0.56)
 
     def test_dynamic_fp_penalty_cutoff_uses_ema_and_bounds(self):
         updated = train._update_fp_penalty_cutoff(
@@ -130,6 +140,7 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
                 "LORA_DROPOUT": "0.10",
                 "WEIGHT_DECAY": "0.01",
                 "EVAL_THRESHOLD": "0.6",
+                "EVAL_THRESHOLD_POSITION": "0.7",
                 "EVAL_PRECISION_TOP_K": "12",
                 "EVAL_PRECISION_THRESHOLD": "0.35",
                 "EVAL_MAX_SAMPLES": "17",
@@ -152,6 +163,7 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.weight_decay, 0.01)
         self.assertEqual(args.eval_every_epoch_fraction, 0.0)
         self.assertEqual(args.eval_threshold, 0.6)
+        self.assertEqual(args.eval_threshold_position, 0.7)
         self.assertEqual(args.eval_precision_top_k, 12)
         self.assertEqual(args.eval_precision_threshold, 0.35)
         self.assertEqual(args.eval_max_samples, 17)
@@ -254,6 +266,7 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
                 progress=0.1,
                 trained_epochs=0.1,
                 threshold=0.5,
+                threshold_position=0.2,
                 max_samples=0,
                 max_seq_length=3072,
                 precision_top_k=10,

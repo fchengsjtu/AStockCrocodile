@@ -250,13 +250,18 @@ def _sample_eval_rows(
     return rows[:max_samples], "fixed", None
 
 
-def _next_evaluation_threshold(probabilities: list[float], current_threshold: float) -> tuple[float, float, float]:
+def _next_evaluation_threshold(
+    probabilities: list[float],
+    current_threshold: float,
+    threshold_position: float = 0.2,
+) -> tuple[float, float, float]:
     if not probabilities:
         value = min(max(float(current_threshold), 0.0), 1.0)
         return value, value, value
     average_probability = sum(probabilities) / len(probabilities)
     max_probability = max(probabilities)
-    next_threshold = average_probability + 0.2 * (max_probability - average_probability)
+    position = min(max(float(threshold_position), 0.0), 1.0)
+    next_threshold = average_probability + position * (max_probability - average_probability)
     return average_probability, max_probability, min(max(next_threshold, 0.0), 1.0)
 
 
@@ -271,6 +276,7 @@ def _evaluate_training_checkpoint(
     progress: float,
     trained_epochs: float,
     threshold: float,
+    threshold_position: float,
     max_samples: int,
     max_seq_length: int,
     precision_top_k: int,
@@ -337,8 +343,12 @@ def _evaluate_training_checkpoint(
     precision_values = precision_at_k(scored_rows, sorted({*REPORTED_PRECISION_KS, precision_top_k}))
     target_key = f"precision@{precision_top_k}"
     probabilities = [float(row["positive_probability"]) for row in scored_rows]
-    average_probability, max_probability, next_threshold = _next_evaluation_threshold(probabilities, threshold)
-    threshold_position = 0.2
+    threshold_position = min(max(float(threshold_position), 0.0), 1.0)
+    average_probability, max_probability, next_threshold = _next_evaluation_threshold(
+        probabilities,
+        threshold,
+        threshold_position,
+    )
     result = {
         "update": update,
         "total_updates": total_updates,
@@ -479,6 +489,7 @@ def train_recall60_lora(
     lr_backoff_factor: float,
     min_learning_rate: float,
     evaluation_threshold: float,
+    evaluation_threshold_position: float,
     evaluation_max_samples: int,
     evaluation_output_dir: Path | None,
     evaluation_precision_top_k: int,
@@ -583,6 +594,7 @@ def train_recall60_lora(
         f"train_seed={train_seed} lr={learning_rate} weight_decay={weight_decay} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
         f"max_seq_length={max_seq_length} on_the_fly_tokenize={on_the_fly_tokenize} "
         f"checkpoint_every={checkpoint_every} checkpoint_evaluate=True eval_threshold={evaluation_threshold} "
+        f"eval_threshold_position={evaluation_threshold_position} "
         f"eval_precision_top_k={evaluation_precision_top_k} "
         f"eval_precision_threshold={evaluation_precision_threshold} eval_max_samples={evaluation_max_samples} "
         f"fp_dynamic_penalty={fp_dynamic_penalty} fp_penalty_weight={fp_penalty_weight} "
@@ -747,6 +759,7 @@ def train_recall60_lora(
                     progress=min(progress, 1.0),
                     trained_epochs=epochs * min(progress, 1.0),
                     threshold=evaluation_threshold,
+                    threshold_position=evaluation_threshold_position,
                     max_samples=evaluation_max_samples,
                     max_seq_length=max_seq_length,
                     precision_top_k=evaluation_precision_top_k,
@@ -799,6 +812,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-every", type=int, default=default_checkpoint_every(), help="Save adapter checkpoint every N optimizer updates; 0 disables checkpoints.")
     parser.add_argument("--eval-every-epoch-fraction", type=float, default=0.0, help="Deprecated compatibility option. Evaluation now runs immediately after every checkpoint.")
     parser.add_argument("--eval-threshold", type=float, default=_env_float("EVAL_THRESHOLD", 0.48), help="Threshold used by in-training evaluation.")
+    parser.add_argument("--eval-threshold-position", type=float, default=_env_float("EVAL_THRESHOLD_POSITION", 0.2), help="Position between average positive probability and max probability used for the next dynamic evaluation threshold.")
     parser.add_argument("--eval-precision-top-k", type=int, default=_env_int("EVAL_PRECISION_TOP_K", 10), help="K used by the in-training precision@K gate.")
     parser.add_argument("--eval-precision-threshold", type=float, default=_env_float("EVAL_PRECISION_THRESHOLD", 0.40), help="Required precision@K value for an evaluation checkpoint to pass.")
     parser.add_argument("--eval-max-samples", type=int, default=_env_int("EVAL_MAX_SAMPLES", 0), help="Max test samples for in-training evaluation; 0 means all.")
@@ -855,6 +869,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         lr_backoff_factor=args.lr_backoff_factor,
         min_learning_rate=args.min_learning_rate,
         evaluation_threshold=args.eval_threshold,
+        evaluation_threshold_position=args.eval_threshold_position,
         evaluation_max_samples=args.eval_max_samples,
         evaluation_output_dir=args.eval_output_dir,
         evaluation_precision_top_k=args.eval_precision_top_k,

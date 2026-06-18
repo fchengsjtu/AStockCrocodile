@@ -83,6 +83,7 @@ WSL/Linux defaults to `ON_THE_FLY_TOKENIZE=1`, so training tokenizes each batch 
 Optional high-scoring negative penalty is disabled by default. Enable it only when you want training to softly penalize negative samples whose current positive probability exceeds the dynamic false-positive cutoff. The penalty is linear, `max(p_positive - cutoff, 0)`, so small cutoff violations still contribute useful gradient. After every checkpoint evaluation, the cutoff is updated from `0.5 * (next_threshold + max_p)` with EMA smoothing and then clamped by the configured bounds:
 
 ```bash
+export EVAL_THRESHOLD_POSITION=0.2
 export FP_DYNAMIC_PENALTY=1
 export FP_PENALTY_WEIGHT=1.0
 export FP_THRESHOLD_EMA_ALPHA=0.2

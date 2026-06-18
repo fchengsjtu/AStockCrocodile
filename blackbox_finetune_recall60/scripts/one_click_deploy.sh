@@ -203,6 +203,7 @@ else
 fi
 CHECKPOINT_EVERY="${CHECKPOINT_EVERY:-${CHECKOUT_EVERY:-$DEFAULT_CHECKPOINT_EVERY}}"
 EVAL_THRESHOLD="${EVAL_THRESHOLD:-0.48}"
+EVAL_THRESHOLD_POSITION="${EVAL_THRESHOLD_POSITION:-0.2}"
 EVAL_PRECISION_TOP_K="${EVAL_PRECISION_TOP_K:-$PRECISION_TOP_K}"
 EVAL_PRECISION_THRESHOLD="${EVAL_PRECISION_THRESHOLD:-${EVAL_MIN_PRECISION_AT_20:-$PRECISION_THRESHOLD}}"
 EVAL_SAMPLE_METHOD="${EVAL_SAMPLE_METHOD:-random}"
@@ -292,6 +293,7 @@ Project blackbox environment:
   CHECKPOINT_EVERY=$CHECKPOINT_EVERY
   LEARNING_RATE=$LEARNING_RATE
   EVAL_THRESHOLD=$EVAL_THRESHOLD
+  EVAL_THRESHOLD_POSITION=$EVAL_THRESHOLD_POSITION
   EVAL_RANDOM_SEED=$EVAL_RANDOM_SEED
   EVAL_SAMPLE_METHOD=$EVAL_SAMPLE_METHOD
   EVAL_MAX_SAMPLES=$EVAL_MAX_SAMPLES
@@ -335,6 +337,11 @@ if [[ "$DATASET_REBUILT" == "1" && -z "$RESUME_ADAPTER_DIR" ]]; then
 fi
 TRAIN_HELP="$(python -m blackbox_finetune_recall60.train --help 2>&1 || true)"
 TRAIN_ARGS=(--base-model "$BASE_MODEL" --data-dir "$DATA_DIR" --output-dir "$OUTPUT_DIR" --checkpoint-eval-data-dir "$VALIDATION_DATA_DIR" --max-seq-length "$MAX_SEQ_LENGTH" --epochs "$EPOCHS" --batch-size 1 --gradient-accumulation-steps "$GRAD_STEPS" --learning-rate "$LEARNING_RATE" --weight-decay "$WEIGHT_DECAY" --max-grad-norm "$MAX_GRAD_NORM" --lora-rank "$LORA_RANK" --lora-dropout "$LORA_DROPOUT" --checkpoint-every "$CHECKPOINT_EVERY" --oom-patience "$OOM_PATIENCE" --nonfinite-skip-limit "$NONFINITE_SKIP_LIMIT" --nonfinite-backoff-every "$NONFINITE_BACKOFF_EVERY" --lr-backoff-factor "$LR_BACKOFF_FACTOR" --min-learning-rate "$MIN_LEARNING_RATE" --eval-threshold "$EVAL_THRESHOLD" --eval-max-samples "$EVAL_MAX_SAMPLES" --train-seed "$TRAIN_SEED" --cuda-device "$CUDA_DEVICE")
+if train_supports_arg "--eval-threshold-position"; then
+  TRAIN_ARGS+=(--eval-threshold-position "$EVAL_THRESHOLD_POSITION")
+else
+  echo "Current train.py does not support --eval-threshold-position; skipping it."
+fi
 if train_supports_arg "--eval-precision-top-k"; then
   TRAIN_ARGS+=(--eval-precision-top-k "$EVAL_PRECISION_TOP_K")
 else
