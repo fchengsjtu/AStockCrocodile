@@ -73,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--negative-ratio",
         type=float,
-        default=float(os.environ.get("NEGATIVE_RATIO", "9.0")),
+        default=float(os.environ.get("NEGATIVE_RATIO", "5.0")),
         help="Number of randomly selected negative samples relative to positive samples.",
     )
     parser.add_argument("--train-ratio", type=float, default=0.8)

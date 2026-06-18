@@ -63,7 +63,7 @@ def daily(day, open_, high, low, close, volume=100.0, amount=1000.0):
 
 
 class BlackboxFinetuneRecall60Tests(unittest.TestCase):
-    def test_next_evaluation_threshold_uses_top_twenty_percent_position(self):
+    def test_next_evaluation_threshold_uses_top_eighty_percent_position(self):
         average_probability, max_probability, next_threshold = train._next_evaluation_threshold(
             [0.2, 0.4, 0.6],
             current_threshold=0.48,
@@ -112,7 +112,7 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.end_date, "20251231")
         self.assertEqual(args.output_dir, common.default_data_dir("long"))
         self.assertIn("recall60_long", str(args.output_dir))
-        self.assertEqual(args.negative_ratio, 9.0)
+        self.assertEqual(args.negative_ratio, 5.0)
 
     def test_negative_ratio_default_can_come_from_environment(self):
         with patch.dict("os.environ", {"NEGATIVE_RATIO": "2.5"}):

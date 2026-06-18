@@ -168,7 +168,7 @@ if [[ -n "$INITIAL_ADAPTER_DIR" && "$INITIAL_ADAPTER_DIR" == *\\* ]] && command 
   INITIAL_ADAPTER_DIR="$(wslpath -u "$INITIAL_ADAPTER_DIR")"
 fi
 SAMPLE_MODE="${SAMPLE_MODE:-xlong}"
-NEGATIVE_RATIO="${NEGATIVE_RATIO:-49.0}"
+NEGATIVE_RATIO="${NEGATIVE_RATIO:-5.0}"
 NEGATIVE_TAG="$(python - "$NEGATIVE_RATIO" <<'PY'
 import sys
 value = float(sys.argv[1])
