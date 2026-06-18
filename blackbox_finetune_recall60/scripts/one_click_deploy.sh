@@ -209,6 +209,8 @@ EVAL_PRECISION_THRESHOLD="${EVAL_PRECISION_THRESHOLD:-${EVAL_MIN_PRECISION_AT_20
 EVAL_SAMPLE_METHOD="${EVAL_SAMPLE_METHOD:-random}"
 EVAL_MAX_SAMPLES="${EVAL_MAX_SAMPLES:-1000}"
 export EVAL_SAMPLE_METHOD
+POSITIVE_LOSS_WEIGHT="${POSITIVE_LOSS_WEIGHT:-1.0}"
+NEGATIVE_LOSS_WEIGHT="${NEGATIVE_LOSS_WEIGHT:-1.0}"
 FP_DYNAMIC_PENALTY="${FP_DYNAMIC_PENALTY:-0}"
 FP_PENALTY_WEIGHT="${FP_PENALTY_WEIGHT:-1.0}"
 FP_THRESHOLD_EMA_ALPHA="${FP_THRESHOLD_EMA_ALPHA:-0.2}"
@@ -299,6 +301,8 @@ Project blackbox environment:
   EVAL_MAX_SAMPLES=$EVAL_MAX_SAMPLES
   EVAL_PRECISION_TOP_K=$EVAL_PRECISION_TOP_K
   EVAL_PRECISION_THRESHOLD=$EVAL_PRECISION_THRESHOLD
+  POSITIVE_LOSS_WEIGHT=$POSITIVE_LOSS_WEIGHT
+  NEGATIVE_LOSS_WEIGHT=$NEGATIVE_LOSS_WEIGHT
   FP_DYNAMIC_PENALTY=$FP_DYNAMIC_PENALTY
   FP_PENALTY_WEIGHT=$FP_PENALTY_WEIGHT
   FP_THRESHOLD_EMA_ALPHA=$FP_THRESHOLD_EMA_ALPHA
@@ -351,6 +355,12 @@ if train_supports_arg "--eval-precision-threshold"; then
   TRAIN_ARGS+=(--eval-precision-threshold "$EVAL_PRECISION_THRESHOLD")
 else
   echo "Current train.py does not support --eval-precision-threshold; skipping it."
+fi
+if train_supports_arg "--positive-loss-weight"; then
+  TRAIN_ARGS+=(--positive-loss-weight "$POSITIVE_LOSS_WEIGHT")
+fi
+if train_supports_arg "--negative-loss-weight"; then
+  TRAIN_ARGS+=(--negative-loss-weight "$NEGATIVE_LOSS_WEIGHT")
 fi
 if env_flag "$FP_DYNAMIC_PENALTY"; then
   if train_supports_arg "--fp-dynamic-penalty"; then

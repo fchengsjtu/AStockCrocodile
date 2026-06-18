@@ -123,6 +123,8 @@ function Write-EnvironmentSnapshot {
     "EVAL_MIN_PRECISION_AT_20",
     "EVAL_MAX_SAMPLES",
     "EVAL_OUTPUT_DIR",
+    "POSITIVE_LOSS_WEIGHT",
+    "NEGATIVE_LOSS_WEIGHT",
     "FP_DYNAMIC_PENALTY",
     "FP_PENALTY_WEIGHT",
     "FP_THRESHOLD_EMA_ALPHA",
@@ -221,6 +223,8 @@ $EvalThresholdPosition = if ($env:EVAL_THRESHOLD_POSITION) { $env:EVAL_THRESHOLD
 $EvalPrecisionTopK = if ($env:EVAL_PRECISION_TOP_K) { $env:EVAL_PRECISION_TOP_K } else { $PrecisionTopK }
 $EvalPrecisionThreshold = if ($env:EVAL_PRECISION_THRESHOLD) { $env:EVAL_PRECISION_THRESHOLD } elseif ($env:EVAL_MIN_PRECISION_AT_20) { $env:EVAL_MIN_PRECISION_AT_20 } else { $PrecisionThreshold }
 $EvalMaxSamples = if ($env:EVAL_MAX_SAMPLES) { $env:EVAL_MAX_SAMPLES } else { "0" }
+$PositiveLossWeight = if ($env:POSITIVE_LOSS_WEIGHT) { $env:POSITIVE_LOSS_WEIGHT } else { "1.0" }
+$NegativeLossWeight = if ($env:NEGATIVE_LOSS_WEIGHT) { $env:NEGATIVE_LOSS_WEIGHT } else { "1.0" }
 $FpDynamicPenalty = if ($env:FP_DYNAMIC_PENALTY) { Test-EnvFlag $env:FP_DYNAMIC_PENALTY } else { $false }
 $FpPenaltyWeight = if ($env:FP_PENALTY_WEIGHT) { $env:FP_PENALTY_WEIGHT } else { "1.0" }
 $FpThresholdEmaAlpha = if ($env:FP_THRESHOLD_EMA_ALPHA) { $env:FP_THRESHOLD_EMA_ALPHA } else { "0.2" }
@@ -278,6 +282,7 @@ $TrainArgs = @(
   '--learning-rate', $LearningRate, '--weight-decay', $WeightDecay, '--max-grad-norm', $MaxGradNorm, '--lora-rank', $LoraRank, '--lora-dropout', $LoraDropout, '--checkpoint-every', $CheckpointEvery, '--oom-patience', $OomPatience,
   '--nonfinite-skip-limit', $NonfiniteSkipLimit, '--nonfinite-backoff-every', $NonfiniteBackoffEvery, '--lr-backoff-factor', $LrBackoffFactor,
   '--min-learning-rate', $MinLearningRate, '--eval-threshold', $EvalThreshold, '--eval-threshold-position', $EvalThresholdPosition, '--eval-precision-top-k', $EvalPrecisionTopK, '--eval-precision-threshold', $EvalPrecisionThreshold, '--eval-max-samples', $EvalMaxSamples,
+  '--positive-loss-weight', $PositiveLossWeight, '--negative-loss-weight', $NegativeLossWeight,
   '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice
 )
 if (-not $Use4Bit) { $TrainArgs += @('--no-4bit') }

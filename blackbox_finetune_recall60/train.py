@@ -180,15 +180,43 @@ def _compute_training_loss(
     fp_dynamic_penalty: bool = False,
     fp_penalty_weight: float = 0.0,
     fp_penalty_cutoff: float = 0.5,
+    positive_loss_weight: float = 1.0,
+    negative_loss_weight: float = 1.0,
 ):
     output = model(**tensors)
     metrics = {}
+    base_loss = output.loss
+    if raw_batch and (float(positive_loss_weight) != 1.0 or float(negative_loss_weight) != 1.0):
+        try:
+            import torch
+        except Exception:
+            torch = None
+        if torch is not None:
+            weighted_losses = []
+            for row in raw_batch:
+                label = _label_from_training_row(row)
+                if label is None:
+                    continue
+                label = 1 if int(label) == 1 else 0
+                weight = float(positive_loss_weight) if label == 1 else float(negative_loss_weight)
+                label_loss = _differentiable_answer_loss(
+                    model,
+                    tokenizer,
+                    row,
+                    label,
+                    max_seq_length,
+                    tensors["input_ids"].device,
+                )
+                weighted_losses.append(label_loss * max(0.0, weight))
+            if weighted_losses:
+                base_loss = torch.stack(weighted_losses).mean()
+                metrics["weighted_ce"] = float(base_loss.detach().cpu())
     if not fp_dynamic_penalty or fp_penalty_weight <= 0 or not raw_batch:
-        return output.loss, metrics
+        return base_loss, metrics
     try:
         import torch
     except Exception:
-        return output.loss, metrics
+        return base_loss, metrics
 
     penalties = []
     probabilities = []
@@ -202,9 +230,9 @@ def _compute_training_loss(
         probabilities.append(positive_probability.detach())
         penalties.append(_high_scoring_negative_penalty(positive_probability, cutoff))
     if not penalties:
-        return output.loss, metrics
+        return base_loss, metrics
     fp_penalty = torch.stack(penalties).mean()
-    loss = output.loss + float(fp_penalty_weight) * fp_penalty
+    loss = base_loss + float(fp_penalty_weight) * fp_penalty
     metrics["fp_penalty"] = float(fp_penalty.detach().cpu())
     metrics["fp_cutoff"] = cutoff
     if probabilities:
@@ -495,6 +523,8 @@ def train_recall60_lora(
     evaluation_precision_top_k: int,
     evaluation_precision_threshold: float,
     on_the_fly_tokenize: bool,
+    positive_loss_weight: float,
+    negative_loss_weight: float,
     fp_dynamic_penalty: bool,
     fp_penalty_weight: float,
     fp_threshold_ema_alpha: float,
@@ -593,6 +623,7 @@ def train_recall60_lora(
         f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
         f"train_seed={train_seed} lr={learning_rate} weight_decay={weight_decay} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
         f"max_seq_length={max_seq_length} on_the_fly_tokenize={on_the_fly_tokenize} "
+        f"positive_loss_weight={positive_loss_weight} negative_loss_weight={negative_loss_weight} "
         f"checkpoint_every={checkpoint_every} checkpoint_evaluate=True eval_threshold={evaluation_threshold} "
         f"eval_threshold_position={evaluation_threshold_position} "
         f"eval_precision_top_k={evaluation_precision_top_k} "
@@ -637,6 +668,8 @@ def train_recall60_lora(
                 fp_dynamic_penalty=fp_dynamic_penalty,
                 fp_penalty_weight=fp_penalty_weight,
                 fp_penalty_cutoff=fp_penalty_cutoff,
+                positive_loss_weight=positive_loss_weight,
+                negative_loss_weight=negative_loss_weight,
             )
             if not torch.isfinite(raw_loss.detach()):
                 consecutive_nonfinite += 1
@@ -817,6 +850,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-precision-threshold", type=float, default=_env_float("EVAL_PRECISION_THRESHOLD", 0.40), help="Required precision@K value for an evaluation checkpoint to pass.")
     parser.add_argument("--eval-max-samples", type=int, default=_env_int("EVAL_MAX_SAMPLES", 0), help="Max test samples for in-training evaluation; 0 means all.")
     parser.add_argument("--eval-output-dir", type=Path, default=None, help="Directory for in-training evaluation JSON files; default is output-dir/evaluations.")
+    parser.add_argument("--positive-loss-weight", type=float, default=_env_float("POSITIVE_LOSS_WEIGHT", 1.0), help="Multiplier applied to positive-sample CE loss during on-the-fly training.")
+    parser.add_argument("--negative-loss-weight", type=float, default=_env_float("NEGATIVE_LOSS_WEIGHT", 1.0), help="Multiplier applied to negative-sample CE loss during on-the-fly training.")
     parser.add_argument("--fp-dynamic-penalty", action="store_true", default=_env_bool("FP_DYNAMIC_PENALTY", False), help="Enable extra loss for negative samples whose positive probability exceeds the dynamic FP cutoff.")
     parser.add_argument("--fp-penalty-weight", type=float, default=_env_float("FP_PENALTY_WEIGHT", 1.0), help="Weight of the high-scoring negative-sample penalty.")
     parser.add_argument("--fp-threshold-ema-alpha", type=float, default=_env_float("FP_THRESHOLD_EMA_ALPHA", 0.2), help="EMA alpha used when updating the dynamic FP cutoff after checkpoint evaluation.")
@@ -875,6 +910,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         evaluation_precision_top_k=args.eval_precision_top_k,
         evaluation_precision_threshold=args.eval_precision_threshold,
         on_the_fly_tokenize=args.on_the_fly_tokenize,
+        positive_loss_weight=args.positive_loss_weight,
+        negative_loss_weight=args.negative_loss_weight,
         fp_dynamic_penalty=args.fp_dynamic_penalty,
         fp_penalty_weight=args.fp_penalty_weight,
         fp_threshold_ema_alpha=args.fp_threshold_ema_alpha,

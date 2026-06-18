@@ -28,6 +28,8 @@ PROJECT_ENV_KEYS = [
     "PRECISION_AT_20_TARGET",
     "EVAL_SAMPLE_METHOD",
     "EVAL_THRESHOLD_POSITION",
+    "POSITIVE_LOSS_WEIGHT",
+    "NEGATIVE_LOSS_WEIGHT",
     "FP_DYNAMIC_PENALTY",
     "FP_PENALTY_WEIGHT",
     "FP_THRESHOLD_EMA_ALPHA",
@@ -144,6 +146,8 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
                 "EVAL_PRECISION_TOP_K": "12",
                 "EVAL_PRECISION_THRESHOLD": "0.35",
                 "EVAL_MAX_SAMPLES": "17",
+                "POSITIVE_LOSS_WEIGHT": "2.5",
+                "NEGATIVE_LOSS_WEIGHT": "0.8",
                 "FP_DYNAMIC_PENALTY": "1",
                 "FP_PENALTY_WEIGHT": "0.2",
                 "FP_THRESHOLD_EMA_ALPHA": "0.3",
@@ -167,6 +171,8 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.eval_precision_top_k, 12)
         self.assertEqual(args.eval_precision_threshold, 0.35)
         self.assertEqual(args.eval_max_samples, 17)
+        self.assertEqual(args.positive_loss_weight, 2.5)
+        self.assertEqual(args.negative_loss_weight, 0.8)
         self.assertTrue(args.fp_dynamic_penalty)
         self.assertEqual(args.fp_penalty_weight, 0.2)
         self.assertEqual(args.fp_threshold_ema_alpha, 0.3)

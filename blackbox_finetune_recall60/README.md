@@ -84,6 +84,8 @@ Optional high-scoring negative penalty is disabled by default. Enable it only wh
 
 ```bash
 export EVAL_THRESHOLD_POSITION=0.2
+export POSITIVE_LOSS_WEIGHT=2.0
+export NEGATIVE_LOSS_WEIGHT=1.0
 export FP_DYNAMIC_PENALTY=1
 export FP_PENALTY_WEIGHT=1.0
 export FP_THRESHOLD_EMA_ALPHA=0.2
