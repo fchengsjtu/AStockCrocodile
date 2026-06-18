@@ -182,17 +182,21 @@ def load_cached_negative_scores(
         key = row_key(row)
         if key not in score_by_key:
             missing.append(key)
+            scored.append((float("-inf"), row))
             continue
         scored.append((score_by_key[key], row))
     if missing:
         preview = ", ".join(f"{code}@{day}" for code, day, _ in missing[:5])
-        raise RuntimeError(
-            f"cached negative scores do not cover current negatives: "
-            f"missing={len(missing)} preview={preview}"
+        print(
+            f"WARNING cached negative scores do not cover all current negatives; "
+            f"missing={len(missing)} preview={preview}. "
+            f"Missing rows are ranked last and will be replaced first.",
+            flush=True,
         )
     scored.sort(key=lambda item: item[0], reverse=True)
     print(
-        f"loaded cached negative scores rows={len(scored)} path={scores_path}",
+        f"loaded cached negative scores rows={len(scored)} "
+        f"scored={len(scored) - len(missing)} missing={len(missing)} path={scores_path}",
         flush=True,
     )
     return scored

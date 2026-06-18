@@ -125,6 +125,22 @@ class BlackboxNegativeReshuffleTests(unittest.TestCase):
         self.assertEqual([row["metadata"]["scode"] for _, row in scored], ["000002", "000001"])
         self.assertEqual([score for score, _ in scored], [0.9, 0.2])
 
+    def test_cached_negative_scores_rank_missing_rows_last(self):
+        with tempfile.TemporaryDirectory() as temp:
+            score_path = Path(temp) / "negative_scores.jsonl"
+            negatives = [sample("000001", 0), sample("000002", 0)]
+            write_jsonl(
+                score_path,
+                [
+                    {"scode": "000001", "anchor_date": "2026-01-01", "score": 0.2},
+                ],
+            )
+
+            scored = load_cached_negative_scores(score_path, negatives)
+
+        self.assertEqual([row["metadata"]["scode"] for _, row in scored], ["000001", "000002"])
+        self.assertEqual(scored[-1][0], float("-inf"))
+
 
 if __name__ == "__main__":
     unittest.main()
