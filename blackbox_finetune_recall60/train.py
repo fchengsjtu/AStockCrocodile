@@ -469,6 +469,7 @@ def train_recall60_lora(
     lora_dropout: float,
     checkpoint_every: int,
     resume_adapter_dir: Path | None,
+    initial_adapter_dir: Path | None,
     nonfinite_patience: int,
     rebuild_token_cache: bool,
     auto_resume: bool,
@@ -536,6 +537,9 @@ def train_recall60_lora(
     if resume_adapter_dir is not None and (resume_adapter_dir / "adapter_config.json").exists():
         print(f"resuming adapter from {resume_adapter_dir}", flush=True)
         model = PeftModel.from_pretrained(model, str(resume_adapter_dir), is_trainable=True)
+    elif initial_adapter_dir is not None and (initial_adapter_dir / "adapter_config.json").exists():
+        print(f"initializing adapter from {initial_adapter_dir}", flush=True)
+        model = PeftModel.from_pretrained(model, str(initial_adapter_dir), is_trainable=True)
     else:
         model = get_peft_model(model, lora_config)
     trainable_params = [param for param in model.parameters() if param.requires_grad]
@@ -805,6 +809,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fp-threshold-min", type=float, default=_env_float("FP_THRESHOLD_MIN", 0.40), help="Lower bound for the dynamic FP penalty cutoff.")
     parser.add_argument("--fp-threshold-max", type=float, default=_env_float("FP_THRESHOLD_MAX", 0.65), help="Upper bound for the dynamic FP penalty cutoff.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
+    parser.add_argument("--initial-adapter-dir", type=Path, default=None, help="Initialize LoRA weights from an adapter directory but start training at update 0.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
     parser.add_argument("--nonfinite-skip-limit", type=int, default=100, help="Abort after this many total non-finite losses or gradients.")
     parser.add_argument("--nonfinite-backoff-every", type=int, default=10, help="Reduce optimizer LR after every N total non-finite skips; 0 disables.")
@@ -840,6 +845,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         lora_dropout=args.lora_dropout,
         checkpoint_every=args.checkpoint_every,
         resume_adapter_dir=args.resume_adapter_dir,
+        initial_adapter_dir=args.initial_adapter_dir,
         nonfinite_patience=args.nonfinite_patience,
         rebuild_token_cache=args.rebuild_token_cache,
         auto_resume=not args.no_auto_resume,

@@ -166,6 +166,11 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(eval_args.precision_threshold, 0.30)
         self.assertIn("recall80", str(args.output_dir))
 
+    def test_initial_adapter_dir_is_supported(self):
+        args = train.build_parser().parse_args(["--initial-adapter-dir", "seed-adapter"])
+
+        self.assertEqual(args.initial_adapter_dir, Path("seed-adapter"))
+
     def test_resolve_pretrained_source_validates_local_model_directory(self):
         with TemporaryDirectory() as temp_dir:
             model_dir = Path(temp_dir) / "Qwen2.5-0.5B-Instruct"
