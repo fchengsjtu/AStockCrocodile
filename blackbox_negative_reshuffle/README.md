@@ -53,6 +53,7 @@ python -m blackbox_negative_reshuffle.run \
   --source-cycle-dir /mnt/d/Models/precision10@0.4-c1-1600/negative_reshuffle/cycle-02 \
   --output-name cycle-03 \
   --keep-ratio 0.30 \
+  --target-negative-ratio 5 \
   --sample-mode xlong \
   --max-seq-length 3072 \
   --cuda-device 0

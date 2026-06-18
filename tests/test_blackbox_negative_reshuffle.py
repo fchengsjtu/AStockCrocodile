@@ -76,6 +76,28 @@ class BlackboxNegativeReshuffleTests(unittest.TestCase):
         self.assertEqual(stats["retained_hard_negatives"], 2)
         self.assertEqual(stats["random_replacements"], 2)
 
+    def test_reshuffle_can_reduce_to_target_negative_count(self):
+        positives = [sample("P1", 1), sample("P2", 1)]
+        negatives = [sample(f"N{index}", 0) for index in range(10)]
+        source = positives + negatives[:8]
+        scored = [(1.0 - index / 10.0, row) for index, row in enumerate(negatives)]
+
+        output, _, stats = reshuffle_split(
+            source,
+            scored,
+            negatives[3:],
+            keep_count=3,
+            rng=__import__("random").Random(7),
+            target_negative_count=5,
+        )
+
+        self.assertEqual(sum(row["metadata"]["label"] == 1 for row in output), 2)
+        self.assertEqual(sum(row["metadata"]["label"] == 0 for row in output), 5)
+        self.assertEqual(stats["source_negative_count"], 8)
+        self.assertEqual(stats["negative_count"], 5)
+        self.assertEqual(stats["retained_hard_negatives"], 3)
+        self.assertEqual(stats["random_replacements"], 2)
+
     def test_dataset_settings_are_inferred_from_original_rows(self):
         rows = [
             {
@@ -103,10 +125,11 @@ class BlackboxNegativeReshuffleTests(unittest.TestCase):
         self.assertEqual(end_date.isoformat(), "2024-12-30")
 
     def test_database_refill_defaults_to_twenty_attempts(self):
-        args = build_parser().parse_args(["--model-dir", "model"])
+        args = build_parser().parse_args(["--model-dir", "model", "--target-negative-ratio", "5"])
 
         self.assertEqual(args.database_max_attempts, 20)
         self.assertEqual(args.keep_ratio, 0.30)
+        self.assertEqual(args.target_negative_ratio, 5.0)
 
     def test_cached_negative_scores_are_reused_in_rank_order(self):
         with tempfile.TemporaryDirectory() as temp:

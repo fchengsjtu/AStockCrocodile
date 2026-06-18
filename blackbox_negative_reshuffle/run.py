@@ -253,6 +253,7 @@ def run_reshuffle(
     source_cycle_dir: Path | None = None,
     reuse_scores_path: Path | None = None,
     recompute_scores: bool = False,
+    target_negative_ratio: float | None = None,
 ) -> Path:
     model_dir = model_dir.resolve()
     run_dir = source_cycle_dir.resolve().parent / output_name if source_cycle_dir else model_dir / "negative_reshuffle" / output_name
@@ -289,22 +290,34 @@ def run_reshuffle(
         scores_source = "model"
         scores_recomputed = True
     rng = random.Random(seed)
+    train_positive_count = sum(row_label(row) == 1 for row in train_rows)
+    test_positive_count = sum(row_label(row) == 1 for row in test_rows)
     train_negative_count = sum(row_label(row) == 0 for row in train_rows)
     test_negative_count = sum(row_label(row) == 0 for row in test_rows)
+    train_target_negative_count = (
+        train_negative_count
+        if target_negative_ratio is None
+        else max(0, round(train_positive_count * max(0.0, target_negative_ratio)))
+    )
+    test_target_negative_count = (
+        test_negative_count
+        if target_negative_ratio is None
+        else max(0, round(test_positive_count * max(0.0, target_negative_ratio)))
+    )
     train_keep_count = (
-        min(max(0, keep_count), train_negative_count)
+        min(max(0, keep_count), train_target_negative_count)
         if keep_count is not None
-        else round(train_negative_count * min(max(keep_ratio, 0.0), 1.0))
+        else round(train_target_negative_count * min(max(keep_ratio, 0.0), 1.0))
     )
     test_keep_count = (
-        min(max(0, keep_count), test_negative_count)
+        min(max(0, keep_count), test_target_negative_count)
         if keep_count is not None
-        else round(test_negative_count * min(max(keep_ratio, 0.0), 1.0))
+        else round(test_target_negative_count * min(max(keep_ratio, 0.0), 1.0))
     )
     replacement_count = (
-        train_negative_count
+        train_target_negative_count
         - train_keep_count
-        + test_negative_count
+        + test_target_negative_count
         - test_keep_count
     )
     resolved_sample_mode, start_date, end_date = infer_dataset_settings(
@@ -339,6 +352,7 @@ def run_reshuffle(
         replacement_pool,
         train_keep_count,
         rng,
+        target_negative_count=train_target_negative_count,
     )
     new_test_rows, test_keys, test_stats = reshuffle_split(
         test_rows,
@@ -347,6 +361,7 @@ def run_reshuffle(
         test_keep_count,
         rng,
         excluded_keys=train_keys,
+        target_negative_count=test_target_negative_count,
     )
     training_output = run_dir / "datasets" / "training"
     evaluation_output = run_dir / "datasets" / "evaluation"
@@ -393,6 +408,11 @@ def run_reshuffle(
         "seed": seed,
         "keep_ratio": keep_ratio,
         "keep_count": keep_count,
+        "target_negative_ratio": target_negative_ratio,
+        "source_train_negative_count": train_negative_count,
+        "source_test_negative_count": test_negative_count,
+        "target_train_negative_count": train_target_negative_count,
+        "target_test_negative_count": test_target_negative_count,
         "scored_current_negative_count": len(current_negatives),
         "database_replacement_pool_count": len(replacement_pool),
         "train": train_stats,
@@ -462,6 +482,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ignore cached negative scores and score current negatives with the model.",
     )
     parser.add_argument(
+        "--target-negative-ratio",
+        type=float,
+        help="Generate each split with this many negative rows per positive row. Defaults to preserving the source split negative count.",
+    )
+    parser.add_argument(
         "--database-max-attempts",
         type=int,
         default=20,
@@ -490,6 +515,7 @@ def main() -> None:
         source_cycle_dir=args.source_cycle_dir,
         reuse_scores_path=args.reuse_scores_path,
         recompute_scores=args.recompute_scores,
+        target_negative_ratio=args.target_negative_ratio,
     )
 
 

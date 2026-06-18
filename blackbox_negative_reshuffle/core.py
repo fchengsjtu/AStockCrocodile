@@ -159,10 +159,11 @@ def reshuffle_split(
     keep_count: int,
     rng: random.Random,
     excluded_keys: set[tuple[str, str, int]] | None = None,
+    target_negative_count: int | None = None,
 ) -> tuple[list[dict], set[tuple[str, str, int]], dict]:
     positives = [row for row in source_rows if row_label(row) == 1]
     source_negatives = [row for row in source_rows if row_label(row) == 0]
-    desired_negatives = len(source_negatives)
+    desired_negatives = len(source_negatives) if target_negative_count is None else max(0, int(target_negative_count))
     excluded = set(excluded_keys or ())
     source_keys = {row_key(row) for row in source_negatives}
     ranked_source = [
@@ -190,6 +191,7 @@ def reshuffle_split(
     output_keys = {row_key(row) for row in selected_negatives}
     stats = {
         "positive_count": len(positives),
+        "source_negative_count": len(source_negatives),
         "negative_count": desired_negatives,
         "retained_hard_negatives": len(retained),
         "random_replacements": len(replacements),
