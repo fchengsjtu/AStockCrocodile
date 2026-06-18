@@ -63,7 +63,7 @@ def daily(day, open_, high, low, close, volume=100.0, amount=1000.0):
 
 
 class BlackboxFinetuneRecall60Tests(unittest.TestCase):
-    def test_next_evaluation_threshold_uses_top_eighty_percent_position(self):
+    def test_next_evaluation_threshold_uses_twenty_percent_position(self):
         average_probability, max_probability, next_threshold = train._next_evaluation_threshold(
             [0.2, 0.4, 0.6],
             current_threshold=0.48,
@@ -71,7 +71,7 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
 
         self.assertAlmostEqual(average_probability, 0.4)
         self.assertAlmostEqual(max_probability, 0.6)
-        self.assertAlmostEqual(next_threshold, 0.56)
+        self.assertAlmostEqual(next_threshold, 0.44)
 
     def test_dynamic_fp_penalty_cutoff_uses_ema_and_bounds(self):
         updated = train._update_fp_penalty_cutoff(

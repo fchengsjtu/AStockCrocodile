@@ -256,7 +256,7 @@ def _next_evaluation_threshold(probabilities: list[float], current_threshold: fl
         return value, value, value
     average_probability = sum(probabilities) / len(probabilities)
     max_probability = max(probabilities)
-    next_threshold = average_probability + 0.8 * (max_probability - average_probability)
+    next_threshold = average_probability + 0.2 * (max_probability - average_probability)
     return average_probability, max_probability, min(max(next_threshold, 0.0), 1.0)
 
 
@@ -338,7 +338,7 @@ def _evaluate_training_checkpoint(
     target_key = f"precision@{precision_top_k}"
     probabilities = [float(row["positive_probability"]) for row in scored_rows]
     average_probability, max_probability, next_threshold = _next_evaluation_threshold(probabilities, threshold)
-    threshold_position = 0.8
+    threshold_position = 0.2
     result = {
         "update": update,
         "total_updates": total_updates,
