@@ -11,7 +11,11 @@ from blackbox_negative_reshuffle.core import (
     row_key,
     write_jsonl,
 )
-from blackbox_negative_reshuffle.run import build_parser, infer_dataset_settings
+from blackbox_negative_reshuffle.run import (
+    build_parser,
+    infer_dataset_settings,
+    load_cached_negative_scores,
+)
 
 
 def sample(code: str, label: int) -> dict:
@@ -102,6 +106,24 @@ class BlackboxNegativeReshuffleTests(unittest.TestCase):
         args = build_parser().parse_args(["--model-dir", "model"])
 
         self.assertEqual(args.database_max_attempts, 20)
+        self.assertEqual(args.keep_ratio, 0.30)
+
+    def test_cached_negative_scores_are_reused_in_rank_order(self):
+        with tempfile.TemporaryDirectory() as temp:
+            score_path = Path(temp) / "negative_scores.jsonl"
+            negatives = [sample("000001", 0), sample("000002", 0)]
+            write_jsonl(
+                score_path,
+                [
+                    {"scode": "000002", "anchor_date": "2026-01-01", "score": 0.9},
+                    {"scode": "000001", "anchor_date": "2026-01-01", "score": 0.2},
+                ],
+            )
+
+            scored = load_cached_negative_scores(score_path, negatives)
+
+        self.assertEqual([row["metadata"]["scode"] for _, row in scored], ["000002", "000001"])
+        self.assertEqual([score for score, _ in scored], [0.9, 0.2])
 
 
 if __name__ == "__main__":

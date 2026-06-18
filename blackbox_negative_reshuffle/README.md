@@ -31,7 +31,7 @@ cd /mnt/d/Documents/StockInfoCrawler
 
 python -m blackbox_negative_reshuffle.run \
   --model-dir /mnt/d/Models/precision10@0.4-1500 \
-  --keep-ratio 0.20 \
+  --keep-ratio 0.30 \
   --stat-type short_term_surge_3d_20pct \
   --sample-mode xlong \
   --max-seq-length 3072 \
@@ -40,6 +40,26 @@ python -m blackbox_negative_reshuffle.run \
 ```
 
 Use `--keep-count N` instead of `--keep-ratio` to retain an exact number of highest-scoring negatives in each split.
+
+To reuse an existing reshuffle cycle without rescoring negatives, pass the cycle
+directory. The tool reads `datasets/training`, `datasets/evaluation`,
+`negative_scores.jsonl`, and `database_replacement_pool.jsonl` from that cycle,
+retains the top-ranked configured portion of negatives, and refills the rest
+from the cached pool plus the database only if the cached pool is insufficient:
+
+```bash
+python -m blackbox_negative_reshuffle.run \
+  --model-dir /mnt/d/Models/precision10@0.4-c1-1600/negative_reshuffle/cycle-02/adapter \
+  --source-cycle-dir /mnt/d/Models/precision10@0.4-c1-1600/negative_reshuffle/cycle-02 \
+  --output-name cycle-03 \
+  --keep-ratio 0.30 \
+  --sample-mode xlong \
+  --max-seq-length 3072 \
+  --cuda-device 0
+```
+
+Use `--recompute-scores` only when you intentionally want to score all current
+negatives again with the model.
 
 The default database refill limit is 20 attempts. Each successful attempt saves
 `database_replacement_pool.jsonl` under the selected output directory. If a run is interrupted or the database cannot provide enough valid rows, rerun the same command with the same `--output-name`; the saved replacement pool is loaded and only the missing rows are sampled. Increase `--database-max-attempts` when the selected sample mode filters out many candidates.

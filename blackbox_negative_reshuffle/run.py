@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from blackbox_negative_reshuffle.core import (
     copy_dataset,
     copy_model_files,
+    SourceMetadata,
     load_source_metadata,
     read_jsonl,
     reshuffle_split,
@@ -72,6 +73,8 @@ def load_database_replacement_pool(
             f"path={cache_path}",
             flush=True,
         )
+        if len(replacements) >= required_count:
+            return list(replacements.values())
     with mysql_connect() as conn:
         for attempt in range(max(1, max_attempts)):
             remaining = required_count - len(replacements)
@@ -155,6 +158,79 @@ def build_model_scorer(model_dir: Path, base_model: str | None, max_seq_length: 
     return scorer, resolved_base_model
 
 
+def _score_row_key(row: dict) -> tuple[str, str, int]:
+    metadata = row.get("metadata", row)
+    return (
+        str(metadata.get("scode", row.get("scode", ""))),
+        str(metadata.get("anchor_date", row.get("anchor_date", ""))),
+        0,
+    )
+
+
+def load_cached_negative_scores(
+    scores_path: Path,
+    current_negatives: list[dict],
+) -> list[tuple[float, dict]]:
+    score_by_key: dict[tuple[str, str, int], float] = {}
+    for row in read_jsonl(scores_path):
+        key = _score_row_key(row)
+        if key[0] and key[1] and "score" in row:
+            score_by_key[key] = float(row["score"])
+    scored: list[tuple[float, dict]] = []
+    missing: list[tuple[str, str, int]] = []
+    for row in current_negatives:
+        key = row_key(row)
+        if key not in score_by_key:
+            missing.append(key)
+            continue
+        scored.append((score_by_key[key], row))
+    if missing:
+        preview = ", ".join(f"{code}@{day}" for code, day, _ in missing[:5])
+        raise RuntimeError(
+            f"cached negative scores do not cover current negatives: "
+            f"missing={len(missing)} preview={preview}"
+        )
+    scored.sort(key=lambda item: item[0], reverse=True)
+    print(
+        f"loaded cached negative scores rows={len(scored)} path={scores_path}",
+        flush=True,
+    )
+    return scored
+
+
+def load_cycle_metadata(source_cycle_dir: Path) -> SourceMetadata:
+    source_cycle_dir = source_cycle_dir.resolve()
+    training_dir = source_cycle_dir / "datasets" / "training"
+    evaluation_dir = source_cycle_dir / "datasets" / "evaluation"
+    for directory, names in (
+        (training_dir, ("train.jsonl", "test.jsonl", "all.jsonl")),
+        (evaluation_dir, ("test.jsonl",)),
+    ):
+        missing = [name for name in names if not (directory / name).is_file()]
+        if missing:
+            raise FileNotFoundError(f"{directory} is missing: {', '.join(missing)}")
+    eval_candidates = sorted((source_cycle_dir / "runs" / "evaluations").glob("eval-*.json"))
+    if eval_candidates:
+        evaluation_json = eval_candidates[-1]
+    else:
+        evaluation_json = source_cycle_dir / "reshuffle_manifest.json"
+    return SourceMetadata(evaluation_json, training_dir, evaluation_dir)
+
+
+def resolve_base_model_without_loading(model_dir: Path, base_model: str | None) -> str | None:
+    if base_model:
+        return base_model
+    config_path = model_dir / "adapter_config.json"
+    if config_path.is_file():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        value = config.get("base_model_name_or_path")
+        return str(value) if value else None
+    return None
+
+
 def run_reshuffle(
     model_dir: Path,
     evaluation_json: Path | None,
@@ -170,11 +246,14 @@ def run_reshuffle(
     sample_mode: str | None,
     database_batch_size: int,
     database_max_attempts: int,
+    source_cycle_dir: Path | None = None,
+    reuse_scores_path: Path | None = None,
+    recompute_scores: bool = False,
 ) -> Path:
     model_dir = model_dir.resolve()
-    run_dir = model_dir / "negative_reshuffle" / output_name
+    run_dir = source_cycle_dir.resolve().parent / output_name if source_cycle_dir else model_dir / "negative_reshuffle" / output_name
     run_dir.mkdir(parents=True, exist_ok=True)
-    metadata = load_source_metadata(model_dir, evaluation_json)
+    metadata = load_cycle_metadata(source_cycle_dir) if source_cycle_dir else load_source_metadata(model_dir, evaluation_json)
     train_rows = read_jsonl(metadata.training_dataset_dir / "train.jsonl")
     test_rows = read_jsonl(metadata.training_dataset_dir / "test.jsonl")
     all_source_rows = train_rows + test_rows
@@ -186,13 +265,25 @@ def run_reshuffle(
     current_negatives = list(current_negative_by_key.values())
     if not current_negatives:
         raise RuntimeError("original training dataset contains no negative samples")
-    scorer, resolved_base_model = build_model_scorer(
-        model_dir,
-        base_model,
-        max_seq_length,
-        cuda_device,
+    default_scores_path = (
+        reuse_scores_path
+        or (source_cycle_dir / "negative_scores.jsonl" if source_cycle_dir else run_dir / "negative_scores.jsonl")
     )
-    scored_current_negatives = score_negative_rows(current_negatives, scorer, progress_every)
+    if not recompute_scores and default_scores_path is not None and default_scores_path.is_file():
+        scored_current_negatives = load_cached_negative_scores(default_scores_path, current_negatives)
+        resolved_base_model = resolve_base_model_without_loading(model_dir, base_model)
+        scores_source = str(default_scores_path)
+        scores_recomputed = False
+    else:
+        scorer, resolved_base_model = build_model_scorer(
+            model_dir,
+            base_model,
+            max_seq_length,
+            cuda_device,
+        )
+        scored_current_negatives = score_negative_rows(current_negatives, scorer, progress_every)
+        scores_source = "model"
+        scores_recomputed = True
     rng = random.Random(seed)
     train_negative_count = sum(row_label(row) == 0 for row in train_rows)
     test_negative_count = sum(row_label(row) == 0 for row in test_rows)
@@ -216,6 +307,16 @@ def run_reshuffle(
         all_source_rows,
         sample_mode,
     )
+    replacement_cache_path = run_dir / "database_replacement_pool.jsonl"
+    if source_cycle_dir:
+        source_pool_path = source_cycle_dir / "database_replacement_pool.jsonl"
+        if source_pool_path.is_file() and not replacement_cache_path.exists():
+            replacement_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            replacement_cache_path.write_text(
+                source_pool_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+                newline="\n",
+            )
     replacement_pool = load_database_replacement_pool(
         current_negative_keys=set(current_negative_by_key),
         required_count=replacement_count,
@@ -226,7 +327,7 @@ def run_reshuffle(
         seed=seed,
         batch_size=database_batch_size,
         max_attempts=database_max_attempts,
-        cache_path=run_dir / "database_replacement_pool.jsonl",
+        cache_path=replacement_cache_path,
     )
     new_train_rows, train_keys, train_stats = reshuffle_split(
         train_rows,
@@ -252,17 +353,21 @@ def run_reshuffle(
     copy_dataset(metadata.evaluation_dataset_dir, evaluation_output)
     copied_model_files = copy_model_files(model_dir, adapter_output)
     scores_output = run_dir / "negative_scores.jsonl"
-    write_jsonl(
-        scores_output,
-        (
-            {
-                "scode": row.get("metadata", {}).get("scode"),
-                "anchor_date": row.get("metadata", {}).get("anchor_date"),
-                "score": score,
-            }
-            for score, row in scored_current_negatives
-        ),
-    )
+    if scores_recomputed:
+        write_jsonl(
+            scores_output,
+            (
+                {
+                    "scode": row.get("metadata", {}).get("scode"),
+                    "anchor_date": row.get("metadata", {}).get("anchor_date"),
+                    "score": score,
+                }
+                for score, row in scored_current_negatives
+            ),
+        )
+    elif default_scores_path != scores_output:
+        scores_output.parent.mkdir(parents=True, exist_ok=True)
+        scores_output.write_text(default_scores_path.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     manifest = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "source_model_path": str(model_dir),
@@ -273,6 +378,9 @@ def run_reshuffle(
         "generated_eval_dataset_path": str(evaluation_output),
         "generated_model_path": str(adapter_output),
         "base_model": resolved_base_model,
+        "source_cycle_dir": str(source_cycle_dir) if source_cycle_dir else None,
+        "negative_scores_source": scores_source,
+        "negative_scores_recomputed": scores_recomputed,
         "max_seq_length": max_seq_length,
         "stat_type": stat_type,
         "sample_mode": resolved_sample_mode,
@@ -324,7 +432,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--evaluation-json", type=Path)
     parser.add_argument("--output-name", default=datetime.now().strftime("run-%Y%m%d-%H%M%S"))
-    parser.add_argument("--keep-ratio", type=float, default=0.20)
+    parser.add_argument("--keep-ratio", type=float, default=0.30)
     parser.add_argument("--keep-count", type=int)
     parser.add_argument("--seed", type=int, default=937498347)
     parser.add_argument("--base-model")
@@ -334,6 +442,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stat-type", default="short_term_surge_3d_20pct")
     parser.add_argument("--sample-mode", choices=["short", "long", "xlong", "xxlong"])
     parser.add_argument("--database-batch-size", type=int, default=80)
+    parser.add_argument(
+        "--source-cycle-dir",
+        type=Path,
+        help="Reuse an existing negative_reshuffle cycle directory as the source dataset, score cache, and replacement-pool cache.",
+    )
+    parser.add_argument(
+        "--reuse-scores-path",
+        type=Path,
+        help="Use this existing negative_scores.jsonl instead of rescoring current negatives.",
+    )
+    parser.add_argument(
+        "--recompute-scores",
+        action="store_true",
+        help="Ignore cached negative scores and score current negatives with the model.",
+    )
     parser.add_argument(
         "--database-max-attempts",
         type=int,
@@ -360,6 +483,9 @@ def main() -> None:
         sample_mode=args.sample_mode,
         database_batch_size=max(1, args.database_batch_size),
         database_max_attempts=max(1, args.database_max_attempts),
+        source_cycle_dir=args.source_cycle_dir,
+        reuse_scores_path=args.reuse_scores_path,
+        recompute_scores=args.recompute_scores,
     )
 
 
