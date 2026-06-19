@@ -80,6 +80,8 @@ Training automatically resumes from the latest `blackbox_finetune_recall60/runs/
 
 WSL/Linux defaults to `ON_THE_FLY_TOKENIZE=1`, so training tokenizes each batch on demand instead of loading the large `tokenized/*.pkl` cache into RAM. This avoids Linux `Killed` exits when the tokenized cache is larger than available memory. Set `ON_THE_FLY_TOKENIZE=0` only when RAM is ample and you prefer faster cached token loading.
 
+Training dataset builds write every materialized row in the training date range to `train.jsonl`; checkpoint evaluation uses the separate evaluation dataset, typically `data_evaluation_*/test.jsonl`.
+
 Optional high-scoring negative penalty is disabled by default. Enable it only when you want training to softly penalize negative samples whose current positive probability exceeds the dynamic false-positive cutoff. The penalty is linear, `max(p_positive - cutoff, 0)`, so small cutoff violations still contribute useful gradient. After every checkpoint evaluation, the cutoff is updated from `0.5 * (next_threshold + max_p)` with EMA smoothing and then clamped by the configured bounds:
 
 ```bash

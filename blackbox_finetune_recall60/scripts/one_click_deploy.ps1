@@ -54,8 +54,11 @@ function Convert-RecallTargetTag {
 }
 
 function Test-DatasetReady {
-  param([string]$Dir)
-  return (Test-Path (Join-Path $Dir "train.jsonl")) -and (Test-Path (Join-Path $Dir "test.jsonl"))
+  param([string]$Dir, [string]$Label)
+  if ($Label -eq "validation") {
+    return Test-Path (Join-Path $Dir "test.jsonl")
+  }
+  return Test-Path (Join-Path $Dir "train.jsonl")
 }
 
 function Invoke-DatasetBuildIfNeeded {
@@ -65,7 +68,7 @@ function Invoke-DatasetBuildIfNeeded {
     [string]$ForceValue,
     [string[]]$CommandArgs
   )
-  if (Test-DatasetReady $Dir) {
+  if (Test-DatasetReady -Dir $Dir -Label $Label) {
     if (Test-EnvFlag $ForceValue) {
       Write-Host "Rebuilding cached $Label dataset in $Dir because the rebuild flag is set."
     } else {

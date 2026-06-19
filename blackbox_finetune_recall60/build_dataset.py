@@ -13,7 +13,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from blackbox_finetune.build_dataset import (
     load_random_negative_events,
     load_positive_events,
-    split_train_test,
 )
 from blackbox_finetune_recall60.common import (
     DEFAULT_STAT_TYPE,
@@ -54,13 +53,11 @@ def build_recall60_dataset(
         all_events = positives + negatives
         print(f"loaded events positives={len(positives)} negatives={len(negatives)}", flush=True)
         samples = materialize_events(conn, all_events, daily_window, weekly_window, batch_size, sample_mode=sample_mode, monthly_window=monthly_window)
-    train_rows, test_rows = split_train_test(samples, train_ratio, seed)
     output_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(output_dir / "train.jsonl", train_rows)
-    write_jsonl(output_dir / "test.jsonl", test_rows)
+    write_jsonl(output_dir / "train.jsonl", samples)
     write_jsonl(output_dir / "all.jsonl", samples)
-    print(f"dataset written dir={output_dir} train={len(train_rows)} test={len(test_rows)} all={len(samples)}", flush=True)
-    return len(train_rows), len(test_rows)
+    print(f"dataset written dir={output_dir} train={len(samples)} test=0 all={len(samples)} split=none", flush=True)
+    return len(samples), 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -76,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=float(os.environ.get("NEGATIVE_RATIO", "5.0")),
         help="Number of randomly selected negative samples relative to positive samples.",
     )
-    parser.add_argument("--train-ratio", type=float, default=0.8)
+    parser.add_argument("--train-ratio", type=float, default=1.0, help="Deprecated compatibility option; all materialized rows are now written to train.jsonl.")
     parser.add_argument("--seed", type=int, default=int(os.environ.get("TRAIN_SEED", str(20260500 + int(recall_target_tag().removeprefix("recall"))))))
     parser.add_argument("--sample-mode", choices=["short", "long", "xlong", "xxlong"], default=DEFAULT_SAMPLE_MODE)
     parser.add_argument("--daily-window", type=int, help="Override daily bars for the selected sample mode")

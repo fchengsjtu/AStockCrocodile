@@ -571,8 +571,7 @@ def train_recall60_lora(
     fp_threshold_max: float,
 ) -> None:
     train_path = data_dir / "train.jsonl"
-    test_path = data_dir / "test.jsonl"
-    if not train_path.exists() or not test_path.exists():
+    if not train_path.exists():
         raise _missing_dataset_error(data_dir)
     checkpoint_eval_path = _checkpoint_eval_path(data_dir, checkpoint_eval_data_dir)
     if not checkpoint_eval_path.exists():

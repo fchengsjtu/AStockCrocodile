@@ -12,7 +12,13 @@ env_flag() {
 }
 
 dataset_ready() {
-  [[ -f "$1/train.jsonl" && -f "$1/test.jsonl" ]]
+  local dir="$1"
+  local label="${2:-training}"
+  if [[ "$label" == "validation" ]]; then
+    [[ -f "$dir/test.jsonl" ]]
+  else
+    [[ -f "$dir/train.jsonl" ]]
+  fi
 }
 
 normalize_dataset_path() {
@@ -28,22 +34,21 @@ normalize_dataset_path() {
 prepare_explicit_datasets() {
   local configured=0
   local value
-  for value in "$TRAIN_DATASET_PATH" "$TEST_DATASET_PATH" "$VALIDATION_DATASET_PATH"; do
+  for value in "$TRAIN_DATASET_PATH" "$VALIDATION_DATASET_PATH"; do
     [[ -n "$value" ]] && configured=$((configured + 1))
   done
   if [[ "$configured" == "0" ]]; then
     return 0
   fi
-  if [[ "$configured" != "3" ]]; then
-    echo "TRAIN_DATASET_PATH, TEST_DATASET_PATH, and VALIDATION_DATASET_PATH must be set together." >&2
+  if [[ "$configured" != "2" ]]; then
+    echo "TRAIN_DATASET_PATH and VALIDATION_DATASET_PATH must be set together. TEST_DATASET_PATH is no longer used for checkpoint evaluation." >&2
     exit 2
   fi
 
   TRAIN_DATASET_PATH="$(normalize_dataset_path "$TRAIN_DATASET_PATH")"
-  TEST_DATASET_PATH="$(normalize_dataset_path "$TEST_DATASET_PATH")"
   VALIDATION_DATASET_PATH="$(normalize_dataset_path "$VALIDATION_DATASET_PATH")"
   EXPLICIT_DATASET_WORK_DIR="$(normalize_dataset_path "$EXPLICIT_DATASET_WORK_DIR")"
-  for value in "$TRAIN_DATASET_PATH" "$TEST_DATASET_PATH" "$VALIDATION_DATASET_PATH"; do
+  for value in "$TRAIN_DATASET_PATH" "$VALIDATION_DATASET_PATH"; do
     if [[ ! -f "$value" ]]; then
       echo "Explicit dataset file does not exist: $value" >&2
       exit 2
@@ -54,7 +59,6 @@ prepare_explicit_datasets() {
   VALIDATION_DATA_DIR="$EXPLICIT_DATASET_WORK_DIR/validation"
   mkdir -p "$DATA_DIR" "$VALIDATION_DATA_DIR"
   ln -sfn "$TRAIN_DATASET_PATH" "$DATA_DIR/train.jsonl"
-  ln -sfn "$TEST_DATASET_PATH" "$DATA_DIR/test.jsonl"
   ln -sfn "$VALIDATION_DATASET_PATH" "$VALIDATION_DATA_DIR/test.jsonl"
   EXPLICIT_DATASETS_ENABLED=1
   return 0
@@ -97,7 +101,7 @@ run_dataset_build_if_needed() {
   local expected_signature="$4"
   local signature_file="$dir/.dataset_signature"
   shift 4
-  if dataset_ready "$dir" && ! env_flag "$force_value"; then
+  if dataset_ready "$dir" "$label" && ! env_flag "$force_value"; then
     if [[ -f "$signature_file" ]] && [[ "$(cat "$signature_file")" == "$expected_signature" ]]; then
       echo "Using cached $label dataset in $dir; configuration signature matches."
       return 0
@@ -284,7 +288,7 @@ Project blackbox environment:
   DATA_DIR=$DATA_DIR
   VALIDATION_DATA_DIR=$VALIDATION_DATA_DIR
   TRAIN_DATASET_PATH=${TRAIN_DATASET_PATH:-<unset>}
-  TEST_DATASET_PATH=${TEST_DATASET_PATH:-<unset>}
+  TEST_DATASET_PATH=${TEST_DATASET_PATH:-<unused>}
   VALIDATION_DATASET_PATH=${VALIDATION_DATASET_PATH:-<unset>}
   EXPLICIT_DATASET_WORK_DIR=$EXPLICIT_DATASET_WORK_DIR
   EXPLICIT_DATASETS_ENABLED=$EXPLICIT_DATASETS_ENABLED
@@ -330,11 +334,11 @@ if [[ "$MODE" == "smoke" ]]; then
   VAL_ARGS+=(--positive-limit "$POS_LIMIT")
 fi
 
-TRAIN_DATASET_SIGNATURE="kind=training;start=$TRAIN_START;end=$TRAIN_END;negative_ratio=$NEGATIVE_RATIO;sample_mode=$SAMPLE_MODE;positive_limit=${POS_LIMIT:-all};seed=$TRAIN_SEED"
+TRAIN_DATASET_SIGNATURE="kind=training;split=all;start=$TRAIN_START;end=$TRAIN_END;negative_ratio=$NEGATIVE_RATIO;sample_mode=$SAMPLE_MODE;positive_limit=${POS_LIMIT:-all};seed=$TRAIN_SEED"
 VALIDATION_DATASET_SIGNATURE="kind=validation;start=$VALIDATION_START;end=$VALIDATION_END;negative_ratio=$NEGATIVE_RATIO;sample_mode=$SAMPLE_MODE;positive_limit=${POS_LIMIT:-all};seed=$TRAIN_SEED"
 DATASET_REBUILT=0
 if [[ "$EXPLICIT_DATASETS_ENABLED" == "1" ]]; then
-  echo "Using explicit train, test, and validation dataset files; dataset generation is skipped."
+  echo "Using explicit train and validation dataset files; dataset generation is skipped."
 else
   run_dataset_build_if_needed "$DATA_DIR" training "${REBUILD_DATASET:-}" "$TRAIN_DATASET_SIGNATURE" python -m blackbox_finetune_recall60.build_dataset "${BUILD_ARGS[@]}"
   run_dataset_build_if_needed "$VALIDATION_DATA_DIR" validation "${REBUILD_VALIDATION_DATASET:-${REBUILD_DATASET:-}}" "$VALIDATION_DATASET_SIGNATURE" python -m blackbox_finetune_recall60.build_validation_dataset "${VAL_ARGS[@]}"
