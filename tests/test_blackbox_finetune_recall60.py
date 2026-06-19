@@ -178,6 +178,48 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
             self.assertEqual(common.read_jsonl(output_dir / "all.jsonl"), samples)
             self.assertFalse((output_dir / "test.jsonl").exists())
 
+    def test_validation_dataset_writes_all_samples_to_test_jsonl(self):
+        class DummyConnection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        samples = [
+            {"scode": "000011", "anchor_date": "2026-01-05", "label": 1},
+            {"scode": "000012", "anchor_date": "2026-01-06", "label": 0},
+        ]
+        with TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            with patch.object(build_dataset, "mysql_connect", return_value=DummyConnection()), patch.object(
+                build_dataset, "load_positive_events", return_value=["positive"]
+            ), patch.object(build_dataset, "load_random_negative_events", return_value=["negative"]), patch.object(
+                build_dataset, "materialize_events", return_value=samples
+            ):
+                train_count, test_count = build_dataset.build_recall60_dataset(
+                    output_dir=output_dir,
+                    stat_type="stat",
+                    start_date=date(2026, 1, 1),
+                    end_date=date(2026, 5, 30),
+                    positive_limit=None,
+                    negative_ratio=1.0,
+                    train_ratio=0.01,
+                    seed=123,
+                    daily_window=None,
+                    weekly_window=None,
+                    monthly_window=None,
+                    batch_size=80,
+                    sample_mode="xlong",
+                    output_split="test",
+                )
+
+            self.assertEqual(train_count, 0)
+            self.assertEqual(test_count, len(samples))
+            self.assertEqual(common.read_jsonl(output_dir / "test.jsonl"), samples)
+            self.assertEqual(common.read_jsonl(output_dir / "all.jsonl"), samples)
+            self.assertFalse((output_dir / "train.jsonl").exists())
+
     def test_regularization_and_training_eval_args_can_come_from_environment(self):
         with patch.dict(
             "os.environ",

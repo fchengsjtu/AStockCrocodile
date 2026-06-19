@@ -54,6 +54,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         monthly_window=max(0, args.monthly_window) if args.monthly_window is not None else None,
         batch_size=max(1, args.batch_size),
         sample_mode=args.sample_mode,
+        output_split="test",
     )
 
 

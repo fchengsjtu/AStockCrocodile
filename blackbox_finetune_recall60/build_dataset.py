@@ -45,6 +45,7 @@ def build_recall60_dataset(
     monthly_window: int | None,
     batch_size: int,
     sample_mode: str,
+    output_split: str = "train",
 ) -> tuple[int, int]:
     with mysql_connect() as conn:
         positives = load_positive_events(conn, stat_type, start_date, end_date, positive_limit)
@@ -54,10 +55,17 @@ def build_recall60_dataset(
         print(f"loaded events positives={len(positives)} negatives={len(negatives)}", flush=True)
         samples = materialize_events(conn, all_events, daily_window, weekly_window, batch_size, sample_mode=sample_mode, monthly_window=monthly_window)
     output_dir.mkdir(parents=True, exist_ok=True)
-    write_jsonl(output_dir / "train.jsonl", samples)
+    split_name = "test" if output_split == "test" else "train"
+    write_jsonl(output_dir / f"{split_name}.jsonl", samples)
     write_jsonl(output_dir / "all.jsonl", samples)
-    print(f"dataset written dir={output_dir} train={len(samples)} test=0 all={len(samples)} split=none", flush=True)
-    return len(samples), 0
+    train_count = len(samples) if split_name == "train" else 0
+    test_count = len(samples) if split_name == "test" else 0
+    print(
+        f"dataset written dir={output_dir} train={train_count} test={test_count} "
+        f"all={len(samples)} split={split_name}",
+        flush=True,
+    )
+    return train_count, test_count
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,6 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--weekly-window", type=int, help="Override weekly bars for the selected sample mode")
     parser.add_argument("--monthly-window", type=int, help="Override monthly bars for the selected sample mode")
     parser.add_argument("--batch-size", type=int, default=80)
+    parser.add_argument("--output-split", choices=["train", "test"], default="train", help="Write materialized rows to train.jsonl or test.jsonl.")
     return parser
 
 
@@ -99,6 +108,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         monthly_window=max(0, args.monthly_window) if args.monthly_window is not None else None,
         batch_size=max(1, args.batch_size),
         sample_mode=args.sample_mode,
+        output_split=args.output_split,
     )
 
 
