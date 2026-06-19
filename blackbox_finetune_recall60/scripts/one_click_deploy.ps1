@@ -125,6 +125,8 @@ function Write-EnvironmentSnapshot {
     "EVAL_OUTPUT_DIR",
     "POSITIVE_LOSS_WEIGHT",
     "NEGATIVE_LOSS_WEIGHT",
+    "HIGH_SCORE_POSITIVE_BONUS",
+    "HIGH_SCORE_POSITIVE_POSITION",
     "FP_DYNAMIC_PENALTY",
     "FP_PENALTY_WEIGHT",
     "FP_THRESHOLD_EMA_ALPHA",
@@ -225,6 +227,8 @@ $EvalPrecisionThreshold = if ($env:EVAL_PRECISION_THRESHOLD) { $env:EVAL_PRECISI
 $EvalMaxSamples = if ($env:EVAL_MAX_SAMPLES) { $env:EVAL_MAX_SAMPLES } else { "0" }
 $PositiveLossWeight = if ($env:POSITIVE_LOSS_WEIGHT) { $env:POSITIVE_LOSS_WEIGHT } else { "1.0" }
 $NegativeLossWeight = if ($env:NEGATIVE_LOSS_WEIGHT) { $env:NEGATIVE_LOSS_WEIGHT } else { "1.0" }
+$HighScorePositiveBonus = if ($env:HIGH_SCORE_POSITIVE_BONUS) { $env:HIGH_SCORE_POSITIVE_BONUS } else { "0.0" }
+$HighScorePositivePosition = if ($env:HIGH_SCORE_POSITIVE_POSITION) { $env:HIGH_SCORE_POSITIVE_POSITION } else { "0.8" }
 $FpDynamicPenalty = if ($env:FP_DYNAMIC_PENALTY) { Test-EnvFlag $env:FP_DYNAMIC_PENALTY } else { $false }
 $FpPenaltyWeight = if ($env:FP_PENALTY_WEIGHT) { $env:FP_PENALTY_WEIGHT } else { "1.0" }
 $FpThresholdEmaAlpha = if ($env:FP_THRESHOLD_EMA_ALPHA) { $env:FP_THRESHOLD_EMA_ALPHA } else { "0.2" }
@@ -283,6 +287,7 @@ $TrainArgs = @(
   '--nonfinite-skip-limit', $NonfiniteSkipLimit, '--nonfinite-backoff-every', $NonfiniteBackoffEvery, '--lr-backoff-factor', $LrBackoffFactor,
   '--min-learning-rate', $MinLearningRate, '--eval-threshold', $EvalThreshold, '--eval-threshold-position', $EvalThresholdPosition, '--eval-precision-top-k', $EvalPrecisionTopK, '--eval-precision-threshold', $EvalPrecisionThreshold, '--eval-max-samples', $EvalMaxSamples,
   '--positive-loss-weight', $PositiveLossWeight, '--negative-loss-weight', $NegativeLossWeight,
+  '--high-score-positive-bonus', $HighScorePositiveBonus, '--high-score-positive-position', $HighScorePositivePosition,
   '--train-seed', $TrainSeed, '--cuda-device', $CudaDevice
 )
 if (-not $Use4Bit) { $TrainArgs += @('--no-4bit') }
