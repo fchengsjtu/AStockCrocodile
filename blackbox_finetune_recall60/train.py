@@ -686,6 +686,10 @@ def train_recall60_lora(
     consecutive_nonfinite = 0
     total_nonfinite_skips = 0
     consecutive_oom = 0
+    accumulated_loss = 0.0
+    accumulated_loss_count = 0
+    accumulated_metric_sums: dict[str, float] = {}
+    accumulated_metric_counts: dict[str, int] = {}
     for micro_step in range(start_micro_step, total_micro_steps):
         update = (micro_step + 1) // max(1, gradient_accumulation_steps)
         try:
@@ -743,6 +747,11 @@ def train_recall60_lora(
                 continue
             consecutive_nonfinite = 0
             consecutive_oom = 0
+            accumulated_loss += float(raw_loss.detach().cpu())
+            accumulated_loss_count += 1
+            for metric_name, metric_value in loss_metrics.items():
+                accumulated_metric_sums[metric_name] = accumulated_metric_sums.get(metric_name, 0.0) + float(metric_value)
+                accumulated_metric_counts[metric_name] = accumulated_metric_counts.get(metric_name, 0) + 1
             loss = raw_loss / max(1, gradient_accumulation_steps)
             loss.backward()
         except torch.OutOfMemoryError as exc:
@@ -806,11 +815,16 @@ def train_recall60_lora(
             progress = update / total_updates
             remaining = elapsed * (1.0 - progress) / progress if progress > 0 else 0.0
             eta_epoch = time.localtime(time.time() + remaining)
-            loss_metric_text = "".join(f"{name}={value:.4f} " for name, value in loss_metrics.items())
+            update_loss = accumulated_loss / max(1, accumulated_loss_count)
+            update_metrics = {
+                name: accumulated_metric_sums[name] / max(1, accumulated_metric_counts.get(name, 0))
+                for name in sorted(accumulated_metric_sums)
+            }
+            loss_metric_text = "".join(f"{name}={value:.4f} " for name, value in update_metrics.items())
             print(
                 f"train update {update}/{total_updates} "
                 f"({progress * 100:.2f}%) "
-                f"loss={float(raw_loss.detach().cpu()):.4f} "
+                f"loss={update_loss:.4f} "
                 f"{loss_metric_text}"
                 f"grad_norm={float(grad_norm.detach().cpu()):.4f} "
                 f"lr={optimizer.param_groups[0]['lr']:.2e} "
@@ -819,6 +833,10 @@ def train_recall60_lora(
                 f"eta={time.strftime('%Y-%m-%d %H:%M:%S', eta_epoch)}",
                 flush=True,
             )
+            accumulated_loss = 0.0
+            accumulated_loss_count = 0
+            accumulated_metric_sums.clear()
+            accumulated_metric_counts.clear()
             if checkpoint_every > 0 and update % checkpoint_every == 0:
                 checkpoint_dir = output_dir / "checkpoints" / f"update-{update:06d}"
                 checkpoint_dir.mkdir(parents=True, exist_ok=True)
