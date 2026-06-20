@@ -269,6 +269,7 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.high_score_cutoff_position, 0.6)
         self.assertEqual(args.high_score_positive_bonus, 1.0)
         self.assertEqual(args.high_score_negative_penalty_weight, 1.0)
+        self.assertEqual(args.high_score_neutral_penalty_weight, 0.5)
         self.assertTrue(args.fp_dynamic_penalty)
 
     def test_threeclass_extra_training_state_preserves_high_score_cutoff(self):
@@ -304,7 +305,7 @@ class ThreeClassTests(unittest.TestCase):
         except ModuleNotFoundError:
             self.skipTest("torch is not installed in this environment")
 
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 1.0)
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 1.0, 0.5)
         low_fp, low_rank = threeclass_train._negative_auxiliary_losses(
             torch.tensor([0.0]),
             torch.tensor([2.0]),
@@ -323,7 +324,7 @@ class ThreeClassTests(unittest.TestCase):
         except ModuleNotFoundError:
             self.skipTest("torch is not installed in this environment")
 
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 1.0)
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 1.0, 0.5)
         _, rank = threeclass_train._negative_auxiliary_losses(
             torch.tensor([0.4]),
             torch.tensor([0.5]),

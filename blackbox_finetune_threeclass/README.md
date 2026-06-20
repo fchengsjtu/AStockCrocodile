@@ -77,6 +77,7 @@ total_loss =
     + FP_LOSS_WEIGHT * negative_fp_loss
     + NEUTRAL_FP_LOSS_WEIGHT * neutral_fp_loss
     + RANK_LOSS_WEIGHT * negative_positive_ranking_loss
+    + HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT * high_score_neutral_loss
     + POSITIVE_HIGH_SCORE_LOSS_WEIGHT * positive_high_score_loss
 ```
 
@@ -97,10 +98,11 @@ HIGH_SCORE_EMA_ALPHA=0.02
 HIGH_SCORE_CUTOFF_POSITION=0.6
 HIGH_SCORE_POSITIVE_BONUS=1.0
 HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=1.0
+HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT=0.5
 FP_DYNAMIC_PENALTY=1
 ```
 
-`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. For a true neutral sample, `neutral_fp_loss` compares `{"c":"positive"}` with `{"c":"neutral"}` and applies a lower-weight penalty when neutral rows look positive. The ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. `positive_high_score_loss` is `relu(ema_cutoff + POSITIVE_HIGH_SCORE_MARGIN - positive_answer_score)` for true positive samples, explicitly pushing positives into the high-score region. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `rank`, and `positive_high_score`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
+`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. For a true neutral sample, `neutral_fp_loss` compares `{"c":"positive"}` with `{"c":"neutral"}` and applies a lower-weight penalty when neutral rows look positive. `high_score_neutral_loss` is `relu(neutral_positive_score - ema_cutoff)`, directly penalizing neutral rows that enter the positive high-score region. The ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. `positive_high_score_loss` is `relu(ema_cutoff + POSITIVE_HIGH_SCORE_MARGIN - positive_answer_score)` for true positive samples, explicitly pushing positives into the high-score region. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `rank`, `high_score_neutral`, and `positive_high_score`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
 
 When `HIGH_SCORE_EMA=1`, training also keeps an in-batch EMA cutoff for high positive-answer-score samples. To keep training stable on 12GB GPUs, this uses the already-needed positive answer NLL instead of re-scoring all three classes for every row:
 
@@ -115,7 +117,7 @@ ema_cutoff = HIGH_SCORE_EMA_ALPHA * raw_cutoff
     + (1 - HIGH_SCORE_EMA_ALPHA) * previous_ema_cutoff
 ```
 
-For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss` and ranking loss. True positive samples above `ema_cutoff` receive an extra CE multiplier of `1 + HIGH_SCORE_POSITIVE_BONUS`. True negative samples above `ema_cutoff` receive an additional linear penalty weighted by `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`. Use a small `HIGH_SCORE_EMA_ALPHA` such as `0.02` to keep the cutoff from chasing noisy mini-batches.
+For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss` and ranking loss. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss` or `high_score_neutral_loss`. True positive samples above `ema_cutoff` receive an extra CE multiplier of `1 + HIGH_SCORE_POSITIVE_BONUS`. True negative samples above `ema_cutoff` receive an additional linear penalty weighted by `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`; true neutral samples above the same cutoff receive `HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT`. Use a small `HIGH_SCORE_EMA_ALPHA` such as `0.02` to keep the cutoff from chasing noisy mini-batches.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 
