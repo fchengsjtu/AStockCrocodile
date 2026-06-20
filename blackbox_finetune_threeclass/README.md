@@ -80,13 +80,15 @@ total_loss =
 Defaults:
 
 ```text
-NEGATIVE_CE_WEIGHT=2.0
-FP_LOSS_WEIGHT=0.5
-RANK_LOSS_WEIGHT=0.2
+POSITIVE_CE_WEIGHT=2.0
+NEGATIVE_CE_WEIGHT=1.0
+NEUTRAL_CE_WEIGHT=0.5
+FP_LOSS_WEIGHT=1.0
+RANK_LOSS_WEIGHT=0.5
 RANK_MARGIN=0.2
 ```
 
-Positive and neutral CE weights remain `1.0`. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. The ranking term requires the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. Training logs print `loss`, `ce`, `negative_fp`, and `rank`. A negative sample requires an additional positive-answer forward pass, so training is slower and uses more GPU memory than plain CE.
+`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. The ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. Training logs print `loss`, `ce`, `negative_fp`, and `rank`. A negative sample requires an additional positive-answer forward pass, so training is slower and uses more GPU memory than plain CE.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 

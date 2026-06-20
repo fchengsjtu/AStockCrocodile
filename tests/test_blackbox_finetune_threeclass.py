@@ -184,9 +184,11 @@ class ThreeClassTests(unittest.TestCase):
 
     def test_asymmetric_loss_defaults_are_configurable(self):
         args = threeclass_train.build_parser().parse_args([])
-        self.assertEqual(args.negative_ce_weight, 2.0)
-        self.assertEqual(args.fp_loss_weight, 0.5)
-        self.assertEqual(args.rank_loss_weight, 0.2)
+        self.assertEqual(args.positive_ce_weight, 2.0)
+        self.assertEqual(args.negative_ce_weight, 1.0)
+        self.assertEqual(args.neutral_ce_weight, 0.5)
+        self.assertEqual(args.fp_loss_weight, 1.0)
+        self.assertEqual(args.rank_loss_weight, 0.5)
         self.assertEqual(args.rank_margin, 0.2)
 
     def test_threeclass_tokenization_preserves_class_label(self):
@@ -208,9 +210,12 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(item["class_label"], CLASS_NEGATIVE)
 
     def test_negative_auxiliary_losses_penalize_preferred_positive_answer(self):
-        import torch
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch is not installed in this environment")
 
-        threeclass_train._configure_asymmetric_loss(2.0, 0.5, 0.2, 0.2)
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.5, 0.2)
         low_fp, low_rank = threeclass_train._negative_auxiliary_losses(
             torch.tensor([0.0]),
             torch.tensor([2.0]),
@@ -222,6 +227,19 @@ class ThreeClassTests(unittest.TestCase):
         self.assertLess(float(low_fp), float(high_fp))
         self.assertEqual(float(low_rank), 0.0)
         self.assertGreater(float(high_rank), 2.0)
+
+    def test_negative_ranking_loss_uses_margin_plus_negative_minus_positive_nll(self):
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch is not installed in this environment")
+
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.5, 0.2)
+        _, rank = threeclass_train._negative_auxiliary_losses(
+            torch.tensor([0.4]),
+            torch.tensor([0.5]),
+        )
+        self.assertAlmostEqual(float(rank), 0.1, places=6)
 
     def test_probabilities_are_normalized_and_follow_loss(self):
         probabilities = probabilities_from_losses({CLASS_NEGATIVE: 2.0, CLASS_NEUTRAL: 1.0, CLASS_POSITIVE: 0.5})

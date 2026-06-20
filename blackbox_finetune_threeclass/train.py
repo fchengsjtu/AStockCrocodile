@@ -10,6 +10,7 @@ from typing import Iterable
 from blackbox_finetune_recall60 import train as base_train
 from blackbox_finetune_threeclass.common import (
     CLASS_NEGATIVE,
+    CLASS_NEUTRAL,
     CLASS_NAMES,
     CLASS_POSITIVE,
     DEFAULT_BASE_MODEL,
@@ -27,9 +28,11 @@ from blackbox_finetune_threeclass.metrics import (
     summarize_scored_rows,
 )
 
-_NEGATIVE_CE_WEIGHT = 2.0
-_FP_LOSS_WEIGHT = 0.5
-_RANK_LOSS_WEIGHT = 0.2
+_POSITIVE_CE_WEIGHT = 2.0
+_NEGATIVE_CE_WEIGHT = 1.0
+_NEUTRAL_CE_WEIGHT = 0.5
+_FP_LOSS_WEIGHT = 1.0
+_RANK_LOSS_WEIGHT = 0.5
 _RANK_MARGIN = 0.2
 
 
@@ -48,13 +51,18 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _configure_asymmetric_loss(
+    positive_ce_weight: float,
     negative_ce_weight: float,
+    neutral_ce_weight: float,
     fp_loss_weight: float,
     rank_loss_weight: float,
     rank_margin: float,
 ) -> None:
-    global _NEGATIVE_CE_WEIGHT, _FP_LOSS_WEIGHT, _RANK_LOSS_WEIGHT, _RANK_MARGIN
+    global _POSITIVE_CE_WEIGHT, _NEGATIVE_CE_WEIGHT, _NEUTRAL_CE_WEIGHT
+    global _FP_LOSS_WEIGHT, _RANK_LOSS_WEIGHT, _RANK_MARGIN
+    _POSITIVE_CE_WEIGHT = max(0.0, float(positive_ce_weight))
     _NEGATIVE_CE_WEIGHT = max(0.0, float(negative_ce_weight))
+    _NEUTRAL_CE_WEIGHT = max(0.0, float(neutral_ce_weight))
     _FP_LOSS_WEIGHT = max(0.0, float(fp_loss_weight))
     _RANK_LOSS_WEIGHT = max(0.0, float(rank_loss_weight))
     _RANK_MARGIN = max(0.0, float(rank_margin))
@@ -116,10 +124,21 @@ def _compute_asymmetric_training_loss(model, tokenizer, tensors: dict, batch: li
     class_labels = tensors.pop("class_labels")
     output = model(**tensors)
     correct_nll = _per_sample_answer_nll(output.logits, tensors["labels"])
+    class_weights = torch.ones_like(correct_nll)
+    class_weights = torch.where(
+        class_labels.eq(CLASS_POSITIVE),
+        torch.full_like(correct_nll, _POSITIVE_CE_WEIGHT),
+        class_weights,
+    )
     class_weights = torch.where(
         class_labels.eq(CLASS_NEGATIVE),
         torch.full_like(correct_nll, _NEGATIVE_CE_WEIGHT),
-        torch.ones_like(correct_nll),
+        class_weights,
+    )
+    class_weights = torch.where(
+        class_labels.eq(CLASS_NEUTRAL),
+        torch.full_like(correct_nll, _NEUTRAL_CE_WEIGHT),
+        class_weights,
     )
     weighted_ce = (correct_nll * class_weights).mean()
 
@@ -390,7 +409,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--initial-binary-adapter-dir",
-        "--initial-adapter-dir",
         dest="initial_binary_adapter_dir",
         type=Path,
         default=Path(os.environ["INITIAL_BINARY_ADAPTER_DIR"]) if os.environ.get("INITIAL_BINARY_ADAPTER_DIR") else None,
@@ -400,21 +418,33 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--positive-ce-weight",
+        type=float,
+        default=_env_float("POSITIVE_CE_WEIGHT", 2.0),
+        help="CE multiplier for true positive samples.",
+    )
+    parser.add_argument(
         "--negative-ce-weight",
         type=float,
-        default=_env_float("NEGATIVE_CE_WEIGHT", 2.0),
-        help="CE multiplier for true negative samples; positive and neutral remain 1.0.",
+        default=_env_float("NEGATIVE_CE_WEIGHT", 1.0),
+        help="CE multiplier for true negative samples.",
+    )
+    parser.add_argument(
+        "--neutral-ce-weight",
+        type=float,
+        default=_env_float("NEUTRAL_CE_WEIGHT", 0.5),
+        help="CE multiplier for true neutral samples.",
     )
     parser.add_argument(
         "--fp-loss-weight",
         type=float,
-        default=_env_float("FP_LOSS_WEIGHT", 0.5),
+        default=_env_float("FP_LOSS_WEIGHT", 1.0),
         help="Weight for penalizing a positive answer on true negative samples.",
     )
     parser.add_argument(
         "--rank-loss-weight",
         type=float,
-        default=_env_float("RANK_LOSS_WEIGHT", 0.2),
+        default=_env_float("RANK_LOSS_WEIGHT", 0.5),
         help="Weight for the negative-versus-positive margin ranking loss.",
     )
     parser.add_argument(
@@ -436,7 +466,9 @@ def main(argv: Iterable[str] | None = None) -> None:
         else None
     )
     _configure_asymmetric_loss(
+        args.positive_ce_weight,
         args.negative_ce_weight,
+        args.neutral_ce_weight,
         args.fp_loss_weight,
         args.rank_loss_weight,
         args.rank_margin,
@@ -452,7 +484,8 @@ def main(argv: Iterable[str] | None = None) -> None:
     print(
         "three-class asymmetric loss: "
         f"total=weighted_ce+{_FP_LOSS_WEIGHT}*negative_fp+{_RANK_LOSS_WEIGHT}*ranking "
-        f"negative_ce_weight={_NEGATIVE_CE_WEIGHT} positive_ce_weight=1.0 neutral_ce_weight=1.0 "
+        f"positive_ce_weight={_POSITIVE_CE_WEIGHT} negative_ce_weight={_NEGATIVE_CE_WEIGHT} "
+        f"neutral_ce_weight={_NEUTRAL_CE_WEIGHT} "
         f"rank_margin={_RANK_MARGIN}",
         flush=True,
     )
