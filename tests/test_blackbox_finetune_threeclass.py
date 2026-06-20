@@ -182,7 +182,8 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(kwargs["evaluation_threshold_position"], 0.2)
         self.assertEqual(kwargs["positive_loss_weight"], 1.0)
         self.assertEqual(kwargs["negative_loss_weight"], 1.0)
-        self.assertEqual(kwargs["high_score_positive_bonus"], 0.0)
+        self.assertEqual(kwargs["high_score_positive_bonus"], 1.0)
+        self.assertEqual(kwargs["high_score_positive_position"], 0.6)
         self.assertTrue(kwargs["fp_dynamic_penalty"])
         self.assertEqual(kwargs["fp_penalty_weight"], 0.0)
 
