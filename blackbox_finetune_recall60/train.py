@@ -82,6 +82,16 @@ def _load_extra_training_state(state: dict) -> None:
     return None
 
 
+def _build_train_order(train_items: list[dict], seed: int, rng) -> list[int]:
+    train_order = list(range(len(train_items)))
+    rng.shuffle(train_order)
+    return train_order
+
+
+def _reshuffle_train_order(train_order: list[int], train_items: list[dict], rng) -> None:
+    rng.shuffle(train_order)
+
+
 def _torch_state_to_device(value, device: str):
     if isinstance(value, dict):
         return {key: _torch_state_to_device(item, device) for key, item in value.items()}
@@ -789,7 +799,7 @@ def train_recall60_lora(
             flush=True,
         )
     if not restored_training_state:
-        rng.shuffle(train_order)
+        train_order = _build_train_order(train_items, train_seed, rng)
     print(
         f"manual RTX3060 LoRA train rows={len(train_items)} valid={len(valid_rows)} "
         f"checkpoint_eval_data_dir={checkpoint_eval_data_dir or data_dir} "
@@ -828,7 +838,7 @@ def train_recall60_lora(
         update = (micro_step + 1) // max(1, gradient_accumulation_steps)
         try:
             if micro_step > 0 and micro_step % len(train_order) == 0:
-                rng.shuffle(train_order)
+                _reshuffle_train_order(train_order, train_items, rng)
             raw_batch = [
                 train_items[train_order[(micro_step * batch_size + offset) % len(train_order)]]
                 for offset in range(batch_size)

@@ -270,9 +270,39 @@ def _stratified_split(rows: list[dict], train_ratio: float, seed: int) -> tuple[
         test_count = max(1, int(round(len(class_rows) * (1.0 - train_ratio)))) if len(class_rows) > 1 else 0
         test_rows.extend(class_rows[:test_count])
         train_rows.extend(class_rows[test_count:])
-    train_rows.sort(key=lambda row: stable_rank(seed, "train", row["metadata"]["scode"], row["metadata"]["anchor_date"]))
+    train_rows = interleave_class_rows(train_rows, seed, "train")
     test_rows.sort(key=lambda row: stable_rank(seed, "test", row["metadata"]["scode"], row["metadata"]["anchor_date"]))
     return train_rows, test_rows
+
+
+def interleave_class_rows(rows: list[dict], seed: int, tag: str) -> list[dict]:
+    grouped = {
+        label: [row for row in rows if int(row["metadata"]["label"]) == label]
+        for label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)
+    }
+    for label, class_rows in grouped.items():
+        class_rows.sort(
+            key=lambda row: stable_rank(
+                seed,
+                f"{tag}-{CLASS_NAMES[label]}",
+                row["metadata"]["scode"],
+                row["metadata"]["anchor_date"],
+            )
+        )
+    pattern = [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 10
+    positions = {label: 0 for label in grouped}
+    ordered: list[dict] = []
+    while any(positions[label] < len(grouped[label]) for label in grouped):
+        made_progress = False
+        for label in pattern:
+            position = positions[label]
+            if position < len(grouped[label]):
+                ordered.append(grouped[label][position])
+                positions[label] = position + 1
+                made_progress = True
+        if not made_progress:
+            break
+    return ordered
 
 
 def rebalance_materialized_samples(rows: list[dict], seed: int, positive_limit: int | None = None) -> list[dict]:
@@ -304,7 +334,7 @@ def rebalance_materialized_samples(rows: list[dict], seed: int, positive_limit: 
             key=lambda row: stable_rank(seed, "materialized", label, row["metadata"]["scode"], row["metadata"]["anchor_date"]),
         )
         selected.extend(ordered[:count])
-    return selected
+    return interleave_class_rows(selected, seed, "materialized")
 
 
 def build_threeclass_dataset(

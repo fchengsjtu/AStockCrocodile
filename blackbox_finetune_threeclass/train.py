@@ -363,6 +363,53 @@ def _collate_threeclass(tokenizer, batch: list[dict], device: str) -> dict:
     return tensors
 
 
+def _item_class_label(item: dict) -> int | None:
+    if "class_label" in item:
+        return int(item["class_label"])
+    metadata = item.get("metadata") or {}
+    if "label" in metadata:
+        return int(metadata["label"])
+    return None
+
+
+def _build_balanced_train_order(train_items: list[dict], seed: int, rng) -> list[int]:
+    grouped = {label: [] for label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)}
+    fallback: list[int] = []
+    for index, item in enumerate(train_items):
+        label = _item_class_label(item)
+        if label in grouped:
+            grouped[label].append(index)
+        else:
+            fallback.append(index)
+    if not all(grouped[label] for label in grouped):
+        train_order = list(range(len(train_items)))
+        rng.shuffle(train_order)
+        return train_order
+    for indices in grouped.values():
+        rng.shuffle(indices)
+    pattern = [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 10
+    positions = {label: 0 for label in grouped}
+    train_order: list[int] = []
+    while any(positions[label] < len(grouped[label]) for label in grouped):
+        made_progress = False
+        for label in pattern:
+            position = positions[label]
+            if position < len(grouped[label]):
+                train_order.append(grouped[label][position])
+                positions[label] = position + 1
+                made_progress = True
+        if not made_progress:
+            break
+    if fallback:
+        rng.shuffle(fallback)
+        train_order.extend(fallback)
+    return train_order
+
+
+def _reshuffle_balanced_train_order(train_order: list[int], train_items: list[dict], rng) -> None:
+    train_order[:] = _build_balanced_train_order(train_items, 0, rng)
+
+
 _ORIGINAL_TOKENIZE_ROW = base_train._tokenize_row
 _ORIGINAL_COLLATE = base_train._collate
 
@@ -558,6 +605,8 @@ def _patch_base_trainer(initial_binary_adapter_dir: Path | None = None) -> None:
     base_train._compute_training_loss = _compute_asymmetric_training_loss
     base_train._extra_training_state = _extra_training_state
     base_train._load_extra_training_state = _load_extra_training_state
+    base_train._build_train_order = _build_balanced_train_order
+    base_train._reshuffle_train_order = _reshuffle_balanced_train_order
     base_train.TOKEN_CACHE_VERSION = f"{base_train.TOKEN_CACHE_VERSION}_threeclass_asymmetric_v1"
     if initial_binary_adapter_dir is None:
         return

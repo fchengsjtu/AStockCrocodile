@@ -10,6 +10,7 @@ from blackbox_finetune_threeclass.build_dataset import (
     _candidate_sql,
     _load_candidate_rows,
     classify_future_path,
+    interleave_class_rows,
     rebalance_materialized_samples,
 )
 from blackbox_finetune_threeclass.common import (
@@ -138,6 +139,29 @@ class ThreeClassTests(unittest.TestCase):
         selected = rebalance_materialized_samples(rows, seed=7)
         counts = {label: sum(int(row["metadata"]["label"]) == label for row in selected) for label in range(3)}
         self.assertEqual(counts, {CLASS_NEGATIVE: 16, CLASS_NEUTRAL: 40, CLASS_POSITIVE: 4})
+
+    def test_interleave_class_rows_uses_one_four_ten_pattern(self):
+        rows = (
+            [sample(CLASS_POSITIVE, index) for index in range(2)]
+            + [sample(CLASS_NEGATIVE, index + 100) for index in range(8)]
+            + [sample(CLASS_NEUTRAL, index + 200) for index in range(20)]
+        )
+        ordered = interleave_class_rows(rows, 11, "test")
+        labels = [int(row["metadata"]["label"]) for row in ordered[:15]]
+        self.assertEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 10)
+
+    def test_balanced_train_order_uses_class_labels_or_metadata(self):
+        import random
+
+        rows = (
+            [sample(CLASS_POSITIVE, index) for index in range(2)]
+            + [sample(CLASS_NEGATIVE, index + 100) for index in range(8)]
+            + [sample(CLASS_NEUTRAL, index + 200) for index in range(20)]
+        )
+        rows[0]["class_label"] = rows[0]["metadata"].pop("label")
+        order = threeclass_train._build_balanced_train_order(rows, 11, random.Random(11))
+        labels = [threeclass_train._item_class_label(rows[index]) for index in order[:15]]
+        self.assertEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 10)
 
     def test_training_defaults_use_requested_ratio_eval_size_and_learning_rate(self):
         args = threeclass_train.build_parser().parse_args([])
