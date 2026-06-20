@@ -183,7 +183,7 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(kwargs["positive_loss_weight"], 1.0)
         self.assertEqual(kwargs["negative_loss_weight"], 1.0)
         self.assertEqual(kwargs["high_score_positive_bonus"], 0.0)
-        self.assertFalse(kwargs["fp_dynamic_penalty"])
+        self.assertTrue(kwargs["fp_dynamic_penalty"])
         self.assertEqual(kwargs["fp_penalty_weight"], 0.0)
 
     def test_high_score_ema_can_be_disabled_by_argument(self):
@@ -241,6 +241,7 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.high_score_cutoff_position, 0.6)
         self.assertEqual(args.high_score_positive_bonus, 1.0)
         self.assertEqual(args.high_score_negative_penalty_weight, 1.0)
+        self.assertTrue(args.fp_dynamic_penalty)
 
     def test_threeclass_tokenization_preserves_class_label(self):
         class FakeTokenizer:
@@ -453,6 +454,7 @@ class ThreeClassTests(unittest.TestCase):
                 progress=0.1,
                 trained_epochs=0.03,
                 threshold=0.0,
+                threshold_position=0.2,
                 max_samples=0,
                 max_seq_length=3072,
                 precision_top_k=10,
@@ -469,6 +471,8 @@ class ThreeClassTests(unittest.TestCase):
             self.assertAlmostEqual(selection_top[0]["selection_score"], 0.75)
             self.assertAlmostEqual(result["average_selection_score"], 0.325)
             self.assertAlmostEqual(result["max_selection_score"], 0.75)
+            self.assertAlmostEqual(result["average_positive_probability"], 0.325)
+            self.assertAlmostEqual(result["max_positive_probability"], 0.75)
             self.assertAlmostEqual(result["threshold_position"], 0.8)
             self.assertAlmostEqual(result["next_threshold"], 0.665)
             self.assertTrue(list(Path(directory).glob("eval-update-000100-*.json")))

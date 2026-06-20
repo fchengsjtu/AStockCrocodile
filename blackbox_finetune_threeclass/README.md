@@ -92,6 +92,7 @@ HIGH_SCORE_EMA_ALPHA=0.02
 HIGH_SCORE_CUTOFF_POSITION=0.6
 HIGH_SCORE_POSITIVE_BONUS=1.0
 HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=1.0
+FP_DYNAMIC_PENALTY=1
 ```
 
 `POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. The ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. Training logs print `loss`, `ce`, `negative_fp`, and `rank`. A negative sample requires an additional positive-answer forward pass, so training is slower and uses more GPU memory than plain CE.

@@ -330,10 +330,12 @@ def _evaluate_training_checkpoint(
     progress: float,
     trained_epochs: float,
     threshold: float,
-    max_samples: int,
-    max_seq_length: int,
-    precision_top_k: int,
-    precision_threshold: float,
+    threshold_position: float | None = None,
+    max_samples: int = 0,
+    max_seq_length: int = DEFAULT_MAX_SEQ_LENGTH,
+    precision_top_k: int = 10,
+    precision_threshold: float = 0.4,
+    **_ignored_kwargs,
 ) -> dict:
     eval_rows, sample_method, sample_seed = base_train._sample_eval_rows(rows, max_samples, update)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -418,6 +420,8 @@ def _evaluate_training_checkpoint(
         "neutral_weight": neutral_weight,
         "average_selection_score": average_selection_score,
         "max_selection_score": max_selection_score,
+        "average_positive_probability": average_selection_score,
+        "max_positive_probability": max_selection_score,
         "eval_threshold_top_ratio": threshold_top_ratio,
         "threshold_position": threshold_position,
         "next_threshold": next_threshold,
@@ -512,6 +516,7 @@ def build_parser() -> argparse.ArgumentParser:
         learning_rate=_env_float("LEARNING_RATE", 5e-6),
         eval_max_samples=_env_int("EVAL_MAX_SAMPLES", 1500),
         high_score_positive_bonus=_env_float("HIGH_SCORE_POSITIVE_BONUS", 1.0),
+        fp_dynamic_penalty=_env_bool("FP_DYNAMIC_PENALTY", True),
     )
     parser.add_argument(
         "--initial-binary-adapter-dir",
@@ -665,7 +670,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         negative_loss_weight=1.0,
         high_score_positive_bonus=0.0,
         high_score_positive_position=args.high_score_positive_position,
-        fp_dynamic_penalty=False,
+        fp_dynamic_penalty=args.fp_dynamic_penalty,
         fp_penalty_weight=0.0,
         fp_threshold_ema_alpha=args.fp_threshold_ema_alpha,
         fp_threshold_min=args.fp_threshold_min,
