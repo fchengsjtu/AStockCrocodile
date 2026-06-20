@@ -75,6 +75,7 @@ The training objective uses an asymmetric three-class loss:
 total_loss =
     weighted_CE
     + FP_LOSS_WEIGHT * negative_fp_loss
+    + NEUTRAL_FP_LOSS_WEIGHT * neutral_fp_loss
     + RANK_LOSS_WEIGHT * negative_positive_ranking_loss
     + POSITIVE_HIGH_SCORE_LOSS_WEIGHT * positive_high_score_loss
 ```
@@ -86,6 +87,7 @@ POSITIVE_CE_WEIGHT=2.0
 NEGATIVE_CE_WEIGHT=1.0
 NEUTRAL_CE_WEIGHT=0.5
 FP_LOSS_WEIGHT=1.0
+NEUTRAL_FP_LOSS_WEIGHT=0.3
 RANK_LOSS_WEIGHT=0.5
 RANK_MARGIN=0.2
 POSITIVE_HIGH_SCORE_LOSS_WEIGHT=1.0
@@ -98,7 +100,7 @@ HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=1.0
 FP_DYNAMIC_PENALTY=1
 ```
 
-`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. The ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. `positive_high_score_loss` is `relu(ema_cutoff + POSITIVE_HIGH_SCORE_MARGIN - positive_answer_score)` for true positive samples, explicitly pushing positives into the high-score region. Training logs print `loss`, `ce`, `negative_fp`, `rank`, and `positive_high_score`. A negative sample requires an additional positive-answer forward pass, so training is slower and uses more GPU memory than plain CE.
+`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. For a true neutral sample, `neutral_fp_loss` compares `{"c":"positive"}` with `{"c":"neutral"}` and applies a lower-weight penalty when neutral rows look positive. The ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. `positive_high_score_loss` is `relu(ema_cutoff + POSITIVE_HIGH_SCORE_MARGIN - positive_answer_score)` for true positive samples, explicitly pushing positives into the high-score region. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `rank`, and `positive_high_score`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
 
 When `HIGH_SCORE_EMA=1`, training also keeps an in-batch EMA cutoff for high positive-answer-score samples. To keep training stable on 12GB GPUs, this uses the already-needed positive answer NLL instead of re-scoring all three classes for every row:
 

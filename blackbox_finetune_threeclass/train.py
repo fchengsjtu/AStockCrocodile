@@ -32,6 +32,7 @@ _POSITIVE_CE_WEIGHT = 2.0
 _NEGATIVE_CE_WEIGHT = 1.0
 _NEUTRAL_CE_WEIGHT = 0.5
 _FP_LOSS_WEIGHT = 1.0
+_NEUTRAL_FP_LOSS_WEIGHT = 0.3
 _RANK_LOSS_WEIGHT = 0.5
 _RANK_MARGIN = 0.2
 _POSITIVE_HIGH_SCORE_LOSS_WEIGHT = 1.0
@@ -70,6 +71,7 @@ def _configure_asymmetric_loss(
     negative_ce_weight: float,
     neutral_ce_weight: float,
     fp_loss_weight: float,
+    neutral_fp_loss_weight: float,
     rank_loss_weight: float,
     rank_margin: float,
     positive_high_score_loss_weight: float,
@@ -81,7 +83,7 @@ def _configure_asymmetric_loss(
     high_score_negative_penalty_weight: float,
 ) -> None:
     global _POSITIVE_CE_WEIGHT, _NEGATIVE_CE_WEIGHT, _NEUTRAL_CE_WEIGHT
-    global _FP_LOSS_WEIGHT, _RANK_LOSS_WEIGHT, _RANK_MARGIN
+    global _FP_LOSS_WEIGHT, _NEUTRAL_FP_LOSS_WEIGHT, _RANK_LOSS_WEIGHT, _RANK_MARGIN
     global _POSITIVE_HIGH_SCORE_LOSS_WEIGHT, _POSITIVE_HIGH_SCORE_MARGIN
     global _HIGH_SCORE_EMA_ENABLED, _HIGH_SCORE_EMA_ALPHA, _HIGH_SCORE_CUTOFF_POSITION
     global _HIGH_SCORE_POSITIVE_BONUS, _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT, _HIGH_SCORE_CUTOFF
@@ -89,6 +91,7 @@ def _configure_asymmetric_loss(
     _NEGATIVE_CE_WEIGHT = max(0.0, float(negative_ce_weight))
     _NEUTRAL_CE_WEIGHT = max(0.0, float(neutral_ce_weight))
     _FP_LOSS_WEIGHT = max(0.0, float(fp_loss_weight))
+    _NEUTRAL_FP_LOSS_WEIGHT = max(0.0, float(neutral_fp_loss_weight))
     _RANK_LOSS_WEIGHT = max(0.0, float(rank_loss_weight))
     _RANK_MARGIN = max(0.0, float(rank_margin))
     _POSITIVE_HIGH_SCORE_LOSS_WEIGHT = max(0.0, float(positive_high_score_loss_weight))
@@ -138,6 +141,17 @@ def _negative_auxiliary_losses(negative_nll, positive_nll):
     # A positive delta therefore means the positive answer is preferred.
     score_delta = negative_nll.float() - positive_nll.float()
     return functional.softplus(score_delta).mean(), functional.relu(_RANK_MARGIN + score_delta).mean()
+
+
+def _neutral_false_positive_loss(neutral_nll, positive_nll):
+    import torch.nn.functional as functional
+
+    # Penalize neutral samples when the complete positive answer is preferred
+    # over the complete neutral answer. This is intentionally separate from
+    # negative_fp because neutral contamination is less severe than true
+    # downside samples entering the selected top-N pool.
+    score_delta = neutral_nll.float() - positive_nll.float()
+    return functional.softplus(score_delta).mean()
 
 
 def _answer_tensors_for_indices(
@@ -245,6 +259,24 @@ def _compute_asymmetric_training_loss(
         positive_nll = None
         negative_fp_loss = correct_nll.new_zeros(())
         ranking_loss = correct_nll.new_zeros(())
+    neutral_indices = class_labels.eq(CLASS_NEUTRAL).nonzero(as_tuple=False).flatten().tolist()
+    if neutral_indices and _NEUTRAL_FP_LOSS_WEIGHT > 0:
+        neutral_positive_tensors = _answer_tensors_for_indices(
+            tokenizer,
+            tensors,
+            neutral_indices,
+            CLASS_POSITIVE,
+            effective_max_seq_length,
+        )
+        neutral_positive_output = model(**neutral_positive_tensors)
+        neutral_positive_nll = _per_sample_answer_nll(
+            neutral_positive_output.logits,
+            neutral_positive_tensors["labels"],
+        )
+        neutral_nll = correct_nll[neutral_indices]
+        neutral_fp_loss = _neutral_false_positive_loss(neutral_nll, neutral_positive_nll)
+    else:
+        neutral_fp_loss = correct_nll.new_zeros(())
 
     high_score_raw_cutoff = None
     high_score_cutoff = None
@@ -293,6 +325,7 @@ def _compute_asymmetric_training_loss(
     total_loss = (
         weighted_ce
         + _FP_LOSS_WEIGHT * negative_fp_loss
+        + _NEUTRAL_FP_LOSS_WEIGHT * neutral_fp_loss
         + _RANK_LOSS_WEIGHT * ranking_loss
         + _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT * high_score_negative_penalty
         + _POSITIVE_HIGH_SCORE_LOSS_WEIGHT * positive_high_score_loss
@@ -300,6 +333,7 @@ def _compute_asymmetric_training_loss(
     metrics = {
         "ce": float(weighted_ce.detach().cpu()),
         "negative_fp": float(negative_fp_loss.detach().cpu()),
+        "neutral_fp": float(neutral_fp_loss.detach().cpu()),
         "rank": float(ranking_loss.detach().cpu()),
         "positive_high_score": float(positive_high_score_loss.detach().cpu()),
         "high_score_negative": float(high_score_negative_penalty.detach().cpu()),
@@ -584,6 +618,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Weight for penalizing a positive answer on true negative samples.",
     )
     parser.add_argument(
+        "--neutral-fp-loss-weight",
+        type=float,
+        default=_env_float("NEUTRAL_FP_LOSS_WEIGHT", 0.3),
+        help="Weight for penalizing a positive answer on true neutral samples.",
+    )
+    parser.add_argument(
         "--rank-loss-weight",
         type=float,
         default=_env_float("RANK_LOSS_WEIGHT", 0.5),
@@ -648,6 +688,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.negative_ce_weight,
         args.neutral_ce_weight,
         args.fp_loss_weight,
+        args.neutral_fp_loss_weight,
         args.rank_loss_weight,
         args.rank_margin,
         args.positive_high_score_loss_weight,
@@ -668,7 +709,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         )
     print(
         "three-class asymmetric loss: "
-        f"total=weighted_ce+{_FP_LOSS_WEIGHT}*negative_fp+{_RANK_LOSS_WEIGHT}*ranking "
+        f"total=weighted_ce+{_FP_LOSS_WEIGHT}*negative_fp+{_NEUTRAL_FP_LOSS_WEIGHT}*neutral_fp "
+        f"+{_RANK_LOSS_WEIGHT}*ranking "
         f"+{_HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT}*high_score_negative "
         f"+{_POSITIVE_HIGH_SCORE_LOSS_WEIGHT}*positive_high_score "
         f"positive_ce_weight={_POSITIVE_CE_WEIGHT} negative_ce_weight={_NEGATIVE_CE_WEIGHT} "
