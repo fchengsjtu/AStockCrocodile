@@ -87,9 +87,30 @@ NEUTRAL_CE_WEIGHT=0.5
 FP_LOSS_WEIGHT=1.0
 RANK_LOSS_WEIGHT=0.5
 RANK_MARGIN=0.2
+HIGH_SCORE_EMA=1
+HIGH_SCORE_EMA_ALPHA=0.02
+HIGH_SCORE_CUTOFF_POSITION=0.8
+HIGH_SCORE_POSITIVE_BONUS=1.0
+HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=1.0
 ```
 
 `POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. The ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. Training logs print `loss`, `ce`, `negative_fp`, and `rank`. A negative sample requires an additional positive-answer forward pass, so training is slower and uses more GPU memory than plain CE.
+
+When `HIGH_SCORE_EMA=1`, training also keeps an in-batch EMA cutoff for high SelectionScore samples. For each training batch it computes three-class answer probabilities, then:
+
+```text
+selection_score = positive_probability
+    - NEGATIVE_WEIGHT * negative_probability
+    - NEUTRAL_WEIGHT * neutral_probability
+
+raw_cutoff = batch_avg_score
+    + HIGH_SCORE_CUTOFF_POSITION * (batch_max_score - batch_avg_score)
+
+ema_cutoff = HIGH_SCORE_EMA_ALPHA * raw_cutoff
+    + (1 - HIGH_SCORE_EMA_ALPHA) * previous_ema_cutoff
+```
+
+True positive samples above `ema_cutoff` receive an extra CE multiplier of `1 + HIGH_SCORE_POSITIVE_BONUS`. True negative samples above `ema_cutoff` receive an additional linear penalty weighted by `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`. Use a small `HIGH_SCORE_EMA_ALPHA` such as `0.02` to keep the cutoff from chasing noisy mini-batches.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 
