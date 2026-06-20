@@ -492,6 +492,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     base_train.train_recall60_lora(
         base_model=args.base_model,
         data_dir=args.data_dir,
+        checkpoint_eval_data_dir=args.checkpoint_eval_data_dir,
         output_dir=args.output_dir,
         max_seq_length=max(64, args.max_seq_length),
         epochs=args.epochs,

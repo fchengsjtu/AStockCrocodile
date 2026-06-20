@@ -21,6 +21,7 @@ from blackbox_finetune_threeclass.common import (
     parse_date,
 )
 from blackbox_finetune_threeclass.build_dataset import build_parser as build_dataset_parser
+from blackbox_finetune_threeclass.build_validation_dataset import main as build_validation_main
 from blackbox_finetune_threeclass.inference import probabilities_from_losses, selection_score
 from blackbox_finetune_threeclass.predict_day import (
     build_parser as build_predict_parser,
@@ -143,6 +144,21 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.data_dir, Path("blackbox_finetune_threeclass/data_xlong_p1_n4_u10"))
         self.assertEqual(args.eval_max_samples, 1500)
         self.assertEqual(args.learning_rate, 5e-6)
+
+    def test_training_dataset_builder_defaults_to_all_rows_as_train(self):
+        args = build_dataset_parser().parse_args([])
+        self.assertEqual(args.output_split, "train")
+
+    def test_validation_dataset_builder_writes_all_rows_as_test(self):
+        with patch("blackbox_finetune_threeclass.build_validation_dataset.build_threeclass_dataset") as builder:
+            build_validation_main(["--output-dir", "validation-dir"])
+        self.assertEqual(builder.call_args.kwargs["output_split"], "test")
+
+    def test_threeclass_train_accepts_checkpoint_eval_data_dir(self):
+        args = threeclass_train.build_parser().parse_args(
+            ["--checkpoint-eval-data-dir", "validation-dir"]
+        )
+        self.assertEqual(args.checkpoint_eval_data_dir, Path("validation-dir"))
 
     def test_three_class_answers_are_compact(self):
         self.assertEqual(label_answer(CLASS_POSITIVE), '{"c":"positive"}')

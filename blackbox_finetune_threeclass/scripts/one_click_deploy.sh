@@ -53,7 +53,7 @@ echo "  CLASS_RATIO=positive:negative:neutral=1:4:10"
 echo "  LABEL_RULE=first trigger in next 3 trading days: +20% / -6% / neither"
 echo "==========================================="
 
-if env_flag "$REBUILD_DATASET" || [[ ! -f "$DATA_DIR/train.jsonl" || ! -f "$DATA_DIR/test.jsonl" ]]; then
+if env_flag "$REBUILD_DATASET" || [[ ! -f "$DATA_DIR/train.jsonl" || -s "$DATA_DIR/test.jsonl" ]]; then
   # shellcheck disable=SC2086
   python -m blackbox_finetune_threeclass.build_dataset \
     --output-dir "$DATA_DIR" \
@@ -68,7 +68,7 @@ else
   echo "Using cached training dataset: $DATA_DIR"
 fi
 
-if env_flag "$REBUILD_DATASET" || [[ ! -f "$VALIDATION_DATA_DIR/test.jsonl" ]]; then
+if env_flag "$REBUILD_DATASET" || [[ ! -f "$VALIDATION_DATA_DIR/test.jsonl" || ! -s "$VALIDATION_DATA_DIR/test.jsonl" || -s "$VALIDATION_DATA_DIR/train.jsonl" ]]; then
   # shellcheck disable=SC2086
   python -m blackbox_finetune_threeclass.build_validation_dataset \
     --output-dir "$VALIDATION_DATA_DIR" \
@@ -89,6 +89,7 @@ fi
 TRAIN_ARGS=(
   --base-model "$BASE_MODEL"
   --data-dir "$DATA_DIR"
+  --checkpoint-eval-data-dir "$VALIDATION_DATA_DIR"
   --output-dir "$OUTPUT_DIR"
   --max-seq-length "$MAX_SEQ_LENGTH"
   --epochs "$TRAIN_EPOCHS"

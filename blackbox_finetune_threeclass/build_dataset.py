@@ -321,6 +321,7 @@ def build_threeclass_dataset(
     sample_mode: str,
     candidate_batch_size: int,
     mysql_query_retries: int,
+    output_split: str = "split",
 ) -> tuple[int, int]:
     with mysql_connect() as conn:
         grouped: dict[int, list[SampleEvent]] = {
@@ -387,7 +388,14 @@ def build_threeclass_dataset(
         )
         materialized = positive_rows + negative_rows + neutral_rows
     samples = rebalance_materialized_samples(materialized, seed, positive_limit)
-    train_rows, test_rows = _stratified_split(samples, train_ratio, seed)
+    if output_split == "train":
+        train_rows = list(samples)
+        test_rows: list[dict] = []
+    elif output_split == "test":
+        train_rows = []
+        test_rows = list(samples)
+    else:
+        train_rows, test_rows = _stratified_split(samples, train_ratio, seed)
     output_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(output_dir / "train.jsonl", train_rows)
     write_jsonl(output_dir / "test.jsonl", test_rows)
@@ -398,7 +406,7 @@ def build_threeclass_dataset(
     }
     print(
         f"dataset written dir={output_dir} train={len(train_rows)} test={len(test_rows)} "
-        f"all={len(samples)} classes={counts}",
+        f"all={len(samples)} split={output_split} classes={counts}",
         flush=True,
     )
     return len(train_rows), len(test_rows)
@@ -411,6 +419,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-date", default=os.environ.get("TRAIN_END_DATE", DEFAULT_TRAIN_END_DATE))
     parser.add_argument("--positive-limit", type=int)
     parser.add_argument("--train-ratio", type=float, default=0.8)
+    parser.add_argument("--output-split", choices=["split", "train", "test"], default="train")
     parser.add_argument("--seed", type=int, default=int(os.environ.get("TRAIN_SEED", str(DEFAULT_TRAIN_SEED))))
     parser.add_argument("--sample-mode", choices=["short", "long", "xlong", "xxlong"], default=os.environ.get("SAMPLE_MODE", DEFAULT_SAMPLE_MODE))
     parser.add_argument("--daily-window", type=int)
@@ -448,6 +457,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         sample_mode=args.sample_mode,
         candidate_batch_size=max(1, args.candidate_batch_size),
         mysql_query_retries=max(1, args.mysql_query_retries),
+        output_split=args.output_split,
     )
 
 

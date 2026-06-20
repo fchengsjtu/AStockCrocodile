@@ -49,6 +49,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         sample_mode=args.sample_mode,
         candidate_batch_size=max(1, args.candidate_batch_size),
         mysql_query_retries=max(1, args.mysql_query_retries),
+        output_split="test",
     )
 
 

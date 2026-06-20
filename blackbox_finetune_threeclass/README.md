@@ -17,7 +17,7 @@ Positive anchors for the same stock use the same 20-trading-day cooldown as reca
 positive : negative : neutral = 1 : 4 : 10
 ```
 
-Training and test files are stratified, so both retain approximately the same class ratio.
+All samples from `TRAIN_START_DATE` to `TRAIN_END_DATE` are written to the training dataset `train.jsonl`. All samples from `VALIDATION_START_DATE` to `VALIDATION_END_DATE` are written to the validation dataset `test.jsonl`, which is used for checkpoint and final evaluation.
 
 ## Environment and one-click workflow
 
@@ -35,7 +35,7 @@ bash blackbox_finetune_threeclass/scripts/one_click_deploy.sh dataset-only
 bash blackbox_finetune_threeclass/scripts/one_click_deploy.sh diagnose
 ```
 
-Set `REBUILD_DATASET=1` to rebuild data. Otherwise existing `train.jsonl` and `test.jsonl` files are reused.
+Set `REBUILD_DATASET=1` to rebuild data. Otherwise the existing training `train.jsonl` and validation `test.jsonl` files are reused.
 
 Candidate classification is queried from MySQL in symbol batches to avoid one full-market window query timing out. `CANDIDATE_BATCH_SIZE` defaults to `80`; lower it to `40` or `20` on a slow MySQL host. `MYSQL_QUERY_RETRIES` defaults to `3` and reconnects the current batch after MySQL errors 2006/2013/2055.
 
@@ -61,6 +61,7 @@ Train:
 python -m blackbox_finetune_threeclass.train \
   --base-model Qwen/Qwen2.5-0.5B-Instruct \
   --data-dir blackbox_finetune_threeclass/data_xlong_p1_n4_u10 \
+  --checkpoint-eval-data-dir blackbox_finetune_threeclass/data_evaluation_xlong_p1_n4_u10 \
   --output-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-p1_n4_u10-lora \
   --max-seq-length 3072 --epochs 0.3 \
   --gradient-accumulation-steps 16 --learning-rate 5e-6 \
