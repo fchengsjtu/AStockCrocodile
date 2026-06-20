@@ -160,6 +160,32 @@ class ThreeClassTests(unittest.TestCase):
         )
         self.assertEqual(args.checkpoint_eval_data_dir, Path("validation-dir"))
 
+    def test_threeclass_main_passes_recall60_required_training_args(self):
+        with patch.object(threeclass_train, "prepare_rtx3060"), patch.object(
+            threeclass_train.base_train,
+            "train_recall60_lora",
+        ) as train_lora:
+            threeclass_train.main(
+                [
+                    "--data-dir",
+                    "train-dir",
+                    "--checkpoint-eval-data-dir",
+                    "validation-dir",
+                    "--output-dir",
+                    "out-dir",
+                    "--no-auto-resume",
+                ]
+            )
+        kwargs = train_lora.call_args.kwargs
+        self.assertEqual(kwargs["checkpoint_eval_data_dir"], Path("validation-dir"))
+        self.assertIsNone(kwargs["initial_adapter_dir"])
+        self.assertEqual(kwargs["evaluation_threshold_position"], 0.2)
+        self.assertEqual(kwargs["positive_loss_weight"], 1.0)
+        self.assertEqual(kwargs["negative_loss_weight"], 1.0)
+        self.assertEqual(kwargs["high_score_positive_bonus"], 0.0)
+        self.assertFalse(kwargs["fp_dynamic_penalty"])
+        self.assertEqual(kwargs["fp_penalty_weight"], 0.0)
+
     def test_three_class_answers_are_compact(self):
         self.assertEqual(label_answer(CLASS_POSITIVE), '{"c":"positive"}')
         self.assertEqual(label_answer(CLASS_NEGATIVE), '{"c":"negative"}')
