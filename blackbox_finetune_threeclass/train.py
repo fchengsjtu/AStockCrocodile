@@ -170,51 +170,6 @@ def _update_high_score_cutoff(scores) -> tuple[float, float]:
     return raw_value, float(_HIGH_SCORE_CUTOFF)
 
 
-def _class_probabilities_from_nll(nll_by_label: dict[int, object]):
-    import torch
-
-    labels = sorted(nll_by_label)
-    losses = torch.stack([nll_by_label[label].float() for label in labels], dim=1)
-    probabilities = torch.softmax(-losses, dim=1)
-    return {label: probabilities[:, index] for index, label in enumerate(labels)}
-
-
-def _selection_scores_from_probabilities(probabilities: dict[int, object]):
-    negative_weight = max(0.0, _env_float("NEGATIVE_WEIGHT", 0.5))
-    neutral_weight = max(0.0, _env_float("NEUTRAL_WEIGHT", 0.0))
-    return (
-        probabilities[CLASS_POSITIVE]
-        - negative_weight * probabilities[CLASS_NEGATIVE]
-        - neutral_weight * probabilities[CLASS_NEUTRAL]
-    )
-
-
-def _score_monitored_rows(model, tokenizer, tensors: dict, correct_nll, indices: list[int], max_seq_length: int):
-    if not indices:
-        return None, None
-    nll_by_label: dict[int, object] = {}
-    class_labels = tensors["class_labels"]
-    for label in (CLASS_NEGATIVE, CLASS_NEUTRAL, CLASS_POSITIVE):
-        label_mask = class_labels[indices].eq(label)
-        nll_values = correct_nll[indices].clone()
-        missing_positions = label_mask.logical_not().nonzero(as_tuple=False).flatten().tolist()
-        if missing_positions:
-            missing_indices = [indices[position] for position in missing_positions]
-            answer_tensors = _answer_tensors_for_indices(
-                tokenizer,
-                tensors,
-                missing_indices,
-                label,
-                max_seq_length,
-            )
-            answer_output = model(**answer_tensors)
-            answer_nll = _per_sample_answer_nll(answer_output.logits, answer_tensors["labels"])
-            nll_values[missing_positions] = answer_nll
-        nll_by_label[label] = nll_values
-    probabilities = _class_probabilities_from_nll(nll_by_label)
-    return _selection_scores_from_probabilities(probabilities), probabilities
-
-
 def _compute_asymmetric_training_loss(
     model,
     tokenizer,
@@ -247,45 +202,6 @@ def _compute_asymmetric_training_loss(
         torch.full_like(correct_nll, _NEUTRAL_CE_WEIGHT),
         class_weights,
     )
-    tensors["class_labels"] = class_labels
-
-    monitored_indices = (
-        class_labels.eq(CLASS_POSITIVE).logical_or(class_labels.eq(CLASS_NEGATIVE))
-    ).nonzero(as_tuple=False).flatten().tolist()
-    high_score_raw_cutoff = None
-    high_score_cutoff = None
-    high_score_positive_hits = 0
-    high_score_negative_penalty = correct_nll.new_zeros(())
-    if _HIGH_SCORE_EMA_ENABLED and monitored_indices:
-        selection_scores, _ = _score_monitored_rows(
-            model,
-            tokenizer,
-            tensors,
-            correct_nll,
-            monitored_indices,
-            effective_max_seq_length,
-        )
-        high_score_raw_cutoff, high_score_cutoff = _update_high_score_cutoff(selection_scores)
-        cutoff_tensor = selection_scores.new_tensor(high_score_cutoff)
-        monitored_labels = class_labels[monitored_indices]
-        positive_mask = monitored_labels.eq(CLASS_POSITIVE)
-        negative_mask = monitored_labels.eq(CLASS_NEGATIVE)
-        high_score_mask = selection_scores.detach().ge(cutoff_tensor)
-        positive_hits_mask = positive_mask.logical_and(high_score_mask)
-        high_score_positive_hits = int(positive_hits_mask.sum().detach().cpu())
-        if high_score_positive_hits and _HIGH_SCORE_POSITIVE_BONUS > 0:
-            positive_indices = [
-                monitored_indices[position]
-                for position in positive_hits_mask.nonzero(as_tuple=False).flatten().tolist()
-            ]
-            class_weights[positive_indices] = class_weights[positive_indices] * (1.0 + _HIGH_SCORE_POSITIVE_BONUS)
-        if _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT > 0 and bool(negative_mask.any()):
-            negative_scores = selection_scores[negative_mask]
-            high_score_negative_penalty = functional.relu(negative_scores - cutoff_tensor).mean()
-
-    weighted_ce = (correct_nll * class_weights).mean()
-    tensors.pop("class_labels")
-
     negative_indices = class_labels.eq(CLASS_NEGATIVE).nonzero(as_tuple=False).flatten().tolist()
     if negative_indices:
         positive_tensors = _positive_answer_tensors(
@@ -305,8 +221,47 @@ def _compute_asymmetric_training_loss(
             positive_nll,
         )
     else:
-        negative_fp_loss = weighted_ce.new_zeros(())
-        ranking_loss = weighted_ce.new_zeros(())
+        positive_nll = None
+        negative_fp_loss = correct_nll.new_zeros(())
+        ranking_loss = correct_nll.new_zeros(())
+
+    high_score_raw_cutoff = None
+    high_score_cutoff = None
+    high_score_positive_hits = 0
+    high_score_negative_penalty = correct_nll.new_zeros(())
+    positive_indices = class_labels.eq(CLASS_POSITIVE).nonzero(as_tuple=False).flatten().tolist()
+    high_score_parts = []
+    high_score_labels = []
+    high_score_indices: list[int] = []
+    if positive_indices:
+        high_score_parts.append(-correct_nll[positive_indices])
+        high_score_labels.extend([CLASS_POSITIVE] * len(positive_indices))
+        high_score_indices.extend(positive_indices)
+    if negative_indices and positive_nll is not None:
+        high_score_parts.append(-positive_nll)
+        high_score_labels.extend([CLASS_NEGATIVE] * len(negative_indices))
+        high_score_indices.extend(negative_indices)
+    if _HIGH_SCORE_EMA_ENABLED and high_score_parts:
+        positive_answer_scores = torch.cat(high_score_parts)
+        high_score_raw_cutoff, high_score_cutoff = _update_high_score_cutoff(positive_answer_scores)
+        cutoff_tensor = positive_answer_scores.new_tensor(high_score_cutoff)
+        monitored_labels = class_labels.new_tensor(high_score_labels)
+        positive_mask = monitored_labels.eq(CLASS_POSITIVE)
+        negative_mask = monitored_labels.eq(CLASS_NEGATIVE)
+        high_score_mask = positive_answer_scores.detach().ge(cutoff_tensor)
+        positive_hits_mask = positive_mask.logical_and(high_score_mask)
+        high_score_positive_hits = int(positive_hits_mask.sum().detach().cpu())
+        if high_score_positive_hits and _HIGH_SCORE_POSITIVE_BONUS > 0:
+            bonus_indices = [
+                high_score_indices[position]
+                for position in positive_hits_mask.nonzero(as_tuple=False).flatten().tolist()
+            ]
+            class_weights[bonus_indices] = class_weights[bonus_indices] * (1.0 + _HIGH_SCORE_POSITIVE_BONUS)
+        if _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT > 0 and bool(negative_mask.any()):
+            negative_scores = positive_answer_scores[negative_mask]
+            high_score_negative_penalty = functional.relu(negative_scores - cutoff_tensor).mean()
+
+    weighted_ce = (correct_nll * class_weights).mean()
 
     total_loss = (
         weighted_ce
