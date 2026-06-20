@@ -36,7 +36,7 @@ _RANK_LOSS_WEIGHT = 0.5
 _RANK_MARGIN = 0.2
 _HIGH_SCORE_EMA_ENABLED = True
 _HIGH_SCORE_EMA_ALPHA = 0.02
-_HIGH_SCORE_CUTOFF_POSITION = 0.8
+_HIGH_SCORE_CUTOFF_POSITION = 0.6
 _HIGH_SCORE_POSITIVE_BONUS = 1.0
 _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT = 1.0
 _HIGH_SCORE_CUTOFF: float | None = None
@@ -215,10 +215,19 @@ def _score_monitored_rows(model, tokenizer, tensors: dict, correct_nll, indices:
     return _selection_scores_from_probabilities(probabilities), probabilities
 
 
-def _compute_asymmetric_training_loss(model, tokenizer, tensors: dict, batch: list[dict], max_seq_length: int):
+def _compute_asymmetric_training_loss(
+    model,
+    tokenizer,
+    tensors: dict,
+    batch: list[dict],
+    penalty_rows=None,
+    max_seq_length: int | None = None,
+    **_ignored_kwargs,
+):
     import torch
     import torch.nn.functional as functional
 
+    effective_max_seq_length = max(64, int(max_seq_length or DEFAULT_MAX_SEQ_LENGTH))
     class_labels = tensors.pop("class_labels")
     output = model(**tensors)
     correct_nll = _per_sample_answer_nll(output.logits, tensors["labels"])
@@ -254,7 +263,7 @@ def _compute_asymmetric_training_loss(model, tokenizer, tensors: dict, batch: li
             tensors,
             correct_nll,
             monitored_indices,
-            max_seq_length,
+            effective_max_seq_length,
         )
         high_score_raw_cutoff, high_score_cutoff = _update_high_score_cutoff(selection_scores)
         cutoff_tensor = selection_scores.new_tensor(high_score_cutoff)
@@ -283,7 +292,7 @@ def _compute_asymmetric_training_loss(model, tokenizer, tensors: dict, batch: li
             tokenizer,
             tensors,
             negative_indices,
-            max_seq_length,
+            effective_max_seq_length,
         )
         positive_output = model(**positive_tensors)
         positive_nll = _per_sample_answer_nll(
@@ -610,7 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--high-score-cutoff-position",
         type=float,
-        default=_env_float("HIGH_SCORE_CUTOFF_POSITION", 0.8),
+        default=_env_float("HIGH_SCORE_CUTOFF_POSITION", 0.6),
         help="Position between batch average SelectionScore and max SelectionScore used as the raw high-score cutoff.",
     )
     parser.add_argument(

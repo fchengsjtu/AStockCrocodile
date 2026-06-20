@@ -63,7 +63,7 @@ python -m blackbox_finetune_threeclass.train \
   --data-dir blackbox_finetune_threeclass/data_xlong_p1_n4_u10 \
   --checkpoint-eval-data-dir blackbox_finetune_threeclass/data_evaluation_xlong_p1_n4_u10 \
   --output-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-p1_n4_u10-lora \
-  --max-seq-length 3072 --epochs 0.3 \
+  --max-seq-length 3072 --epochs 3.0 \
   --gradient-accumulation-steps 16 --learning-rate 5e-6 \
   --checkpoint-every 100 --eval-max-samples 1500 --on-the-fly-tokenize \
   --cuda-device 0
@@ -89,7 +89,7 @@ RANK_LOSS_WEIGHT=0.5
 RANK_MARGIN=0.2
 HIGH_SCORE_EMA=1
 HIGH_SCORE_EMA_ALPHA=0.02
-HIGH_SCORE_CUTOFF_POSITION=0.8
+HIGH_SCORE_CUTOFF_POSITION=0.6
 HIGH_SCORE_POSITIVE_BONUS=1.0
 HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=1.0
 ```
@@ -120,7 +120,7 @@ python -m blackbox_finetune_threeclass.train \
   --data-dir blackbox_finetune_threeclass/data_xlong_p1_n4_u10 \
   --output-dir blackbox_finetune_threeclass/runs/qwen2.5-0.5b-threeclass-xlong-from-binary-lora \
   --initial-binary-adapter-dir /mnt/d/Models/precision10@0.4-3200 \
-  --max-seq-length 3072 --epochs 0.3 \
+  --max-seq-length 3072 --epochs 3.0 \
   --gradient-accumulation-steps 16 --learning-rate 5e-6 \
   --checkpoint-every 100 --on-the-fly-tokenize \
   --cuda-device 0

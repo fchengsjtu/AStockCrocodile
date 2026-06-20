@@ -238,7 +238,7 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.rank_margin, 0.2)
         self.assertTrue(args.high_score_ema)
         self.assertEqual(args.high_score_ema_alpha, 0.02)
-        self.assertEqual(args.high_score_cutoff_position, 0.8)
+        self.assertEqual(args.high_score_cutoff_position, 0.6)
         self.assertEqual(args.high_score_positive_bonus, 1.0)
         self.assertEqual(args.high_score_negative_penalty_weight, 1.0)
 
