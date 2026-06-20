@@ -1,4 +1,5 @@
 import os
+import random
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -377,6 +378,45 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
 
         self.assertEqual(train._checkpoint_eval_path(data_dir, eval_dir), eval_dir / "test.jsonl")
         self.assertEqual(train._checkpoint_eval_path(data_dir, None), data_dir / "test.jsonl")
+
+    def test_training_state_round_trips_resume_fields(self):
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch is not installed")
+
+        with TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir)
+            parameter = torch.nn.Parameter(torch.tensor([1.0]))
+            optimizer = torch.optim.AdamW([parameter], lr=0.001)
+            loss = parameter.sum()
+            loss.backward()
+            optimizer.step()
+            rng = random.Random(123)
+
+            train._save_training_state(
+                checkpoint_dir,
+                optimizer=optimizer,
+                scheduler=None,
+                update=100,
+                next_micro_step=1600,
+                train_order=[2, 0, 1],
+                rng=rng,
+                evaluation_threshold=0.48,
+                high_score_positive_cutoff=0.52,
+                fp_penalty_cutoff=0.44,
+                total_nonfinite_skips=3,
+            )
+
+            state = train._load_training_state(checkpoint_dir, "cpu")
+
+        self.assertEqual(state["update"], 100)
+        self.assertEqual(state["next_micro_step"], 1600)
+        self.assertEqual(state["train_order"], [2, 0, 1])
+        self.assertAlmostEqual(state["evaluation_threshold"], 0.48)
+        self.assertAlmostEqual(state["high_score_positive_cutoff"], 0.52)
+        self.assertAlmostEqual(state["fp_penalty_cutoff"], 0.44)
+        self.assertEqual(state["total_nonfinite_skips"], 3)
 
     def test_precision_target_tag_uses_top_k_and_threshold(self):
         self.assertEqual(common.precision_target_tag(20, 0.30), "top20_precision030")

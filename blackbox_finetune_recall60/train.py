@@ -63,6 +63,7 @@ def default_checkpoint_every() -> int:
     return _env_int("CHECKPOINT_EVERY", _env_int("CHECKOUT_EVERY", 100))
 
 TOKEN_CACHE_VERSION = "v7_csv11_21d13w_no_partial_2020_2025"
+TRAINING_STATE_FILE = "training_state.pt"
 
 
 def _missing_dataset_error(data_dir: Path) -> FileNotFoundError:
@@ -71,6 +72,87 @@ def _missing_dataset_error(data_dir: Path) -> FileNotFoundError:
 
 def _checkpoint_eval_path(data_dir: Path, checkpoint_eval_data_dir: Path | None) -> Path:
     return (checkpoint_eval_data_dir or data_dir) / "test.jsonl"
+
+
+def _extra_training_state() -> dict:
+    return {}
+
+
+def _load_extra_training_state(state: dict) -> None:
+    return None
+
+
+def _torch_state_to_device(value, device: str):
+    if isinstance(value, dict):
+        return {key: _torch_state_to_device(item, device) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_torch_state_to_device(item, device) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_torch_state_to_device(item, device) for item in value)
+    try:
+        import torch
+    except Exception:
+        return value
+    if torch.is_tensor(value):
+        return value.to(device)
+    return value
+
+
+def _training_state_path(checkpoint_dir: Path | None) -> Path | None:
+    if checkpoint_dir is None:
+        return None
+    return checkpoint_dir / TRAINING_STATE_FILE
+
+
+def _load_training_state(checkpoint_dir: Path | None, device: str) -> dict | None:
+    state_path = _training_state_path(checkpoint_dir)
+    if state_path is None or not state_path.exists():
+        return None
+    try:
+        import torch
+    except Exception:
+        return None
+    return torch.load(state_path, map_location=device, weights_only=False)
+
+
+def _save_training_state(
+    checkpoint_dir: Path,
+    *,
+    optimizer,
+    scheduler,
+    update: int,
+    next_micro_step: int,
+    train_order: list[int],
+    rng,
+    evaluation_threshold: float,
+    high_score_positive_cutoff: float,
+    fp_penalty_cutoff: float,
+    total_nonfinite_skips: int,
+) -> None:
+    import torch
+
+    state = {
+        "version": 1,
+        "update": int(update),
+        "next_micro_step": int(next_micro_step),
+        "train_order": list(train_order),
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+        "python_random_state": random.getstate(),
+        "train_rng_state": rng.getstate(),
+        "torch_rng_state": torch.random.get_rng_state(),
+        "torch_cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+        "evaluation_threshold": float(evaluation_threshold),
+        "next_threshold": float(evaluation_threshold),
+        "high_score_positive_cutoff": float(high_score_positive_cutoff),
+        "fp_penalty_cutoff": float(fp_penalty_cutoff),
+        "total_nonfinite_skips": int(total_nonfinite_skips),
+        "extra": _extra_training_state(),
+    }
+    state_path = _training_state_path(checkpoint_dir)
+    assert state_path is not None
+    torch.save(state, state_path)
+    print(f"training state saved: {state_path}", flush=True)
 
 
 def _tokenize_row(tokenizer, row: dict, max_seq_length: int) -> dict:
@@ -645,6 +727,7 @@ def train_recall60_lora(
             rebuild_token_cache,
         )
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=max(0.0, float(weight_decay)))
+    scheduler = None
     total_updates = max(1, math.ceil((len(train_items) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
     total_micro_steps = total_updates * max(1, gradient_accumulation_steps)
     start_update = min(_checkpoint_update(resume_adapter_dir), total_updates)
@@ -656,6 +739,57 @@ def train_recall60_lora(
     rng = random.Random(train_seed)
     fp_penalty_cutoff = _clamp_fp_penalty_cutoff(evaluation_threshold, fp_threshold_min, fp_threshold_max)
     high_score_positive_cutoff = min(max(float(evaluation_threshold), 0.0), 1.0)
+    train_order = list(range(len(train_items)))
+    restored_total_nonfinite_skips = 0
+    restored_training_state = False
+    state = _load_training_state(resume_adapter_dir, device) if resume_adapter_dir is not None else None
+    if state:
+        try:
+            optimizer.load_state_dict(state["optimizer_state"])
+            optimizer.state = _torch_state_to_device(optimizer.state, device)
+            if scheduler is not None and state.get("scheduler_state") is not None:
+                scheduler.load_state_dict(state["scheduler_state"])
+            start_micro_step = min(int(state.get("next_micro_step", start_micro_step)), total_micro_steps)
+            start_update = min(int(state.get("update", start_update)), total_updates)
+            saved_order = state.get("train_order")
+            if isinstance(saved_order, list) and len(saved_order) == len(train_items):
+                train_order = [int(index) for index in saved_order]
+            if state.get("python_random_state") is not None:
+                random.setstate(state["python_random_state"])
+            if state.get("train_rng_state") is not None:
+                rng.setstate(state["train_rng_state"])
+            if state.get("torch_rng_state") is not None:
+                torch.random.set_rng_state(state["torch_rng_state"])
+            if torch.cuda.is_available() and state.get("torch_cuda_rng_state_all") is not None:
+                torch.cuda.set_rng_state_all(state["torch_cuda_rng_state_all"])
+            evaluation_threshold = float(state.get("evaluation_threshold", evaluation_threshold))
+            high_score_positive_cutoff = float(state.get("high_score_positive_cutoff", high_score_positive_cutoff))
+            fp_penalty_cutoff = float(state.get("fp_penalty_cutoff", fp_penalty_cutoff))
+            restored_total_nonfinite_skips = int(state.get("total_nonfinite_skips", 0))
+            _load_extra_training_state(state.get("extra") or {})
+            restored_training_state = True
+            print(
+                f"training state restored: {_training_state_path(resume_adapter_dir)} "
+                f"next_micro_step={start_micro_step} update={start_update} "
+                f"eval_threshold={evaluation_threshold:.6f} "
+                f"high_score_positive_cutoff={high_score_positive_cutoff:.6f} "
+                f"fp_penalty_cutoff={fp_penalty_cutoff:.6f}",
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                f"WARNING failed to restore full training state from {_training_state_path(resume_adapter_dir)}: {exc}. "
+                f"Continuing from adapter weights only.",
+                flush=True,
+            )
+    elif resume_adapter_dir is not None and _checkpoint_update(resume_adapter_dir) > 0:
+        print(
+            f"WARNING no {TRAINING_STATE_FILE} found in {resume_adapter_dir}; "
+            f"optimizer/RNG/dynamic-threshold state will restart from configured defaults.",
+            flush=True,
+        )
+    if not restored_training_state:
+        rng.shuffle(train_order)
     print(
         f"manual RTX3060 LoRA train rows={len(train_items)} valid={len(valid_rows)} "
         f"checkpoint_eval_data_dir={checkpoint_eval_data_dir or data_dir} "
@@ -684,7 +818,7 @@ def train_recall60_lora(
     optimizer.zero_grad(set_to_none=True)
     start_time = time.monotonic()
     consecutive_nonfinite = 0
-    total_nonfinite_skips = 0
+    total_nonfinite_skips = restored_total_nonfinite_skips
     consecutive_oom = 0
     accumulated_loss = 0.0
     accumulated_loss_count = 0
@@ -693,9 +827,12 @@ def train_recall60_lora(
     for micro_step in range(start_micro_step, total_micro_steps):
         update = (micro_step + 1) // max(1, gradient_accumulation_steps)
         try:
-            raw_batch = [train_items[(micro_step * batch_size + offset) % len(train_items)] for offset in range(batch_size)]
-            if micro_step % len(train_items) == 0:
-                rng.shuffle(train_items)
+            if micro_step > 0 and micro_step % len(train_order) == 0:
+                rng.shuffle(train_order)
+            raw_batch = [
+                train_items[train_order[(micro_step * batch_size + offset) % len(train_order)]]
+                for offset in range(batch_size)
+            ]
             if on_the_fly_tokenize:
                 batch = [_tokenize_row(tokenizer, row, max_seq_length) for row in raw_batch]
                 penalty_rows = raw_batch
@@ -805,6 +942,8 @@ def train_recall60_lora(
                     )
                 continue
             optimizer.step()
+            if scheduler is not None:
+                scheduler.step()
             if not _params_are_finite(trainable_params):
                 raise RuntimeError(
                     f"Training aborted because trainable LoRA parameters became non-finite after update {update}. "
@@ -843,6 +982,19 @@ def train_recall60_lora(
                 model.save_pretrained(checkpoint_dir)
                 tokenizer.save_pretrained(checkpoint_dir)
                 print(f"checkpoint saved: {checkpoint_dir}", flush=True)
+                _save_training_state(
+                    checkpoint_dir,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    update=update,
+                    next_micro_step=micro_step + 1,
+                    train_order=train_order,
+                    rng=rng,
+                    evaluation_threshold=evaluation_threshold,
+                    high_score_positive_cutoff=high_score_positive_cutoff,
+                    fp_penalty_cutoff=fp_penalty_cutoff,
+                    total_nonfinite_skips=total_nonfinite_skips,
+                )
                 evaluation_result = _evaluate_training_checkpoint(
                     model=model,
                     tokenizer=tokenizer,
@@ -879,6 +1031,19 @@ def train_recall60_lora(
                     f"high_score_positive_cutoff={high_score_positive_cutoff:.6f} "
                     f"fp_penalty_cutoff={fp_penalty_cutoff:.6f}",
                     flush=True,
+                )
+                _save_training_state(
+                    checkpoint_dir,
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                    update=update,
+                    next_micro_step=micro_step + 1,
+                    train_order=train_order,
+                    rng=rng,
+                    evaluation_threshold=evaluation_threshold,
+                    high_score_positive_cutoff=high_score_positive_cutoff,
+                    fp_penalty_cutoff=fp_penalty_cutoff,
+                    total_nonfinite_skips=total_nonfinite_skips,
                 )
 
     adapter_dir = output_dir / "adapter"

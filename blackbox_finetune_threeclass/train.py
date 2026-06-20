@@ -94,6 +94,20 @@ def _configure_asymmetric_loss(
     _HIGH_SCORE_CUTOFF = None
 
 
+def _extra_training_state() -> dict:
+    return {
+        "high_score_cutoff": _HIGH_SCORE_CUTOFF,
+    }
+
+
+def _load_extra_training_state(state: dict) -> None:
+    global _HIGH_SCORE_CUTOFF
+    if not isinstance(state, dict):
+        return
+    value = state.get("high_score_cutoff")
+    _HIGH_SCORE_CUTOFF = None if value is None else float(value)
+
+
 def _per_sample_answer_nll(logits, labels):
     import torch
     import torch.nn.functional as functional
@@ -493,6 +507,8 @@ def _patch_base_trainer(initial_binary_adapter_dir: Path | None = None) -> None:
     base_train._tokenize_row = _tokenize_threeclass_row
     base_train._collate = _collate_threeclass
     base_train._compute_training_loss = _compute_asymmetric_training_loss
+    base_train._extra_training_state = _extra_training_state
+    base_train._load_extra_training_state = _load_extra_training_state
     base_train.TOKEN_CACHE_VERSION = f"{base_train.TOKEN_CACHE_VERSION}_threeclass_asymmetric_v1"
     if initial_binary_adapter_dir is None:
         return

@@ -243,6 +243,15 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.high_score_negative_penalty_weight, 1.0)
         self.assertTrue(args.fp_dynamic_penalty)
 
+    def test_threeclass_extra_training_state_preserves_high_score_cutoff(self):
+        threeclass_train._load_extra_training_state({"high_score_cutoff": -0.75})
+
+        state = threeclass_train._extra_training_state()
+        threeclass_train._load_extra_training_state({"high_score_cutoff": None})
+
+        self.assertAlmostEqual(state["high_score_cutoff"], -0.75)
+        self.assertIsNone(threeclass_train._extra_training_state()["high_score_cutoff"])
+
     def test_threeclass_tokenization_preserves_class_label(self):
         class FakeTokenizer:
             eos_token = "<eos>"
