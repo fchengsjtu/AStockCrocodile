@@ -34,6 +34,8 @@ _NEUTRAL_CE_WEIGHT = 0.5
 _FP_LOSS_WEIGHT = 1.0
 _RANK_LOSS_WEIGHT = 0.5
 _RANK_MARGIN = 0.2
+_POSITIVE_HIGH_SCORE_LOSS_WEIGHT = 1.0
+_POSITIVE_HIGH_SCORE_MARGIN = 0.0
 _HIGH_SCORE_EMA_ENABLED = True
 _HIGH_SCORE_EMA_ALPHA = 0.02
 _HIGH_SCORE_CUTOFF_POSITION = 0.6
@@ -70,6 +72,8 @@ def _configure_asymmetric_loss(
     fp_loss_weight: float,
     rank_loss_weight: float,
     rank_margin: float,
+    positive_high_score_loss_weight: float,
+    positive_high_score_margin: float,
     high_score_ema: bool,
     high_score_ema_alpha: float,
     high_score_cutoff_position: float,
@@ -78,6 +82,7 @@ def _configure_asymmetric_loss(
 ) -> None:
     global _POSITIVE_CE_WEIGHT, _NEGATIVE_CE_WEIGHT, _NEUTRAL_CE_WEIGHT
     global _FP_LOSS_WEIGHT, _RANK_LOSS_WEIGHT, _RANK_MARGIN
+    global _POSITIVE_HIGH_SCORE_LOSS_WEIGHT, _POSITIVE_HIGH_SCORE_MARGIN
     global _HIGH_SCORE_EMA_ENABLED, _HIGH_SCORE_EMA_ALPHA, _HIGH_SCORE_CUTOFF_POSITION
     global _HIGH_SCORE_POSITIVE_BONUS, _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT, _HIGH_SCORE_CUTOFF
     _POSITIVE_CE_WEIGHT = max(0.0, float(positive_ce_weight))
@@ -86,6 +91,8 @@ def _configure_asymmetric_loss(
     _FP_LOSS_WEIGHT = max(0.0, float(fp_loss_weight))
     _RANK_LOSS_WEIGHT = max(0.0, float(rank_loss_weight))
     _RANK_MARGIN = max(0.0, float(rank_margin))
+    _POSITIVE_HIGH_SCORE_LOSS_WEIGHT = max(0.0, float(positive_high_score_loss_weight))
+    _POSITIVE_HIGH_SCORE_MARGIN = max(0.0, float(positive_high_score_margin))
     _HIGH_SCORE_EMA_ENABLED = bool(high_score_ema)
     _HIGH_SCORE_EMA_ALPHA = min(max(float(high_score_ema_alpha), 0.0), 1.0)
     _HIGH_SCORE_CUTOFF_POSITION = min(max(float(high_score_cutoff_position), 0.0), 1.0)
@@ -242,6 +249,7 @@ def _compute_asymmetric_training_loss(
     high_score_raw_cutoff = None
     high_score_cutoff = None
     high_score_positive_hits = 0
+    positive_high_score_loss = correct_nll.new_zeros(())
     high_score_negative_penalty = correct_nll.new_zeros(())
     positive_indices = class_labels.eq(CLASS_POSITIVE).nonzero(as_tuple=False).flatten().tolist()
     high_score_parts = []
@@ -274,6 +282,11 @@ def _compute_asymmetric_training_loss(
         if _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT > 0 and bool(negative_mask.any()):
             negative_scores = positive_answer_scores[negative_mask]
             high_score_negative_penalty = functional.relu(negative_scores - cutoff_tensor).mean()
+        if _POSITIVE_HIGH_SCORE_LOSS_WEIGHT > 0 and bool(positive_mask.any()):
+            positive_scores = positive_answer_scores[positive_mask]
+            positive_high_score_loss = functional.relu(
+                cutoff_tensor + _POSITIVE_HIGH_SCORE_MARGIN - positive_scores
+            ).mean()
 
     weighted_ce = (correct_nll * class_weights).mean()
 
@@ -282,11 +295,13 @@ def _compute_asymmetric_training_loss(
         + _FP_LOSS_WEIGHT * negative_fp_loss
         + _RANK_LOSS_WEIGHT * ranking_loss
         + _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT * high_score_negative_penalty
+        + _POSITIVE_HIGH_SCORE_LOSS_WEIGHT * positive_high_score_loss
     )
     metrics = {
         "ce": float(weighted_ce.detach().cpu()),
         "negative_fp": float(negative_fp_loss.detach().cpu()),
         "rank": float(ranking_loss.detach().cpu()),
+        "positive_high_score": float(positive_high_score_loss.detach().cpu()),
         "high_score_negative": float(high_score_negative_penalty.detach().cpu()),
         "high_score_positive_hits": float(high_score_positive_hits),
     }
@@ -581,6 +596,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required score margin between the negative and positive answers.",
     )
     parser.add_argument(
+        "--positive-high-score-loss-weight",
+        type=float,
+        default=_env_float("POSITIVE_HIGH_SCORE_LOSS_WEIGHT", 1.0),
+        help="Weight for explicitly pushing true positive samples above the EMA high-score cutoff.",
+    )
+    parser.add_argument(
+        "--positive-high-score-margin",
+        type=float,
+        default=_env_float("POSITIVE_HIGH_SCORE_MARGIN", 0.0),
+        help="Extra score margin above the EMA high-score cutoff required for true positive samples.",
+    )
+    parser.add_argument(
         "--high-score-ema",
         action=argparse.BooleanOptionalAction,
         default=_env_bool("HIGH_SCORE_EMA", True),
@@ -623,6 +650,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.fp_loss_weight,
         args.rank_loss_weight,
         args.rank_margin,
+        args.positive_high_score_loss_weight,
+        args.positive_high_score_margin,
         args.high_score_ema,
         args.high_score_ema_alpha,
         args.high_score_cutoff_position,
@@ -641,9 +670,11 @@ def main(argv: Iterable[str] | None = None) -> None:
         "three-class asymmetric loss: "
         f"total=weighted_ce+{_FP_LOSS_WEIGHT}*negative_fp+{_RANK_LOSS_WEIGHT}*ranking "
         f"+{_HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT}*high_score_negative "
+        f"+{_POSITIVE_HIGH_SCORE_LOSS_WEIGHT}*positive_high_score "
         f"positive_ce_weight={_POSITIVE_CE_WEIGHT} negative_ce_weight={_NEGATIVE_CE_WEIGHT} "
         f"neutral_ce_weight={_NEUTRAL_CE_WEIGHT} "
         f"rank_margin={_RANK_MARGIN} high_score_ema={_HIGH_SCORE_EMA_ENABLED} "
+        f"positive_high_score_margin={_POSITIVE_HIGH_SCORE_MARGIN} "
         f"high_score_ema_alpha={_HIGH_SCORE_EMA_ALPHA} "
         f"high_score_cutoff_position={_HIGH_SCORE_CUTOFF_POSITION} "
         f"high_score_positive_bonus={_HIGH_SCORE_POSITIVE_BONUS}",

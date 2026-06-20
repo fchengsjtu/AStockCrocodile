@@ -76,6 +76,7 @@ total_loss =
     weighted_CE
     + FP_LOSS_WEIGHT * negative_fp_loss
     + RANK_LOSS_WEIGHT * negative_positive_ranking_loss
+    + POSITIVE_HIGH_SCORE_LOSS_WEIGHT * positive_high_score_loss
 ```
 
 Defaults:
@@ -87,6 +88,8 @@ NEUTRAL_CE_WEIGHT=0.5
 FP_LOSS_WEIGHT=1.0
 RANK_LOSS_WEIGHT=0.5
 RANK_MARGIN=0.2
+POSITIVE_HIGH_SCORE_LOSS_WEIGHT=1.0
+POSITIVE_HIGH_SCORE_MARGIN=0.0
 HIGH_SCORE_EMA=1
 HIGH_SCORE_EMA_ALPHA=0.02
 HIGH_SCORE_CUTOFF_POSITION=0.6
@@ -95,7 +98,7 @@ HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=1.0
 FP_DYNAMIC_PENALTY=1
 ```
 
-`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. The ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. Training logs print `loss`, `ce`, `negative_fp`, and `rank`. A negative sample requires an additional positive-answer forward pass, so training is slower and uses more GPU memory than plain CE.
+`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. The ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. `positive_high_score_loss` is `relu(ema_cutoff + POSITIVE_HIGH_SCORE_MARGIN - positive_answer_score)` for true positive samples, explicitly pushing positives into the high-score region. Training logs print `loss`, `ce`, `negative_fp`, `rank`, and `positive_high_score`. A negative sample requires an additional positive-answer forward pass, so training is slower and uses more GPU memory than plain CE.
 
 When `HIGH_SCORE_EMA=1`, training also keeps an in-batch EMA cutoff for high positive-answer-score samples. To keep training stable on 12GB GPUs, this uses the already-needed positive answer NLL instead of re-scoring all three classes for every row:
 
