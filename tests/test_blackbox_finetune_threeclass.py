@@ -268,6 +268,8 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.high_score_ema_alpha, 0.02)
         self.assertEqual(args.high_score_cutoff_position, 0.6)
         self.assertEqual(args.high_score_positive_bonus, 1.0)
+        self.assertEqual(args.high_score_positive_bonus_scale, 0.05)
+        self.assertEqual(args.high_score_positive_bonus_max_multiplier, 8.0)
         self.assertEqual(args.high_score_negative_penalty_weight, 1.0)
         self.assertEqual(args.high_score_neutral_penalty_weight, 0.5)
         self.assertTrue(args.fp_dynamic_penalty)
@@ -305,7 +307,7 @@ class ThreeClassTests(unittest.TestCase):
         except ModuleNotFoundError:
             self.skipTest("torch is not installed in this environment")
 
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 1.0, 0.5)
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
         low_fp, low_rank = threeclass_train._negative_auxiliary_losses(
             torch.tensor([0.0]),
             torch.tensor([2.0]),
@@ -324,7 +326,7 @@ class ThreeClassTests(unittest.TestCase):
         except ModuleNotFoundError:
             self.skipTest("torch is not installed in this environment")
 
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 1.0, 0.5)
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
         _, rank = threeclass_train._negative_auxiliary_losses(
             torch.tensor([0.4]),
             torch.tensor([0.5]),
@@ -346,6 +348,38 @@ class ThreeClassTests(unittest.TestCase):
             torch.tensor([0.0]),
         )
         self.assertLess(float(low_fp), float(high_fp))
+
+    def test_positive_high_score_bonus_multiplier_increases_with_score(self):
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch is not installed in this environment")
+
+        threeclass_train._configure_asymmetric_loss(
+            2.0,
+            1.0,
+            0.5,
+            1.0,
+            0.3,
+            0.5,
+            0.2,
+            1.0,
+            0.0,
+            True,
+            0.02,
+            0.8,
+            2.0,
+            0.05,
+            8.0,
+            1.0,
+            0.5,
+        )
+        multipliers = threeclass_train._positive_high_score_bonus_multipliers(
+            torch.tensor([0.50, 0.55, 0.70]),
+            torch.tensor(0.50),
+        )
+        self.assertGreater(float(multipliers[1]), float(multipliers[0]))
+        self.assertEqual(float(multipliers[2]), 8.0)
 
     def test_probabilities_are_normalized_and_follow_loss(self):
         probabilities = probabilities_from_losses({CLASS_NEGATIVE: 2.0, CLASS_NEUTRAL: 1.0, CLASS_POSITIVE: 0.5})
