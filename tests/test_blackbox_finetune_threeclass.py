@@ -262,6 +262,8 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.neutral_fp_loss_weight, 0.3)
         self.assertEqual(args.rank_loss_weight, 0.5)
         self.assertEqual(args.rank_margin, 0.2)
+        self.assertEqual(args.neutral_rank_loss_weight, 0.2)
+        self.assertEqual(args.neutral_rank_margin, 0.05)
         self.assertEqual(args.positive_high_score_loss_weight, 1.0)
         self.assertEqual(args.positive_high_score_margin, 0.0)
         self.assertTrue(args.high_score_ema)
@@ -307,7 +309,7 @@ class ThreeClassTests(unittest.TestCase):
         except ModuleNotFoundError:
             self.skipTest("torch is not installed in this environment")
 
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 0.2, 0.05, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
         low_fp, low_rank = threeclass_train._negative_auxiliary_losses(
             torch.tensor([0.0]),
             torch.tensor([2.0]),
@@ -326,7 +328,7 @@ class ThreeClassTests(unittest.TestCase):
         except ModuleNotFoundError:
             self.skipTest("torch is not installed in this environment")
 
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 0.2, 0.05, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
         _, rank = threeclass_train._negative_auxiliary_losses(
             torch.tensor([0.4]),
             torch.tensor([0.5]),
@@ -349,6 +351,24 @@ class ThreeClassTests(unittest.TestCase):
         )
         self.assertLess(float(low_fp), float(high_fp))
 
+    def test_neutral_ranking_loss_uses_neutral_margin(self):
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch is not installed in this environment")
+
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 0.2, 0.05, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
+        low_rank = threeclass_train._neutral_ranking_loss(
+            torch.tensor([0.4]),
+            torch.tensor([0.6]),
+        )
+        high_rank = threeclass_train._neutral_ranking_loss(
+            torch.tensor([0.4]),
+            torch.tensor([0.42]),
+        )
+        self.assertEqual(float(low_rank), 0.0)
+        self.assertAlmostEqual(float(high_rank), 0.03, places=6)
+
     def test_positive_high_score_reward_increases_with_score(self):
         try:
             import torch
@@ -363,6 +383,8 @@ class ThreeClassTests(unittest.TestCase):
             0.3,
             0.5,
             0.2,
+            0.2,
+            0.05,
             1.0,
             0.0,
             True,

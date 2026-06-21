@@ -35,6 +35,8 @@ _FP_LOSS_WEIGHT = 1.0
 _NEUTRAL_FP_LOSS_WEIGHT = 0.3
 _RANK_LOSS_WEIGHT = 0.5
 _RANK_MARGIN = 0.2
+_NEUTRAL_RANK_LOSS_WEIGHT = 0.2
+_NEUTRAL_RANK_MARGIN = 0.05
 _POSITIVE_HIGH_SCORE_LOSS_WEIGHT = 1.0
 _POSITIVE_HIGH_SCORE_MARGIN = 0.0
 _HIGH_SCORE_EMA_ENABLED = True
@@ -77,6 +79,8 @@ def _configure_asymmetric_loss(
     neutral_fp_loss_weight: float,
     rank_loss_weight: float,
     rank_margin: float,
+    neutral_rank_loss_weight: float,
+    neutral_rank_margin: float,
     positive_high_score_loss_weight: float,
     positive_high_score_margin: float,
     high_score_ema: bool,
@@ -90,6 +94,7 @@ def _configure_asymmetric_loss(
 ) -> None:
     global _POSITIVE_CE_WEIGHT, _NEGATIVE_CE_WEIGHT, _NEUTRAL_CE_WEIGHT
     global _FP_LOSS_WEIGHT, _NEUTRAL_FP_LOSS_WEIGHT, _RANK_LOSS_WEIGHT, _RANK_MARGIN
+    global _NEUTRAL_RANK_LOSS_WEIGHT, _NEUTRAL_RANK_MARGIN
     global _POSITIVE_HIGH_SCORE_LOSS_WEIGHT, _POSITIVE_HIGH_SCORE_MARGIN
     global _HIGH_SCORE_EMA_ENABLED, _HIGH_SCORE_EMA_ALPHA, _HIGH_SCORE_CUTOFF_POSITION
     global _HIGH_SCORE_POSITIVE_BONUS, _HIGH_SCORE_POSITIVE_BONUS_SCALE
@@ -102,6 +107,8 @@ def _configure_asymmetric_loss(
     _NEUTRAL_FP_LOSS_WEIGHT = max(0.0, float(neutral_fp_loss_weight))
     _RANK_LOSS_WEIGHT = max(0.0, float(rank_loss_weight))
     _RANK_MARGIN = max(0.0, float(rank_margin))
+    _NEUTRAL_RANK_LOSS_WEIGHT = max(0.0, float(neutral_rank_loss_weight))
+    _NEUTRAL_RANK_MARGIN = max(0.0, float(neutral_rank_margin))
     _POSITIVE_HIGH_SCORE_LOSS_WEIGHT = max(0.0, float(positive_high_score_loss_weight))
     _POSITIVE_HIGH_SCORE_MARGIN = max(0.0, float(positive_high_score_margin))
     _HIGH_SCORE_EMA_ENABLED = bool(high_score_ema)
@@ -163,6 +170,13 @@ def _neutral_false_positive_loss(neutral_nll, positive_nll):
     # downside samples entering the selected top-N pool.
     score_delta = neutral_nll.float() - positive_nll.float()
     return functional.softplus(score_delta).mean()
+
+
+def _neutral_ranking_loss(neutral_nll, positive_nll):
+    import torch.nn.functional as functional
+
+    score_delta = neutral_nll.float() - positive_nll.float()
+    return functional.relu(_NEUTRAL_RANK_MARGIN + score_delta).mean()
 
 
 def _answer_tensors_for_indices(
@@ -282,7 +296,11 @@ def _compute_asymmetric_training_loss(
         negative_fp_loss = correct_nll.new_zeros(())
         ranking_loss = correct_nll.new_zeros(())
     neutral_indices = class_labels.eq(CLASS_NEUTRAL).nonzero(as_tuple=False).flatten().tolist()
-    if neutral_indices and (_NEUTRAL_FP_LOSS_WEIGHT > 0 or _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT > 0):
+    if neutral_indices and (
+        _NEUTRAL_FP_LOSS_WEIGHT > 0
+        or _NEUTRAL_RANK_LOSS_WEIGHT > 0
+        or _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT > 0
+    ):
         neutral_positive_tensors = _answer_tensors_for_indices(
             tokenizer,
             tensors,
@@ -303,6 +321,10 @@ def _compute_asymmetric_training_loss(
     else:
         neutral_positive_nll = None
         neutral_fp_loss = correct_nll.new_zeros(())
+    neutral_ranking_loss = correct_nll.new_zeros(())
+    if neutral_indices and neutral_positive_nll is not None and _NEUTRAL_RANK_LOSS_WEIGHT > 0:
+        neutral_nll = correct_nll[neutral_indices]
+        neutral_ranking_loss = _neutral_ranking_loss(neutral_nll, neutral_positive_nll)
 
     high_score_raw_cutoff = None
     high_score_cutoff = None
@@ -361,6 +383,7 @@ def _compute_asymmetric_training_loss(
         + _FP_LOSS_WEIGHT * negative_fp_loss
         + _NEUTRAL_FP_LOSS_WEIGHT * neutral_fp_loss
         + _RANK_LOSS_WEIGHT * ranking_loss
+        + _NEUTRAL_RANK_LOSS_WEIGHT * neutral_ranking_loss
         + _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT * high_score_negative_penalty
         + _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT * high_score_neutral_penalty
         + _POSITIVE_HIGH_SCORE_LOSS_WEIGHT * positive_high_score_loss
@@ -371,6 +394,7 @@ def _compute_asymmetric_training_loss(
         "negative_fp": float(negative_fp_loss.detach().cpu()),
         "neutral_fp": float(neutral_fp_loss.detach().cpu()),
         "rank": float(ranking_loss.detach().cpu()),
+        "neutral_rank": float(neutral_ranking_loss.detach().cpu()),
         "positive_high_score": float(positive_high_score_loss.detach().cpu()),
         "high_score_negative": float(high_score_negative_penalty.detach().cpu()),
         "high_score_neutral": float(high_score_neutral_penalty.detach().cpu()),
@@ -736,6 +760,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Required score margin between the negative and positive answers.",
     )
     parser.add_argument(
+        "--neutral-rank-loss-weight",
+        type=float,
+        default=_env_float("NEUTRAL_RANK_LOSS_WEIGHT", 0.2),
+        help="Weight for the neutral-versus-positive margin ranking loss.",
+    )
+    parser.add_argument(
+        "--neutral-rank-margin",
+        type=float,
+        default=_env_float("NEUTRAL_RANK_MARGIN", 0.05),
+        help="Required score margin between the neutral and positive answers.",
+    )
+    parser.add_argument(
         "--positive-high-score-loss-weight",
         type=float,
         default=_env_float("POSITIVE_HIGH_SCORE_LOSS_WEIGHT", 1.0),
@@ -797,6 +833,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.neutral_fp_loss_weight,
         args.rank_loss_weight,
         args.rank_margin,
+        args.neutral_rank_loss_weight,
+        args.neutral_rank_margin,
         args.positive_high_score_loss_weight,
         args.positive_high_score_margin,
         args.high_score_ema,
@@ -820,6 +858,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         "three-class asymmetric loss: "
         f"total=weighted_ce+{_FP_LOSS_WEIGHT}*negative_fp+{_NEUTRAL_FP_LOSS_WEIGHT}*neutral_fp "
         f"+{_RANK_LOSS_WEIGHT}*ranking "
+        f"+{_NEUTRAL_RANK_LOSS_WEIGHT}*neutral_rank "
         f"+{_HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT}*high_score_negative "
         f"+{_HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT}*high_score_neutral "
         f"+{_POSITIVE_HIGH_SCORE_LOSS_WEIGHT}*positive_high_score "
@@ -827,6 +866,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         f"positive_ce_weight={_POSITIVE_CE_WEIGHT} negative_ce_weight={_NEGATIVE_CE_WEIGHT} "
         f"neutral_ce_weight={_NEUTRAL_CE_WEIGHT} "
         f"rank_margin={_RANK_MARGIN} high_score_ema={_HIGH_SCORE_EMA_ENABLED} "
+        f"neutral_rank_margin={_NEUTRAL_RANK_MARGIN} "
         f"positive_high_score_margin={_POSITIVE_HIGH_SCORE_MARGIN} "
         f"high_score_ema_alpha={_HIGH_SCORE_EMA_ALPHA} "
         f"high_score_cutoff_position={_HIGH_SCORE_CUTOFF_POSITION} "
