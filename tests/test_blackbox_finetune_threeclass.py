@@ -349,7 +349,7 @@ class ThreeClassTests(unittest.TestCase):
         )
         self.assertLess(float(low_fp), float(high_fp))
 
-    def test_positive_high_score_bonus_multiplier_increases_with_score(self):
+    def test_positive_high_score_reward_increases_with_score(self):
         try:
             import torch
         except ModuleNotFoundError:
@@ -374,12 +374,12 @@ class ThreeClassTests(unittest.TestCase):
             1.0,
             0.5,
         )
-        multipliers = threeclass_train._positive_high_score_bonus_multipliers(
+        rewards = threeclass_train._positive_high_score_rewards(
             torch.tensor([0.50, 0.55, 0.70]),
             torch.tensor(0.50),
         )
-        self.assertGreater(float(multipliers[1]), float(multipliers[0]))
-        self.assertEqual(float(multipliers[2]), 8.0)
+        self.assertGreater(float(rewards[1]), float(rewards[0]))
+        self.assertEqual(float(rewards[2]), 8.0)
 
     def test_probabilities_are_normalized_and_follow_loss(self):
         probabilities = probabilities_from_losses({CLASS_NEGATIVE: 2.0, CLASS_NEUTRAL: 1.0, CLASS_POSITIVE: 0.5})

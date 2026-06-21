@@ -79,6 +79,7 @@ total_loss =
     + RANK_LOSS_WEIGHT * negative_positive_ranking_loss
     + HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT * high_score_neutral_loss
     + POSITIVE_HIGH_SCORE_LOSS_WEIGHT * positive_high_score_loss
+    - high_score_positive_reward
 ```
 
 Defaults:
@@ -119,7 +120,7 @@ ema_cutoff = HIGH_SCORE_EMA_ALPHA * raw_cutoff
     + (1 - HIGH_SCORE_EMA_ALPHA) * previous_ema_cutoff
 ```
 
-For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss` and ranking loss. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss` or `high_score_neutral_loss`. True positive samples above `ema_cutoff` receive a score-sensitive CE multiplier: `1 + HIGH_SCORE_POSITIVE_BONUS * (1 + relu(positive_score - ema_cutoff) / HIGH_SCORE_POSITIVE_BONUS_SCALE)`, capped by `HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER` when the cap is greater than 0. This makes higher-scoring positive samples receive stronger reinforcement. True negative samples above `ema_cutoff` receive an additional linear penalty weighted by `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`; true neutral samples above the same cutoff receive `HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT`. Use a small `HIGH_SCORE_EMA_ALPHA` such as `0.02` to keep the cutoff from chasing noisy mini-batches.
+For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss` and ranking loss. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss` or `high_score_neutral_loss`. True positive samples above `ema_cutoff` receive an explicit score-sensitive reward that is subtracted from total loss: `HIGH_SCORE_POSITIVE_BONUS * (1 + relu(positive_score - ema_cutoff) / HIGH_SCORE_POSITIVE_BONUS_SCALE)`, capped by `HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER` when the cap is greater than 0. This rewards higher-scoring positive samples directly instead of increasing their CE weight. True negative samples above `ema_cutoff` receive an additional linear penalty weighted by `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`; true neutral samples above the same cutoff receive `HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT`. Use a small `HIGH_SCORE_EMA_ALPHA` such as `0.02` to keep the cutoff from chasing noisy mini-batches.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 

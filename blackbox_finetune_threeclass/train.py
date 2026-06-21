@@ -216,14 +216,15 @@ def _update_high_score_cutoff(scores) -> tuple[float, float]:
     return raw_value, float(_HIGH_SCORE_CUTOFF)
 
 
-def _positive_high_score_bonus_multipliers(hit_scores, cutoff_tensor):
+def _positive_high_score_rewards(hit_scores, cutoff_tensor):
     import torch.nn.functional as functional
 
-    bonus_strength = 1.0 + functional.relu(hit_scores - cutoff_tensor) / _HIGH_SCORE_POSITIVE_BONUS_SCALE
-    bonus_multipliers = 1.0 + _HIGH_SCORE_POSITIVE_BONUS * bonus_strength
+    rewards = _HIGH_SCORE_POSITIVE_BONUS * (
+        1.0 + functional.relu(hit_scores - cutoff_tensor) / _HIGH_SCORE_POSITIVE_BONUS_SCALE
+    )
     if _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER > 0:
-        bonus_multipliers = bonus_multipliers.clamp(max=_HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER)
-    return bonus_multipliers
+        rewards = rewards.clamp(max=_HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER)
+    return rewards
 
 
 def _compute_asymmetric_training_loss(
@@ -306,7 +307,7 @@ def _compute_asymmetric_training_loss(
     high_score_raw_cutoff = None
     high_score_cutoff = None
     high_score_positive_hits = 0
-    high_score_positive_bonus_multiplier = correct_nll.new_zeros(())
+    high_score_positive_reward = correct_nll.new_zeros(())
     positive_high_score_loss = correct_nll.new_zeros(())
     high_score_negative_penalty = correct_nll.new_zeros(())
     high_score_neutral_penalty = correct_nll.new_zeros(())
@@ -339,11 +340,8 @@ def _compute_asymmetric_training_loss(
         high_score_positive_hits = int(positive_hits_mask.sum().detach().cpu())
         if high_score_positive_hits and _HIGH_SCORE_POSITIVE_BONUS > 0:
             hit_positions = positive_hits_mask.nonzero(as_tuple=False).flatten()
-            bonus_indices = [high_score_indices[position] for position in hit_positions.tolist()]
             hit_scores = positive_answer_scores[hit_positions]
-            bonus_multipliers = _positive_high_score_bonus_multipliers(hit_scores, cutoff_tensor)
-            class_weights[bonus_indices] = class_weights[bonus_indices] * bonus_multipliers.to(class_weights.device)
-            high_score_positive_bonus_multiplier = bonus_multipliers.mean()
+            high_score_positive_reward = _positive_high_score_rewards(hit_scores, cutoff_tensor).mean()
         if _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT > 0 and bool(negative_mask.any()):
             negative_scores = positive_answer_scores[negative_mask]
             high_score_negative_penalty = functional.relu(negative_scores - cutoff_tensor).mean()
@@ -366,6 +364,7 @@ def _compute_asymmetric_training_loss(
         + _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT * high_score_negative_penalty
         + _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT * high_score_neutral_penalty
         + _POSITIVE_HIGH_SCORE_LOSS_WEIGHT * positive_high_score_loss
+        - high_score_positive_reward
     )
     metrics = {
         "ce": float(weighted_ce.detach().cpu()),
@@ -375,7 +374,8 @@ def _compute_asymmetric_training_loss(
         "positive_high_score": float(positive_high_score_loss.detach().cpu()),
         "high_score_negative": float(high_score_negative_penalty.detach().cpu()),
         "high_score_neutral": float(high_score_neutral_penalty.detach().cpu()),
-        "high_score_positive_bonus_multiplier": float(high_score_positive_bonus_multiplier.detach().cpu()),
+        "high_score_positive_reward": float(high_score_positive_reward.detach().cpu()),
+        "high_score_positive_bonus_multiplier": float(high_score_positive_reward.detach().cpu()),
         "high_score_positive_hits": float(high_score_positive_hits),
     }
     if high_score_raw_cutoff is not None and high_score_cutoff is not None:
@@ -823,6 +823,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         f"+{_HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT}*high_score_negative "
         f"+{_HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT}*high_score_neutral "
         f"+{_POSITIVE_HIGH_SCORE_LOSS_WEIGHT}*positive_high_score "
+        f"-high_score_positive_reward "
         f"positive_ce_weight={_POSITIVE_CE_WEIGHT} negative_ce_weight={_NEGATIVE_CE_WEIGHT} "
         f"neutral_ce_weight={_NEUTRAL_CE_WEIGHT} "
         f"rank_margin={_RANK_MARGIN} high_score_ema={_HIGH_SCORE_EMA_ENABLED} "
