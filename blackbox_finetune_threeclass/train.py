@@ -483,9 +483,12 @@ def _build_balanced_train_order(train_items: list[dict], seed: int, rng) -> list
             and positions[CLASS_NEGATIVE] + _NEGATIVE_PER_POSITIVE <= len(date_grouped[CLASS_NEGATIVE])
             and positions[CLASS_NEUTRAL] + _NEUTRAL_PER_POSITIVE <= len(date_grouped[CLASS_NEUTRAL])
         ):
+            cycle: list[int] = []
             for label in _class_pattern():
-                train_order.append(date_grouped[label][positions[label]])
+                cycle.append(date_grouped[label][positions[label]])
                 positions[label] += 1
+            rng.shuffle(cycle)
+            train_order.extend(cycle)
     if not train_order:
         raise RuntimeError(
             f"Unable to build a strict same-date 1:{_NEGATIVE_PER_POSITIVE}:{_NEUTRAL_PER_POSITIVE} train order. "

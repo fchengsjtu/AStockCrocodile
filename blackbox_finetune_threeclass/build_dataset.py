@@ -303,6 +303,21 @@ def _rank_rows(rows: list[dict], seed: int, tag: str) -> list[dict]:
     )
 
 
+def _shuffle_cycle(rows: list[dict], seed: int, tag: str, anchor_date: str, cycle_index: int) -> list[dict]:
+    return sorted(
+        rows,
+        key=lambda row: stable_rank(
+            seed,
+            tag,
+            anchor_date,
+            cycle_index,
+            row["metadata"]["label"],
+            row["metadata"]["scode"],
+            row["metadata"]["anchor_date"],
+        ),
+    )
+
+
 def interleave_class_rows(rows: list[dict], seed: int, tag: str) -> list[dict]:
     by_date: dict[str, dict[int, list[dict]]] = {}
     for row in rows:
@@ -323,9 +338,11 @@ def interleave_class_rows(rows: list[dict], seed: int, tag: str) -> list[dict]:
             and positions[CLASS_NEGATIVE] + NEGATIVE_PER_POSITIVE <= len(grouped[CLASS_NEGATIVE])
             and positions[CLASS_NEUTRAL] + NEUTRAL_PER_POSITIVE <= len(grouped[CLASS_NEUTRAL])
         ):
+            cycle: list[dict] = []
             for label in pattern:
-                ordered.append(grouped[label][positions[label]])
+                cycle.append(grouped[label][positions[label]])
                 positions[label] += 1
+            ordered.extend(_shuffle_cycle(cycle, seed, f"{tag}-cycle", anchor_date, len(ordered) // len(pattern)))
     return ordered
 
 

@@ -16,7 +16,7 @@ This file explains the important defaults in `scripts/set_wsl_env.sh`. Parameter
 `DATA_DIR`, `VALIDATION_DATA_DIR`, `OUTPUT_DIR`
 : Training dataset, evaluation dataset, and model output locations. Change these together when comparing different experimental runs.
 
-The default training class ratio is `positive:negative:neutral = 1:4:11`. One full class cycle has 16 rows, matching the default gradient accumulation window. Training dataset generation first selects positive rows, then only pairs them with negative and neutral rows from the same `anchor_date`; positives that cannot form a complete same-day cycle are skipped. Evaluation datasets use deterministic sampling and ordering, but do not require same-day `1:4:11` cycles.
+The default training class ratio is `positive:negative:neutral = 1:4:11`. One full class cycle has 16 rows, matching the default gradient accumulation window. Training dataset generation first selects positive rows, then only pairs them with negative and neutral rows from the same `anchor_date`; positives that cannot form a complete same-day cycle are skipped. The rows inside each cycle are shuffled so the model cannot exploit a fixed label order. Evaluation datasets use deterministic sampling and ordering, but do not require same-day `1:4:11` cycles.
 
 `REBUILD_DATASET=0`
 : Reuses cached datasets. Set to `1` only when date ranges, sample filters, or class-ratio logic changed.

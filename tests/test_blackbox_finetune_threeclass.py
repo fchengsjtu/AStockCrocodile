@@ -58,6 +58,12 @@ def sample_on_date(label: int, index: int, anchor_date: str) -> dict:
     return row
 
 
+def assert_one_four_eleven_same_day_cycle(testcase: unittest.TestCase, rows: list[dict]) -> None:
+    counts = {label: sum(int(row["metadata"]["label"]) == label for row in rows) for label in range(3)}
+    testcase.assertEqual(counts, {CLASS_NEGATIVE: 4, CLASS_NEUTRAL: 11, CLASS_POSITIVE: 1})
+    testcase.assertEqual(len({row["metadata"]["anchor_date"] for row in rows}), 1)
+
+
 class ThreeClassTests(unittest.TestCase):
     def test_defaults_follow_current_recall60_xlong_run(self):
         args = build_dataset_parser().parse_args([])
@@ -147,7 +153,7 @@ class ThreeClassTests(unittest.TestCase):
         counts = {label: sum(int(row["metadata"]["label"]) == label for row in selected) for label in range(3)}
         self.assertEqual(counts, {CLASS_NEGATIVE: 16, CLASS_NEUTRAL: 44, CLASS_POSITIVE: 4})
         for start in range(0, len(selected), 16):
-            self.assertEqual({row["metadata"]["anchor_date"] for row in selected[start : start + 16]}, {"2026-01-05"})
+            assert_one_four_eleven_same_day_cycle(self, selected[start : start + 16])
 
     def test_rebalance_requires_same_day_negative_and_neutral_rows(self):
         rows = (
@@ -172,7 +178,7 @@ class ThreeClassTests(unittest.TestCase):
             [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 11,
         )
 
-    def test_interleave_class_rows_uses_one_four_eleven_pattern(self):
+    def test_interleave_class_rows_uses_shuffled_one_four_eleven_same_day_cycles(self):
         rows = (
             [sample_on_date(CLASS_POSITIVE, index, "2026-01-05") for index in range(2)]
             + [sample_on_date(CLASS_NEGATIVE, index + 100, "2026-01-05") for index in range(8)]
@@ -180,8 +186,8 @@ class ThreeClassTests(unittest.TestCase):
         )
         ordered = interleave_class_rows(rows, 11, "test")
         labels = [int(row["metadata"]["label"]) for row in ordered[:16]]
-        self.assertEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 11)
-        self.assertEqual({row["metadata"]["anchor_date"] for row in ordered[:16]}, {"2026-01-05"})
+        assert_one_four_eleven_same_day_cycle(self, ordered[:16])
+        self.assertNotEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 11)
 
     def test_interleave_class_rows_drops_incomplete_same_day_cycles(self):
         rows = (
@@ -202,8 +208,10 @@ class ThreeClassTests(unittest.TestCase):
         rows[0]["class_label"] = rows[0]["metadata"].pop("label")
         order = threeclass_train._build_balanced_train_order(rows, 11, random.Random(11))
         labels = [threeclass_train._item_class_label(rows[index]) for index in order[:16]]
-        self.assertEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 11)
+        counts = {label: labels.count(label) for label in range(3)}
+        self.assertEqual(counts, {CLASS_NEGATIVE: 4, CLASS_NEUTRAL: 11, CLASS_POSITIVE: 1})
         self.assertEqual({rows[index]["metadata"]["anchor_date"] for index in order[:16]}, {"2026-01-05"})
+        self.assertNotEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 11)
 
     def test_balanced_train_order_rejects_cross_day_completion(self):
         import random
