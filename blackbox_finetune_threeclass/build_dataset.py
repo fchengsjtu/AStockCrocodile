@@ -386,6 +386,35 @@ def rebalance_materialized_samples(rows: list[dict], seed: int, positive_limit: 
     return interleave_class_rows(selected, seed, "materialized")
 
 
+def select_evaluation_samples(rows: list[dict], seed: int, positive_limit: int | None = None) -> list[dict]:
+    grouped = {
+        label: [row for row in rows if int(row["metadata"]["label"]) == label]
+        for label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)
+    }
+    positive_count = len(grouped[CLASS_POSITIVE])
+    if positive_limit and positive_limit > 0:
+        positive_count = min(positive_count, positive_limit)
+    positive_count = min(
+        positive_count,
+        len(grouped[CLASS_NEGATIVE]) // NEGATIVE_PER_POSITIVE,
+        len(grouped[CLASS_NEUTRAL]) // NEUTRAL_PER_POSITIVE,
+    )
+    if positive_count <= 0:
+        raise RuntimeError(
+            f"Unable to create evaluation dataset after K-line filtering: "
+            f"positive={len(grouped[CLASS_POSITIVE])} "
+            f"negative={len(grouped[CLASS_NEGATIVE])} neutral={len(grouped[CLASS_NEUTRAL])}"
+        )
+    selected: list[dict] = []
+    for label, count in (
+        (CLASS_POSITIVE, positive_count),
+        (CLASS_NEGATIVE, positive_count * NEGATIVE_PER_POSITIVE),
+        (CLASS_NEUTRAL, positive_count * NEUTRAL_PER_POSITIVE),
+    ):
+        selected.extend(_rank_rows(grouped[label], seed, f"evaluation-{CLASS_NAMES[label]}")[:count])
+    return _rank_rows(selected, seed, "evaluation-order")
+
+
 def build_threeclass_dataset(
     output_dir: Path,
     start_date: date,
@@ -441,23 +470,29 @@ def build_threeclass_dataset(
         usable_positive_count = len(positive_rows)
         if positive_limit and positive_limit > 0:
             usable_positive_count = min(usable_positive_count, positive_limit)
-        positive_anchor_dates = {str(row["metadata"]["anchor_date"]) for row in positive_rows[:usable_positive_count]}
-        negative_events = _events_on_anchor_dates(grouped[CLASS_NEGATIVE], positive_anchor_dates)
-        neutral_events = _events_on_anchor_dates(grouped[CLASS_NEUTRAL], positive_anchor_dates)
-        negative_target = min(
-            len(negative_events),
-            usable_positive_count * NEGATIVE_PER_POSITIVE * SUPPORT_SEARCH_MULTIPLIER,
-        )
-        neutral_target = min(
-            len(neutral_events),
-            usable_positive_count * NEUTRAL_PER_POSITIVE * SUPPORT_SEARCH_MULTIPLIER,
-        )
-        print(
-            f"same-date support search positive_dates={len(positive_anchor_dates)} "
-            f"negative_events={len(negative_events)} target={negative_target} "
-            f"neutral_events={len(neutral_events)} target={neutral_target}",
-            flush=True,
-        )
+        if output_split == "test":
+            negative_events = grouped[CLASS_NEGATIVE]
+            neutral_events = grouped[CLASS_NEUTRAL]
+            negative_target = usable_positive_count * NEGATIVE_PER_POSITIVE
+            neutral_target = usable_positive_count * NEUTRAL_PER_POSITIVE
+        else:
+            positive_anchor_dates = {str(row["metadata"]["anchor_date"]) for row in positive_rows[:usable_positive_count]}
+            negative_events = _events_on_anchor_dates(grouped[CLASS_NEGATIVE], positive_anchor_dates)
+            neutral_events = _events_on_anchor_dates(grouped[CLASS_NEUTRAL], positive_anchor_dates)
+            negative_target = min(
+                len(negative_events),
+                usable_positive_count * NEGATIVE_PER_POSITIVE * SUPPORT_SEARCH_MULTIPLIER,
+            )
+            neutral_target = min(
+                len(neutral_events),
+                usable_positive_count * NEUTRAL_PER_POSITIVE * SUPPORT_SEARCH_MULTIPLIER,
+            )
+            print(
+                f"same-date support search positive_dates={len(positive_anchor_dates)} "
+                f"negative_events={len(negative_events)} target={negative_target} "
+                f"neutral_events={len(neutral_events)} target={neutral_target}",
+                flush=True,
+            )
         negative_rows = _materialize_until(
             conn,
             negative_events,
@@ -483,14 +518,16 @@ def build_threeclass_dataset(
             sample_mode,
         )
         materialized = positive_rows + negative_rows + neutral_rows
-    samples = rebalance_materialized_samples(materialized, seed, positive_limit)
     if output_split == "train":
+        samples = rebalance_materialized_samples(materialized, seed, positive_limit)
         train_rows = list(samples)
         test_rows: list[dict] = []
     elif output_split == "test":
+        samples = select_evaluation_samples(materialized, seed, positive_limit)
         train_rows = []
         test_rows = list(samples)
     else:
+        samples = rebalance_materialized_samples(materialized, seed, positive_limit)
         train_rows, test_rows = _stratified_split(samples, train_ratio, seed)
     output_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(output_dir / "train.jsonl", train_rows)

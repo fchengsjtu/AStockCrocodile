@@ -12,6 +12,7 @@ from blackbox_finetune_threeclass.build_dataset import (
     classify_future_path,
     interleave_class_rows,
     rebalance_materialized_samples,
+    select_evaluation_samples,
 )
 from blackbox_finetune_threeclass.common import (
     CLASS_NEGATIVE,
@@ -156,6 +157,20 @@ class ThreeClassTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "strict same-date"):
             rebalance_materialized_samples(rows, seed=7)
+
+    def test_evaluation_selection_does_not_require_same_day_cycles(self):
+        rows = (
+            [sample_on_date(CLASS_POSITIVE, index, "2026-01-05") for index in range(2)]
+            + [sample_on_date(CLASS_NEGATIVE, index + 100, "2026-01-06") for index in range(8)]
+            + [sample_on_date(CLASS_NEUTRAL, index + 200, "2026-01-07") for index in range(22)]
+        )
+        selected = select_evaluation_samples(rows, seed=7)
+        counts = {label: sum(int(row["metadata"]["label"]) == label for row in selected) for label in range(3)}
+        self.assertEqual(counts, {CLASS_NEGATIVE: 8, CLASS_NEUTRAL: 22, CLASS_POSITIVE: 2})
+        self.assertNotEqual(
+            [int(row["metadata"]["label"]) for row in selected[:16]],
+            [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 11,
+        )
 
     def test_interleave_class_rows_uses_one_four_eleven_pattern(self):
         rows = (

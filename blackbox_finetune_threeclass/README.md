@@ -17,7 +17,7 @@ Positive anchors for the same stock use the same 20-trading-day cooldown as reca
 positive : negative : neutral = 1 : 4 : 11
 ```
 
-The builder first selects positive rows, then pairs each kept positive only with negative and neutral rows from the same `anchor_date`. Positives without enough same-day support rows are skipped.
+For training data, the builder first selects positive rows, then pairs each kept positive only with negative and neutral rows from the same `anchor_date`. Positives without enough same-day support rows are skipped. Validation/evaluation data is sampled deterministically but is not organized into same-day cycles.
 
 All samples from `TRAIN_START_DATE` to `TRAIN_END_DATE` are written to the training dataset `train.jsonl`. All samples from `VALIDATION_START_DATE` to `VALIDATION_END_DATE` are written to the validation dataset `test.jsonl`, which is used for checkpoint and final evaluation.
 
