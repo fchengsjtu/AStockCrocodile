@@ -493,6 +493,49 @@ def _next_selection_score_threshold(
     return average_score, max_score, threshold_position, next_threshold
 
 
+def _current_training_parameters() -> dict:
+    return {
+        "positive_ce_weight": _POSITIVE_CE_WEIGHT,
+        "negative_ce_weight": _NEGATIVE_CE_WEIGHT,
+        "neutral_ce_weight": _NEUTRAL_CE_WEIGHT,
+        "fp_loss_weight": _FP_LOSS_WEIGHT,
+        "neutral_fp_loss_weight": _NEUTRAL_FP_LOSS_WEIGHT,
+        "rank_loss_weight": _RANK_LOSS_WEIGHT,
+        "rank_margin": _RANK_MARGIN,
+        "neutral_rank_loss_weight": _NEUTRAL_RANK_LOSS_WEIGHT,
+        "neutral_rank_margin": _NEUTRAL_RANK_MARGIN,
+        "positive_high_score_loss_weight": _POSITIVE_HIGH_SCORE_LOSS_WEIGHT,
+        "positive_high_score_margin": _POSITIVE_HIGH_SCORE_MARGIN,
+        "high_score_ema": _HIGH_SCORE_EMA_ENABLED,
+        "high_score_ema_alpha": _HIGH_SCORE_EMA_ALPHA,
+        "high_score_cutoff_position": _HIGH_SCORE_CUTOFF_POSITION,
+        "high_score_positive_bonus": _HIGH_SCORE_POSITIVE_BONUS,
+        "high_score_positive_bonus_scale": _HIGH_SCORE_POSITIVE_BONUS_SCALE,
+        "high_score_positive_bonus_max_multiplier": _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER,
+        "high_score_negative_penalty_weight": _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT,
+        "high_score_neutral_penalty_weight": _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT,
+        "current_high_score_cutoff": _HIGH_SCORE_CUTOFF,
+    }
+
+
+def _evaluation_parameters(
+    negative_weight: float,
+    neutral_weight: float,
+    threshold_top_ratio: float,
+    max_samples: int,
+    precision_top_k: int,
+    precision_threshold: float,
+) -> dict:
+    return {
+        "negative_weight": negative_weight,
+        "neutral_weight": neutral_weight,
+        "eval_threshold_top_ratio": threshold_top_ratio,
+        "eval_max_samples": max_samples,
+        "eval_precision_top_k": max(1, precision_top_k),
+        "eval_precision_threshold": precision_threshold,
+    }
+
+
 def _evaluate_training_checkpoint(
     model,
     tokenizer,
@@ -598,6 +641,15 @@ def _evaluate_training_checkpoint(
         "eval_threshold_top_ratio": threshold_top_ratio,
         "threshold_position": threshold_position,
         "next_threshold": next_threshold,
+        "training_parameters": _current_training_parameters(),
+        "evaluation_parameters": _evaluation_parameters(
+            negative_weight,
+            neutral_weight,
+            threshold_top_ratio,
+            max_samples,
+            precision_top_k,
+            precision_threshold,
+        ),
     }
     output_path = output_dir / f"eval-update-{update:06d}-progress-{int(round(progress * 1000)):04d}.json"
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -636,6 +688,20 @@ def _evaluate_training_checkpoint(
         f"next_threshold={next_threshold:.6f} "
         f"{target_key}={summary[target_key]:.4f} target={precision_threshold:.4f} "
         f"passed={result['passed']}",
+        flush=True,
+    )
+    params = result["training_parameters"]
+    eval_params = result["evaluation_parameters"]
+    print(
+        "evaluation parameters: "
+        f"ce=({params['positive_ce_weight']:.4g},{params['negative_ce_weight']:.4g},{params['neutral_ce_weight']:.4g}) "
+        f"fp=({params['fp_loss_weight']:.4g},{params['neutral_fp_loss_weight']:.4g}) "
+        f"rank=({params['rank_loss_weight']:.4g},{params['rank_margin']:.4g}) "
+        f"neutral_rank=({params['neutral_rank_loss_weight']:.4g},{params['neutral_rank_margin']:.4g}) "
+        f"high_score_cutoff_position={params['high_score_cutoff_position']:.4g} "
+        f"high_score_bonus=({params['high_score_positive_bonus']:.4g},scale={params['high_score_positive_bonus_scale']:.4g},cap={params['high_score_positive_bonus_max_multiplier']:.4g}) "
+        f"high_score_penalty=({params['high_score_negative_penalty_weight']:.4g},{params['high_score_neutral_penalty_weight']:.4g}) "
+        f"selection_weights=({eval_params['negative_weight']:.4g},{eval_params['neutral_weight']:.4g})",
         flush=True,
     )
     return result

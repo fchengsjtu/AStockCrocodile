@@ -61,7 +61,7 @@ This file explains the important defaults in `scripts/set_wsl_env.sh`. Parameter
 `RANK_LOSS_WEIGHT=1.5`, `RANK_MARGIN=0.25`
 : Requires true negative rows to prefer the negative answer over the positive answer by a margin.
 
-`NEUTRAL_RANK_LOSS_WEIGHT=0.5`, `NEUTRAL_RANK_MARGIN=0.1`
+`NEUTRAL_RANK_LOSS_WEIGHT=0.5`, `NEUTRAL_RANK_MARGIN=0.08`
 : Requires true neutral rows to prefer the neutral answer over the positive answer by a smaller margin. Increase gently if top scores contain too many neutral rows.
 
 ## High-Score Region
@@ -104,6 +104,8 @@ Increase these for stricter filtering at prediction time without changing traini
 
 `EVAL_THRESHOLD_TOP_RATIO=0.2`
 : Evaluation threshold update position between average and max selection score.
+
+Each checkpoint evaluation JSON records the active `training_parameters` and `evaluation_parameters`. Use those fields to compare runs because they preserve the CE weights, false-positive penalties, rank margins, high-score settings, and selection weights that produced the checkpoint result.
 
 ## Runtime And Offline Mode
 

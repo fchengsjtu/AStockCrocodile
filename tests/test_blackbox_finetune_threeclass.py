@@ -585,6 +585,10 @@ class ThreeClassTests(unittest.TestCase):
             self.assertAlmostEqual(result["max_positive_probability"], 0.75)
             self.assertAlmostEqual(result["threshold_position"], 0.8)
             self.assertAlmostEqual(result["next_threshold"], 0.665)
+            self.assertEqual(result["training_parameters"]["rank_loss_weight"], threeclass_train._RANK_LOSS_WEIGHT)
+            self.assertEqual(result["training_parameters"]["neutral_rank_margin"], threeclass_train._NEUTRAL_RANK_MARGIN)
+            self.assertEqual(result["evaluation_parameters"]["negative_weight"], 0.5)
+            self.assertEqual(result["evaluation_parameters"]["eval_precision_top_k"], 10)
             self.assertTrue(list(Path(directory).glob("eval-update-000100-*.json")))
 
 
