@@ -736,6 +736,7 @@ def _patch_base_trainer(initial_binary_adapter_dir: Path | None = None) -> None:
     base_train._load_extra_training_state = _load_extra_training_state
     base_train._build_train_order = _build_balanced_train_order
     base_train._reshuffle_train_order = _reshuffle_balanced_train_order
+    base_train._training_run_summary = _threeclass_training_run_summary
     base_train.TOKEN_CACHE_VERSION = f"{base_train.TOKEN_CACHE_VERSION}_threeclass_asymmetric_v1"
     if initial_binary_adapter_dir is None:
         return
@@ -746,6 +747,31 @@ def _patch_base_trainer(initial_binary_adapter_dir: Path | None = None) -> None:
         return _checkpoint_update_with_initial(checkpoint_dir, initial_path, original_checkpoint_update)
 
     base_train._checkpoint_update = checkpoint_update
+
+
+def _threeclass_training_run_summary(**kwargs) -> str:
+    params = _current_training_parameters()
+    return (
+        f"manual RTX3060 three-class LoRA train rows={kwargs['train_rows']} valid={kwargs['valid_rows']} "
+        f"checkpoint_eval_data_dir={kwargs['checkpoint_eval_data_dir']} "
+        f"updates={kwargs['total_updates']} start_update={kwargs['start_update']} "
+        f"batch_size={kwargs['batch_size']} grad_accum={kwargs['gradient_accumulation_steps']} "
+        f"train_seed={kwargs['train_seed']} lr={kwargs['learning_rate']} weight_decay={kwargs['weight_decay']} "
+        f"max_grad_norm={kwargs['max_grad_norm']} lora_rank={kwargs['lora_rank']} lora_dropout={kwargs['lora_dropout']} "
+        f"max_seq_length={kwargs['max_seq_length']} on_the_fly_tokenize={kwargs['on_the_fly_tokenize']} "
+        f"checkpoint_every={kwargs['checkpoint_every']} checkpoint_evaluate=True "
+        f"eval_threshold={kwargs['evaluation_threshold']} eval_threshold_position={kwargs['evaluation_threshold_position']} "
+        f"eval_precision_top_k={kwargs['evaluation_precision_top_k']} "
+        f"eval_precision_threshold={kwargs['evaluation_precision_threshold']} eval_max_samples={kwargs['evaluation_max_samples']} "
+        f"ce_weights=({params['positive_ce_weight']},{params['negative_ce_weight']},{params['neutral_ce_weight']}) "
+        f"fp_weights=({params['fp_loss_weight']},{params['neutral_fp_loss_weight']}) "
+        f"rank=({params['rank_loss_weight']},{params['rank_margin']}) "
+        f"neutral_rank=({params['neutral_rank_loss_weight']},{params['neutral_rank_margin']}) "
+        f"positive_high_score=({params['positive_high_score_loss_weight']},{params['positive_high_score_margin']}) "
+        f"high_score_ema=({params['high_score_ema']},{params['high_score_ema_alpha']},{params['high_score_cutoff_position']}) "
+        f"high_score_positive_reward=({params['high_score_positive_bonus']},scale={params['high_score_positive_bonus_scale']},cap={params['high_score_positive_bonus_max_multiplier']}) "
+        f"high_score_penalties=({params['high_score_negative_penalty_weight']},{params['high_score_neutral_penalty_weight']})"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -976,13 +1002,13 @@ def main(argv: Iterable[str] | None = None) -> None:
         on_the_fly_tokenize=args.on_the_fly_tokenize,
         positive_loss_weight=1.0,
         negative_loss_weight=1.0,
-        high_score_positive_bonus=args.high_score_positive_bonus,
-        high_score_positive_position=args.high_score_cutoff_position,
-        fp_dynamic_penalty=args.fp_dynamic_penalty,
+        high_score_positive_bonus=0.0,
+        high_score_positive_position=0.0,
+        fp_dynamic_penalty=False,
         fp_penalty_weight=0.0,
-        fp_threshold_ema_alpha=args.fp_threshold_ema_alpha,
-        fp_threshold_min=args.fp_threshold_min,
-        fp_threshold_max=args.fp_threshold_max,
+        fp_threshold_ema_alpha=0.0,
+        fp_threshold_min=0.0,
+        fp_threshold_max=1.0,
     )
 
 

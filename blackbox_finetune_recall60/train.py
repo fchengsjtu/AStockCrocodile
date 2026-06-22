@@ -92,6 +92,26 @@ def _reshuffle_train_order(train_order: list[int], train_items: list[dict], rng)
     rng.shuffle(train_order)
 
 
+def _training_run_summary(**kwargs) -> str:
+    return (
+        f"manual RTX3060 LoRA train rows={kwargs['train_rows']} valid={kwargs['valid_rows']} "
+        f"checkpoint_eval_data_dir={kwargs['checkpoint_eval_data_dir']} "
+        f"updates={kwargs['total_updates']} start_update={kwargs['start_update']} batch_size={kwargs['batch_size']} grad_accum={kwargs['gradient_accumulation_steps']} "
+        f"train_seed={kwargs['train_seed']} lr={kwargs['learning_rate']} weight_decay={kwargs['weight_decay']} max_grad_norm={kwargs['max_grad_norm']} lora_rank={kwargs['lora_rank']} lora_dropout={kwargs['lora_dropout']} "
+        f"max_seq_length={kwargs['max_seq_length']} on_the_fly_tokenize={kwargs['on_the_fly_tokenize']} "
+        f"positive_loss_weight={kwargs['positive_loss_weight']} negative_loss_weight={kwargs['negative_loss_weight']} "
+        f"high_score_positive_bonus={kwargs['high_score_positive_bonus']} high_score_positive_position={kwargs['high_score_positive_position']} "
+        f"high_score_positive_cutoff={kwargs['high_score_positive_cutoff']} "
+        f"checkpoint_every={kwargs['checkpoint_every']} checkpoint_evaluate=True eval_threshold={kwargs['evaluation_threshold']} "
+        f"eval_threshold_position={kwargs['evaluation_threshold_position']} "
+        f"eval_precision_top_k={kwargs['evaluation_precision_top_k']} "
+        f"eval_precision_threshold={kwargs['evaluation_precision_threshold']} eval_max_samples={kwargs['evaluation_max_samples']} "
+        f"fp_dynamic_penalty={kwargs['fp_dynamic_penalty']} fp_penalty_weight={kwargs['fp_penalty_weight']} "
+        f"fp_threshold_ema_alpha={kwargs['fp_threshold_ema_alpha']} fp_threshold_min={kwargs['fp_threshold_min']} "
+        f"fp_threshold_max={kwargs['fp_threshold_max']} fp_penalty_cutoff={kwargs['fp_penalty_cutoff']}"
+    )
+
+
 def _torch_state_to_device(value, device: str):
     if isinstance(value, dict):
         return {key: _torch_state_to_device(item, device) for key, item in value.items()}
@@ -801,21 +821,40 @@ def train_recall60_lora(
     if not restored_training_state:
         train_order = _build_train_order(train_items, train_seed, rng)
     print(
-        f"manual RTX3060 LoRA train rows={len(train_items)} valid={len(valid_rows)} "
-        f"checkpoint_eval_data_dir={checkpoint_eval_data_dir or data_dir} "
-        f"updates={total_updates} start_update={start_update} batch_size={batch_size} grad_accum={gradient_accumulation_steps} "
-        f"train_seed={train_seed} lr={learning_rate} weight_decay={weight_decay} max_grad_norm={max_grad_norm} lora_rank={lora_rank} lora_dropout={lora_dropout} "
-        f"max_seq_length={max_seq_length} on_the_fly_tokenize={on_the_fly_tokenize} "
-        f"positive_loss_weight={positive_loss_weight} negative_loss_weight={negative_loss_weight} "
-        f"high_score_positive_bonus={high_score_positive_bonus} high_score_positive_position={high_score_positive_position} "
-        f"high_score_positive_cutoff={high_score_positive_cutoff} "
-        f"checkpoint_every={checkpoint_every} checkpoint_evaluate=True eval_threshold={evaluation_threshold} "
-        f"eval_threshold_position={evaluation_threshold_position} "
-        f"eval_precision_top_k={evaluation_precision_top_k} "
-        f"eval_precision_threshold={evaluation_precision_threshold} eval_max_samples={evaluation_max_samples} "
-        f"fp_dynamic_penalty={fp_dynamic_penalty} fp_penalty_weight={fp_penalty_weight} "
-        f"fp_threshold_ema_alpha={fp_threshold_ema_alpha} fp_threshold_min={fp_threshold_min} "
-        f"fp_threshold_max={fp_threshold_max} fp_penalty_cutoff={fp_penalty_cutoff}",
+        _training_run_summary(
+            train_rows=len(train_items),
+            valid_rows=len(valid_rows),
+            checkpoint_eval_data_dir=checkpoint_eval_data_dir or data_dir,
+            total_updates=total_updates,
+            start_update=start_update,
+            batch_size=batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            train_seed=train_seed,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            max_grad_norm=max_grad_norm,
+            lora_rank=lora_rank,
+            lora_dropout=lora_dropout,
+            max_seq_length=max_seq_length,
+            on_the_fly_tokenize=on_the_fly_tokenize,
+            positive_loss_weight=positive_loss_weight,
+            negative_loss_weight=negative_loss_weight,
+            high_score_positive_bonus=high_score_positive_bonus,
+            high_score_positive_position=high_score_positive_position,
+            high_score_positive_cutoff=high_score_positive_cutoff,
+            checkpoint_every=checkpoint_every,
+            evaluation_threshold=evaluation_threshold,
+            evaluation_threshold_position=evaluation_threshold_position,
+            evaluation_precision_top_k=evaluation_precision_top_k,
+            evaluation_precision_threshold=evaluation_precision_threshold,
+            evaluation_max_samples=evaluation_max_samples,
+            fp_dynamic_penalty=fp_dynamic_penalty,
+            fp_penalty_weight=fp_penalty_weight,
+            fp_threshold_ema_alpha=fp_threshold_ema_alpha,
+            fp_threshold_min=fp_threshold_min,
+            fp_threshold_max=fp_threshold_max,
+            fp_penalty_cutoff=fp_penalty_cutoff,
+        ),
         flush=True,
     )
     if start_update >= total_updates:

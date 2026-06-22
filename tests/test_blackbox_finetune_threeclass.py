@@ -206,10 +206,39 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(kwargs["evaluation_threshold_position"], 0.2)
         self.assertEqual(kwargs["positive_loss_weight"], 1.0)
         self.assertEqual(kwargs["negative_loss_weight"], 1.0)
-        self.assertEqual(kwargs["high_score_positive_bonus"], 1.0)
-        self.assertEqual(kwargs["high_score_positive_position"], 0.6)
-        self.assertTrue(kwargs["fp_dynamic_penalty"])
+        self.assertEqual(kwargs["high_score_positive_bonus"], 0.0)
+        self.assertEqual(kwargs["high_score_positive_position"], 0.0)
+        self.assertFalse(kwargs["fp_dynamic_penalty"])
         self.assertEqual(kwargs["fp_penalty_weight"], 0.0)
+
+    def test_threeclass_training_summary_hides_binary_only_parameters(self):
+        summary = threeclass_train._threeclass_training_run_summary(
+            train_rows=10,
+            valid_rows=2,
+            checkpoint_eval_data_dir=Path("validation-dir"),
+            total_updates=3,
+            start_update=0,
+            batch_size=1,
+            gradient_accumulation_steps=32,
+            train_seed=937498347,
+            learning_rate=5e-6,
+            weight_decay=0.05,
+            max_grad_norm=1.0,
+            lora_rank=8,
+            lora_dropout=0.3,
+            max_seq_length=3072,
+            on_the_fly_tokenize=True,
+            checkpoint_every=50,
+            evaluation_threshold=0.48,
+            evaluation_threshold_position=0.2,
+            evaluation_precision_top_k=10,
+            evaluation_precision_threshold=0.4,
+            evaluation_max_samples=750,
+        )
+        self.assertIn("three-class LoRA train", summary)
+        self.assertIn("high_score_positive_reward=", summary)
+        self.assertNotIn("fp_penalty_weight", summary)
+        self.assertNotIn("fp_threshold_ema_alpha", summary)
 
     def test_high_score_ema_can_be_disabled_by_argument(self):
         args = threeclass_train.build_parser().parse_args(["--no-high-score-ema"])
