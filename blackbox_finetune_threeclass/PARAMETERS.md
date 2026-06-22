@@ -78,13 +78,13 @@ The default training class ratio is `positive:negative:neutral = 1:4:11`. One fu
 : Push true positive rows above the high-score cutoff plus a margin. Raise the margin only if positives do not reach the high-score region.
 
 `HIGH_SCORE_POSITIVE_BONUS=2.0`
-: Explicit reward subtracted from loss when true positive rows enter the high-score region.
+: Enables the explicit positive reward when greater than zero. The reward is only active when the highest Positive-answer score in the batch belongs to a true positive row.
 
 `HIGH_SCORE_POSITIVE_BONUS_SCALE=0.02`
-: Controls how quickly the reward increases as positive score exceeds the cutoff. Smaller values make the reward more aggressive.
+: Kept for command compatibility; the current top-margin positive reward does not use this scale value.
 
 `HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER=60.0`
-: Caps the positive high-score reward. Lower it if `grad_norm` spikes after positive reward hits.
+: Multiplies the margin between the batch's highest and second-highest Positive-answer scores when the top-scored row is a true positive.
 
 `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=20.0`
 : Penalizes true negative rows that enter the high-score region.

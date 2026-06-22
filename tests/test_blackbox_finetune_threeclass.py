@@ -459,7 +459,7 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(float(low_rank), 0.0)
         self.assertAlmostEqual(float(high_rank), 0.03, places=6)
 
-    def test_positive_high_score_reward_increases_with_score(self):
+    def test_positive_high_score_reward_requires_positive_top_score(self):
         try:
             import torch
         except ModuleNotFoundError:
@@ -486,12 +486,18 @@ class ThreeClassTests(unittest.TestCase):
             1.0,
             0.5,
         )
-        rewards = threeclass_train._positive_high_score_rewards(
-            torch.tensor([0.50, 0.55, 0.70]),
-            torch.tensor(0.50),
+        reward, hit = threeclass_train._positive_high_score_reward(
+            torch.tensor([0.80, 0.70, 0.60]),
+            torch.tensor([CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL]),
         )
-        self.assertGreater(float(rewards[1]), float(rewards[0]))
-        self.assertEqual(float(rewards[2]), 8.0)
+        self.assertEqual(hit, 1.0)
+        self.assertAlmostEqual(float(reward), 0.8, places=6)
+        no_reward, no_hit = threeclass_train._positive_high_score_reward(
+            torch.tensor([0.80, 0.70, 0.60]),
+            torch.tensor([CLASS_NEGATIVE, CLASS_POSITIVE, CLASS_NEUTRAL]),
+        )
+        self.assertEqual(no_hit, 0.0)
+        self.assertEqual(float(no_reward), 0.0)
 
     def test_probabilities_are_normalized_and_follow_loss(self):
         probabilities = probabilities_from_losses({CLASS_NEGATIVE: 2.0, CLASS_NEUTRAL: 1.0, CLASS_POSITIVE: 0.5})

@@ -233,15 +233,16 @@ def _update_high_score_cutoff(scores) -> tuple[float, float]:
     return raw_value, float(_HIGH_SCORE_CUTOFF)
 
 
-def _positive_high_score_rewards(hit_scores, cutoff_tensor):
-    import torch.nn.functional as functional
-
-    rewards = _HIGH_SCORE_POSITIVE_BONUS * (
-        1.0 + functional.relu(hit_scores - cutoff_tensor) / _HIGH_SCORE_POSITIVE_BONUS_SCALE
-    )
-    if _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER > 0:
-        rewards = rewards.clamp(max=_HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER)
-    return rewards
+def _positive_high_score_reward(positive_answer_scores, monitored_labels):
+    if positive_answer_scores.numel() < 2 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
+        return positive_answer_scores.new_zeros(()), 0.0
+    top_values, top_indices = positive_answer_scores.topk(2)
+    top_label = int(monitored_labels[top_indices[0]].detach().cpu())
+    if top_label != CLASS_POSITIVE:
+        return positive_answer_scores.new_zeros(()), 0.0
+    margin = top_values[0] - top_values[1]
+    reward = margin * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+    return reward, 1.0
 
 
 def _compute_asymmetric_training_loss(
@@ -363,10 +364,11 @@ def _compute_asymmetric_training_loss(
         high_score_mask = positive_answer_scores.detach().ge(cutoff_tensor)
         positive_hits_mask = positive_mask.logical_and(high_score_mask)
         high_score_positive_hits = int(positive_hits_mask.sum().detach().cpu())
-        if high_score_positive_hits and _HIGH_SCORE_POSITIVE_BONUS > 0:
-            hit_positions = positive_hits_mask.nonzero(as_tuple=False).flatten()
-            hit_scores = positive_answer_scores[hit_positions]
-            high_score_positive_reward = _positive_high_score_rewards(hit_scores, cutoff_tensor).mean()
+        if _HIGH_SCORE_POSITIVE_BONUS > 0:
+            high_score_positive_reward, high_score_positive_hits = _positive_high_score_reward(
+                positive_answer_scores,
+                monitored_labels,
+            )
         if _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT > 0 and bool(negative_mask.any()):
             negative_scores = positive_answer_scores[negative_mask]
             high_score_negative_penalty = functional.relu(negative_scores - cutoff_tensor).mean()
@@ -538,7 +540,6 @@ def _current_training_parameters() -> dict:
         "high_score_ema_alpha": _HIGH_SCORE_EMA_ALPHA,
         "high_score_cutoff_position": _HIGH_SCORE_CUTOFF_POSITION,
         "high_score_positive_bonus": _HIGH_SCORE_POSITIVE_BONUS,
-        "high_score_positive_bonus_scale": _HIGH_SCORE_POSITIVE_BONUS_SCALE,
         "high_score_positive_bonus_max_multiplier": _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER,
         "high_score_negative_penalty_weight": _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT,
         "high_score_neutral_penalty_weight": _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT,
@@ -727,7 +728,7 @@ def _evaluate_training_checkpoint(
         f"rank=({params['rank_loss_weight']:.4g},{params['rank_margin']:.4g}) "
         f"neutral_rank=({params['neutral_rank_loss_weight']:.4g},{params['neutral_rank_margin']:.4g}) "
         f"high_score_cutoff_position={params['high_score_cutoff_position']:.4g} "
-        f"high_score_bonus=({params['high_score_positive_bonus']:.4g},scale={params['high_score_positive_bonus_scale']:.4g},cap={params['high_score_positive_bonus_max_multiplier']:.4g}) "
+        f"high_score_positive_reward=(enabled={params['high_score_positive_bonus']:.4g},top_margin_multiplier={params['high_score_positive_bonus_max_multiplier']:.4g}) "
         f"high_score_penalty=({params['high_score_negative_penalty_weight']:.4g},{params['high_score_neutral_penalty_weight']:.4g}) "
         f"selection_weights=({eval_params['negative_weight']:.4g},{eval_params['neutral_weight']:.4g})",
         flush=True,
@@ -797,7 +798,7 @@ def _threeclass_training_run_summary(**kwargs) -> str:
         f"neutral_rank=({params['neutral_rank_loss_weight']},{params['neutral_rank_margin']}) "
         f"positive_high_score=({params['positive_high_score_loss_weight']},{params['positive_high_score_margin']}) "
         f"high_score_ema=({params['high_score_ema']},{params['high_score_ema_alpha']},{params['high_score_cutoff_position']}) "
-        f"high_score_positive_reward=({params['high_score_positive_bonus']},scale={params['high_score_positive_bonus_scale']},cap={params['high_score_positive_bonus_max_multiplier']}) "
+        f"high_score_positive_reward=(enabled={params['high_score_positive_bonus']},top_margin_multiplier={params['high_score_positive_bonus_max_multiplier']}) "
         f"high_score_penalties=({params['high_score_negative_penalty_weight']},{params['high_score_neutral_penalty_weight']})"
     )
 
