@@ -100,7 +100,7 @@ FP_DYNAMIC_PENALTY=1
 
 `POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. For a true neutral sample, `neutral_fp_loss` compares `{"c":"positive"}` with `{"c":"neutral"}` and applies a lower-weight penalty when neutral rows look positive. With the default 1:4:11 class cycle and `batch_size=1`, these false-positive losses are scaled so gradient accumulation behaves like a full effective batch: negative fp is averaged over the 4 negative rows and neutral fp is averaged over the 11 neutral rows, rather than being diluted by the other classes.
 
-The high-score terms compare the Positive-answer scores inside the current training batch:
+The high-score terms compare the Positive-answer scores once per optimizer update, after the full gradient-accumulation window is collected:
 
 ```text
 positive_answer_score = -positive_nll
@@ -121,7 +121,7 @@ top1_neutral_penalty =
         * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
 ```
 
-For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit high-score reward or penalty is applied only to the batch top-1 row by Positive-answer score, using the top1-versus-next-four-average margin rule above. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_hits`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
+For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit high-score reward or penalty is applied only once per optimizer update to the gradient-accumulation window's top-1 row by Positive-answer score, using the top1-versus-next-four-average margin rule above. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_hits`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 
