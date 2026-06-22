@@ -78,10 +78,8 @@ total_loss =
     weighted_CE
     + FP_LOSS_WEIGHT * negative_fp_loss
     + NEUTRAL_FP_LOSS_WEIGHT * neutral_fp_loss
-    + RANK_LOSS_WEIGHT * negative_positive_ranking_loss
-    + NEUTRAL_RANK_LOSS_WEIGHT * neutral_positive_ranking_loss
-    + HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT * high_score_neutral_loss
-    + POSITIVE_HIGH_SCORE_LOSS_WEIGHT * positive_high_score_loss
+    + top3_negative_penalty
+    + top3_neutral_penalty
     - high_score_positive_reward
 ```
 
@@ -93,39 +91,34 @@ NEGATIVE_CE_WEIGHT=1.0
 NEUTRAL_CE_WEIGHT=0.5
 FP_LOSS_WEIGHT=1.0
 NEUTRAL_FP_LOSS_WEIGHT=0.3
-RANK_LOSS_WEIGHT=0.5
-RANK_MARGIN=0.2
-NEUTRAL_RANK_LOSS_WEIGHT=0.2
-NEUTRAL_RANK_MARGIN=0.05
-POSITIVE_HIGH_SCORE_LOSS_WEIGHT=1.0
-POSITIVE_HIGH_SCORE_MARGIN=0.0
-HIGH_SCORE_EMA=1
-HIGH_SCORE_EMA_ALPHA=0.02
-HIGH_SCORE_CUTOFF_POSITION=0.6
 HIGH_SCORE_POSITIVE_BONUS=1.0
-HIGH_SCORE_POSITIVE_BONUS_SCALE=0.05
 HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER=8.0
 HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=1.0
 HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT=0.5
 FP_DYNAMIC_PENALTY=1
 ```
 
-`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. For a true neutral sample, `neutral_fp_loss` compares `{"c":"positive"}` with `{"c":"neutral"}` and applies a lower-weight penalty when neutral rows look positive. `high_score_neutral_loss` is `relu(neutral_positive_score - ema_cutoff)`, directly penalizing neutral rows that enter the positive high-score region. The negative ranking term is `relu(RANK_MARGIN + negative_nll - positive_nll)`, requiring the complete negative answer score to exceed the positive answer score by `RANK_MARGIN`. The neutral ranking term is `relu(NEUTRAL_RANK_MARGIN + neutral_nll - positive_nll)`, using a smaller margin and weight so neutral rows are discouraged from looking positive without being treated as strongly as downside samples. `positive_high_score_loss` is `relu(ema_cutoff + POSITIVE_HIGH_SCORE_MARGIN - positive_answer_score)` for true positive samples, explicitly pushing positives into the high-score region. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `rank`, `neutral_rank`, `high_score_neutral`, and `positive_high_score`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
+`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. For a true neutral sample, `neutral_fp_loss` compares `{"c":"positive"}` with `{"c":"neutral"}` and applies a lower-weight penalty when neutral rows look positive.
 
-When `HIGH_SCORE_EMA=1`, training also keeps an in-batch EMA cutoff for high positive-answer-score samples. To keep training stable on 12GB GPUs, this uses the already-needed positive answer NLL instead of re-scoring all three classes for every row:
+The high-score terms compare the Positive-answer scores inside the current training batch:
 
 ```text
 positive_answer_score = -positive_nll
 
-raw_cutoff = batch_avg_positive_answer_score
-    + HIGH_SCORE_CUTOFF_POSITION
-      * (batch_max_positive_answer_score - batch_avg_positive_answer_score)
+high_score_positive_reward =
+    (top1_score - top2_score) * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+    only when the top1 row is a true positive
 
-ema_cutoff = HIGH_SCORE_EMA_ALPHA * raw_cutoff
-    + (1 - HIGH_SCORE_EMA_ALPHA) * previous_ema_cutoff
+top3_negative_penalty =
+    sum((top_i_score - top4_score) * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT)
+    for true negative rows among top1/top2/top3
+
+top3_neutral_penalty =
+    sum((top_i_score - top4_score) * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT)
+    for true neutral rows among top1/top2/top3
 ```
 
-For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss` and ranking loss. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss` or `high_score_neutral_loss`. The explicit positive reward is applied only when the highest Positive-answer score in the current batch belongs to a true positive row. The reward subtracted from loss is `(top1_positive_score - top2_positive_score) * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER`. This rewards a true positive only when it actually outranks all negative and neutral rows in the batch. True negative samples above `ema_cutoff` receive an additional linear penalty weighted by `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`; true neutral samples above the same cutoff receive `HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT`. Use a small `HIGH_SCORE_EMA_ALPHA` such as `0.02` to keep the cutoff from chasing noisy mini-batches.
+For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit positive reward is applied only when the highest Positive-answer score in the current batch belongs to a true positive row. True negative and neutral rows are penalized only when they enter the batch top 3 by Positive-answer score. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_hits`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 

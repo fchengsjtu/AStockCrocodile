@@ -301,10 +301,6 @@ class ThreeClassTests(unittest.TestCase):
         self.assertNotIn("fp_penalty_weight", summary)
         self.assertNotIn("fp_threshold_ema_alpha", summary)
 
-    def test_high_score_ema_can_be_disabled_by_argument(self):
-        args = threeclass_train.build_parser().parse_args(["--no-high-score-ema"])
-        self.assertFalse(args.high_score_ema)
-
     def test_three_class_answers_are_compact(self):
         self.assertEqual(label_answer(CLASS_POSITIVE), '{"c":"positive"}')
         self.assertEqual(label_answer(CLASS_NEGATIVE), '{"c":"negative"}')
@@ -350,30 +346,20 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.neutral_ce_weight, 0.5)
         self.assertEqual(args.fp_loss_weight, 1.0)
         self.assertEqual(args.neutral_fp_loss_weight, 0.3)
-        self.assertEqual(args.rank_loss_weight, 0.5)
-        self.assertEqual(args.rank_margin, 0.2)
-        self.assertEqual(args.neutral_rank_loss_weight, 0.2)
-        self.assertEqual(args.neutral_rank_margin, 0.05)
-        self.assertEqual(args.positive_high_score_loss_weight, 1.0)
-        self.assertEqual(args.positive_high_score_margin, 0.0)
-        self.assertTrue(args.high_score_ema)
-        self.assertEqual(args.high_score_ema_alpha, 0.02)
-        self.assertEqual(args.high_score_cutoff_position, 0.6)
         self.assertEqual(args.high_score_positive_bonus, 1.0)
-        self.assertEqual(args.high_score_positive_bonus_scale, 0.05)
         self.assertEqual(args.high_score_positive_bonus_max_multiplier, 8.0)
         self.assertEqual(args.high_score_negative_penalty_weight, 1.0)
         self.assertEqual(args.high_score_neutral_penalty_weight, 0.5)
         self.assertTrue(args.fp_dynamic_penalty)
 
-    def test_threeclass_extra_training_state_preserves_high_score_cutoff(self):
-        threeclass_train._load_extra_training_state({"high_score_cutoff": -0.75})
+    def test_threeclass_extra_training_state_is_empty(self):
+        threeclass_train._load_extra_training_state({"legacy_state": -0.75})
 
         state = threeclass_train._extra_training_state()
-        threeclass_train._load_extra_training_state({"high_score_cutoff": None})
+        threeclass_train._load_extra_training_state({"legacy_state": None})
 
-        self.assertAlmostEqual(state["high_score_cutoff"], -0.75)
-        self.assertIsNone(threeclass_train._extra_training_state()["high_score_cutoff"])
+        self.assertEqual(state, {})
+        self.assertEqual(threeclass_train._extra_training_state(), {})
 
     def test_threeclass_tokenization_preserves_class_label(self):
         class FakeTokenizer:
@@ -399,31 +385,15 @@ class ThreeClassTests(unittest.TestCase):
         except ModuleNotFoundError:
             self.skipTest("torch is not installed in this environment")
 
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 0.2, 0.05, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
-        low_fp, low_rank = threeclass_train._negative_auxiliary_losses(
+        low_fp = threeclass_train._negative_auxiliary_losses(
             torch.tensor([0.0]),
             torch.tensor([2.0]),
         )
-        high_fp, high_rank = threeclass_train._negative_auxiliary_losses(
+        high_fp = threeclass_train._negative_auxiliary_losses(
             torch.tensor([2.0]),
             torch.tensor([0.0]),
         )
         self.assertLess(float(low_fp), float(high_fp))
-        self.assertEqual(float(low_rank), 0.0)
-        self.assertGreater(float(high_rank), 2.0)
-
-    def test_negative_ranking_loss_uses_margin_plus_negative_minus_positive_nll(self):
-        try:
-            import torch
-        except ModuleNotFoundError:
-            self.skipTest("torch is not installed in this environment")
-
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 0.2, 0.05, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
-        _, rank = threeclass_train._negative_auxiliary_losses(
-            torch.tensor([0.4]),
-            torch.tensor([0.5]),
-        )
-        self.assertAlmostEqual(float(rank), 0.1, places=6)
 
     def test_neutral_false_positive_loss_penalizes_preferred_positive_answer(self):
         try:
@@ -441,24 +411,6 @@ class ThreeClassTests(unittest.TestCase):
         )
         self.assertLess(float(low_fp), float(high_fp))
 
-    def test_neutral_ranking_loss_uses_neutral_margin(self):
-        try:
-            import torch
-        except ModuleNotFoundError:
-            self.skipTest("torch is not installed in this environment")
-
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 0.5, 0.2, 0.2, 0.05, 1.0, 0.0, True, 0.02, 0.8, 1.0, 0.05, 8.0, 1.0, 0.5)
-        low_rank = threeclass_train._neutral_ranking_loss(
-            torch.tensor([0.4]),
-            torch.tensor([0.6]),
-        )
-        high_rank = threeclass_train._neutral_ranking_loss(
-            torch.tensor([0.4]),
-            torch.tensor([0.42]),
-        )
-        self.assertEqual(float(low_rank), 0.0)
-        self.assertAlmostEqual(float(high_rank), 0.03, places=6)
-
     def test_positive_high_score_reward_requires_positive_top_score(self):
         try:
             import torch
@@ -471,17 +423,7 @@ class ThreeClassTests(unittest.TestCase):
             0.5,
             1.0,
             0.3,
-            0.5,
-            0.2,
-            0.2,
-            0.05,
-            1.0,
-            0.0,
-            True,
-            0.02,
-            0.8,
             2.0,
-            0.05,
             8.0,
             1.0,
             0.5,
@@ -498,6 +440,30 @@ class ThreeClassTests(unittest.TestCase):
         )
         self.assertEqual(no_hit, 0.0)
         self.assertEqual(float(no_reward), 0.0)
+
+    def test_top_nonpositive_high_score_penalties_use_top3_against_fourth(self):
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch is not installed in this environment")
+
+        threeclass_train._configure_asymmetric_loss(
+            2.0,
+            1.0,
+            0.5,
+            1.0,
+            0.3,
+            1.0,
+            8.0,
+            10.0,
+            5.0,
+        )
+        negative_penalty, neutral_penalty = threeclass_train._top_nonpositive_high_score_penalties(
+            torch.tensor([0.90, 0.80, 0.70, 0.60, 0.50]),
+            torch.tensor([CLASS_NEGATIVE, CLASS_NEUTRAL, CLASS_POSITIVE, CLASS_POSITIVE, CLASS_NEGATIVE]),
+        )
+        self.assertAlmostEqual(float(negative_penalty), 3.0, places=6)
+        self.assertAlmostEqual(float(neutral_penalty), 1.0, places=6)
 
     def test_probabilities_are_normalized_and_follow_loss(self):
         probabilities = probabilities_from_losses({CLASS_NEGATIVE: 2.0, CLASS_NEUTRAL: 1.0, CLASS_POSITIVE: 0.5})
@@ -681,8 +647,8 @@ class ThreeClassTests(unittest.TestCase):
             self.assertAlmostEqual(result["max_positive_probability"], 0.75)
             self.assertAlmostEqual(result["threshold_position"], 0.8)
             self.assertAlmostEqual(result["next_threshold"], 0.665)
-            self.assertEqual(result["training_parameters"]["rank_loss_weight"], threeclass_train._RANK_LOSS_WEIGHT)
-            self.assertEqual(result["training_parameters"]["neutral_rank_margin"], threeclass_train._NEUTRAL_RANK_MARGIN)
+            self.assertNotIn("unused_pairwise_order_loss_weight", result["training_parameters"])
+            self.assertNotIn("legacy_high_score_boundary_position", result["training_parameters"])
             self.assertEqual(result["evaluation_parameters"]["negative_weight"], 0.5)
             self.assertEqual(result["evaluation_parameters"]["eval_precision_top_k"], 10)
             self.assertTrue(list(Path(directory).glob("eval-update-000100-*.json")))

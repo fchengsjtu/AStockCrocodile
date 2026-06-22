@@ -60,37 +60,19 @@ The default training class ratio is `positive:negative:neutral = 1:4:11`. One fu
 `NEUTRAL_FP_LOSS_WEIGHT=0.8`
 : Similar to `FP_LOSS_WEIGHT`, but for true neutral rows. It is lower because neutral rows are less harmful than downside samples.
 
-`RANK_LOSS_WEIGHT=1.5`, `RANK_MARGIN=0.25`
-: Requires true negative rows to prefer the negative answer over the positive answer by a margin.
-
-`NEUTRAL_RANK_LOSS_WEIGHT=0.5`, `NEUTRAL_RANK_MARGIN=0.08`
-: Requires true neutral rows to prefer the neutral answer over the positive answer by a smaller margin. Increase gently if top scores contain too many neutral rows.
-
-## High-Score Region
-
-`HIGH_SCORE_EMA=1`, `HIGH_SCORE_EMA_ALPHA=0.02`
-: Maintains a stable EMA cutoff for the high-score region. Smaller alpha makes the cutoff less noisy.
-
-`HIGH_SCORE_CUTOFF_POSITION=0.75`
-: Raw cutoff position between batch average score and batch max score. Higher values define a stricter high-score region.
-
-`POSITIVE_HIGH_SCORE_LOSS_WEIGHT=50.0`, `POSITIVE_HIGH_SCORE_MARGIN=0.05`
-: Push true positive rows above the high-score cutoff plus a margin. Raise the margin only if positives do not reach the high-score region.
+## Batch Top-Score Reward And Penalty
 
 `HIGH_SCORE_POSITIVE_BONUS=2.0`
 : Enables the explicit positive reward when greater than zero. The reward is only active when the highest Positive-answer score in the batch belongs to a true positive row.
-
-`HIGH_SCORE_POSITIVE_BONUS_SCALE=0.02`
-: Kept for command compatibility; the current top-margin positive reward does not use this scale value.
 
 `HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER=60.0`
 : Multiplies the margin between the batch's highest and second-highest Positive-answer scores when the top-scored row is a true positive.
 
 `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=20.0`
-: Penalizes true negative rows that enter the high-score region.
+: Penalizes true negative rows that enter the batch top 3 by Positive-answer score. The penalty is `(row_score - fourth_score) * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`.
 
 `HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT=15`
-: Penalizes true neutral rows that enter the high-score region.
+: Penalizes true neutral rows that enter the batch top 3 by Positive-answer score. The penalty is `(row_score - fourth_score) * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT`.
 
 ## Evaluation And Prediction Ranking
 
@@ -107,7 +89,7 @@ Increase these for stricter filtering at prediction time without changing traini
 `EVAL_THRESHOLD_TOP_RATIO=0.2`
 : Evaluation threshold update position between average and max selection score.
 
-Each checkpoint evaluation JSON records the active `training_parameters` and `evaluation_parameters`. Use those fields to compare runs because they preserve the CE weights, false-positive penalties, rank margins, high-score settings, and selection weights that produced the checkpoint result.
+Each checkpoint evaluation JSON records the active `training_parameters` and `evaluation_parameters`. Use those fields to compare runs because they preserve the CE weights, false-positive penalties, batch top-score reward/penalty settings, and selection weights that produced the checkpoint result.
 
 ## Runtime And Offline Mode
 
