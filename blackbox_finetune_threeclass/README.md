@@ -98,7 +98,7 @@ HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT=0.5
 FP_DYNAMIC_PENALTY=1
 ```
 
-`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. For a true neutral sample, `neutral_fp_loss` compares `{"c":"positive"}` with `{"c":"neutral"}` and applies a lower-weight penalty when neutral rows look positive.
+`POSITIVE_CE_WEIGHT`, `NEGATIVE_CE_WEIGHT`, and `NEUTRAL_CE_WEIGHT` control the base CE contribution for each true class. For a true negative sample, `negative_fp_loss` compares the complete `{"c":"positive"}` and `{"c":"negative"}` answer NLL values, exactly matching the probability calculation used by inference. For a true neutral sample, `neutral_fp_loss` compares `{"c":"positive"}` with `{"c":"neutral"}` and applies a lower-weight penalty when neutral rows look positive. With the default 1:4:11 class cycle and `batch_size=1`, these false-positive losses are scaled so gradient accumulation behaves like a full effective batch: negative fp is averaged over the 4 negative rows and neutral fp is averaged over the 11 neutral rows, rather than being diluted by the other classes.
 
 The high-score terms compare the Positive-answer scores inside the current training batch:
 

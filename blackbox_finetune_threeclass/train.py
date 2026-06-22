@@ -135,6 +135,14 @@ def _neutral_false_positive_loss(neutral_nll, positive_nll):
     return functional.softplus(score_delta).mean()
 
 
+def _class_window_mean_scale(class_label: int, class_labels, gradient_accumulation_steps: int | None) -> float:
+    if gradient_accumulation_steps is None or int(gradient_accumulation_steps) <= 1:
+        return 1.0
+    pattern = _class_pattern()
+    class_count = max(1, pattern.count(class_label))
+    return len(pattern) / class_count
+
+
 def _answer_tensors_for_indices(
     tokenizer,
     tensors: dict,
@@ -286,6 +294,11 @@ def _compute_asymmetric_training_loss(
             negative_nll,
             positive_nll,
         )
+        negative_fp_loss = negative_fp_loss * _class_window_mean_scale(
+            CLASS_NEGATIVE,
+            class_labels,
+            gradient_accumulation_steps,
+        )
     else:
         positive_nll = None
         negative_fp_loss = correct_nll.new_zeros(())
@@ -309,6 +322,11 @@ def _compute_asymmetric_training_loss(
         if _NEUTRAL_FP_LOSS_WEIGHT > 0:
             neutral_nll = correct_nll[neutral_indices]
             neutral_fp_loss = _neutral_false_positive_loss(neutral_nll, neutral_positive_nll)
+            neutral_fp_loss = neutral_fp_loss * _class_window_mean_scale(
+                CLASS_NEUTRAL,
+                class_labels,
+                gradient_accumulation_steps,
+            )
         else:
             neutral_fp_loss = correct_nll.new_zeros(())
     else:

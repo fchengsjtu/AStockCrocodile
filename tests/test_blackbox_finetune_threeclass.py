@@ -411,6 +411,26 @@ class ThreeClassTests(unittest.TestCase):
         )
         self.assertLess(float(low_fp), float(high_fp))
 
+    def test_fp_losses_are_scaled_to_class_mean_over_accumulation_window(self):
+        try:
+            import torch
+        except ModuleNotFoundError:
+            self.skipTest("torch is not installed in this environment")
+
+        labels = torch.tensor([CLASS_NEGATIVE])
+        self.assertAlmostEqual(
+            threeclass_train._class_window_mean_scale(CLASS_NEGATIVE, labels, 16),
+            4.0,
+        )
+        self.assertAlmostEqual(
+            threeclass_train._class_window_mean_scale(CLASS_NEUTRAL, labels, 16),
+            16 / 11,
+        )
+        self.assertEqual(
+            threeclass_train._class_window_mean_scale(CLASS_NEGATIVE, labels, 1),
+            1.0,
+        )
+
     def test_positive_high_score_reward_requires_positive_top_score(self):
         try:
             import torch
