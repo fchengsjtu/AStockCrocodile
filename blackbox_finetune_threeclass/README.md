@@ -106,8 +106,9 @@ The high-score terms compare the Positive-answer scores inside the current train
 positive_answer_score = -positive_nll
 
 high_score_positive_reward =
-    (top1_score - top2_score) * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
-    only when the top1 row is a true positive
+    if top1 is true positive: (top1_score - top4_score) * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+    if top2 is true positive: (top2_score - top3_score) * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+    if top3 is true positive: (top3_score - top4_score) * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
 
 top3_negative_penalty =
     sum((top_i_score - top4_score) * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT)
@@ -118,7 +119,7 @@ top3_neutral_penalty =
     for true neutral rows among top1/top2/top3
 ```
 
-For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit positive reward is applied only when the highest Positive-answer score in the current batch belongs to a true positive row. True negative and neutral rows are penalized only when they enter the batch top 3 by Positive-answer score. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_hits`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
+For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit positive reward is applied to true positive rows in the batch top 3 by Positive-answer score, using the adjacent margin rule above. True negative and neutral rows are penalized only when they enter the batch top 3 by Positive-answer score. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_hits`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 

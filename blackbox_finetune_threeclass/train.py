@@ -178,17 +178,21 @@ def _positive_answer_tensors(tokenizer, tensors: dict, negative_indices: list[in
 
 
 def _positive_high_score_reward(positive_answer_scores, monitored_labels, current_mask=None):
-    if positive_answer_scores.numel() < 2 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
+    if positive_answer_scores.numel() < 4 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
         return positive_answer_scores.new_zeros(()), 0.0
-    top_values, top_indices = positive_answer_scores.topk(2)
-    top_label = int(monitored_labels[top_indices[0]].detach().cpu())
-    if current_mask is not None and not bool(current_mask[top_indices[0]].detach().cpu()):
-        return positive_answer_scores.new_zeros(()), 0.0
-    if top_label != CLASS_POSITIVE:
-        return positive_answer_scores.new_zeros(()), 0.0
-    margin = top_values[0] - top_values[1]
-    reward = margin * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
-    return reward, 1.0
+    top_values, top_indices = positive_answer_scores.topk(4)
+    reward = positive_answer_scores.new_zeros(())
+    hits = 0
+    for rank_index in range(3):
+        if current_mask is not None and not bool(current_mask[top_indices[rank_index]].detach().cpu()):
+            continue
+        label = int(monitored_labels[top_indices[rank_index]].detach().cpu())
+        if label != CLASS_POSITIVE:
+            continue
+        next_index = 3 if rank_index == 0 else rank_index + 1
+        reward = reward + (top_values[rank_index] - top_values[next_index]) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+        hits += 1
+    return reward, hits / 3.0
 
 
 def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labels, current_mask=None):
