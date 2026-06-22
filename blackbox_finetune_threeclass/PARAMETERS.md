@@ -16,6 +16,8 @@ This file explains the important defaults in `scripts/set_wsl_env.sh`. Parameter
 `DATA_DIR`, `VALIDATION_DATA_DIR`, `OUTPUT_DIR`
 : Training dataset, evaluation dataset, and model output locations. Change these together when comparing different experimental runs.
 
+The default class ratio is `positive:negative:neutral = 1:4:11`. One full class cycle has 16 rows, matching the default gradient accumulation window. Dataset generation first selects positive rows, then only pairs them with negative and neutral rows from the same `anchor_date`; positives that cannot form a complete same-day cycle are skipped.
+
 `REBUILD_DATASET=0`
 : Reuses cached datasets. Set to `1` only when date ranges, sample filters, or class-ratio logic changed.
 
@@ -24,8 +26,8 @@ This file explains the important defaults in `scripts/set_wsl_env.sh`. Parameter
 `EPOCHS=1.0`
 : Number of passes over the generated training rows. Increase only after evaluation improves without signs of overfitting.
 
-`GRADIENT_ACCUMULATION_STEPS=32`
-: Effective batch size is `BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS`. Larger values smooth gradients but make each optimizer update slower.
+`GRADIENT_ACCUMULATION_STEPS=16`
+: Effective batch size is `BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS`. The default matches one complete `1:4:11` class cycle.
 
 `LEARNING_RATE=5e-6`
 : Main step size. Lower it if `grad_norm` repeatedly spikes or checkpoint precision swings violently.
@@ -36,8 +38,8 @@ This file explains the important defaults in `scripts/set_wsl_env.sh`. Parameter
 `MAX_GRAD_NORM=1.0`
 : Gradient clipping threshold used by the trainer.
 
-`CHECKPOINT_EVERY=50`
-: Saves a checkpoint and runs evaluation every 50 optimizer updates.
+`CHECKPOINT_EVERY=100`
+: Saves a checkpoint and runs evaluation every 100 optimizer updates.
 
 ## Class CE Weights
 

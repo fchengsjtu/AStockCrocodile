@@ -13,6 +13,7 @@ from blackbox_finetune_threeclass.common import (
     CLASS_NEUTRAL,
     CLASS_NAMES,
     CLASS_POSITIVE,
+    DEFAULT_CLASS_RATIO,
     DEFAULT_BASE_MODEL,
     DEFAULT_DATA_DIR,
     DEFAULT_MAX_SEQ_LENGTH,
@@ -48,6 +49,8 @@ _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER = 8.0
 _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT = 1.0
 _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT = 0.5
 _HIGH_SCORE_CUTOFF: float | None = None
+_NEGATIVE_PER_POSITIVE = DEFAULT_CLASS_RATIO[1]
+_NEUTRAL_PER_POSITIVE = DEFAULT_CLASS_RATIO[2]
 
 
 def _env_float(name: str, default: float) -> float:
@@ -435,37 +438,59 @@ def _item_class_label(item: dict) -> int | None:
     return None
 
 
+def _item_anchor_date(item: dict) -> str:
+    return str((item.get("metadata") or {}).get("anchor_date", ""))
+
+
+def _class_pattern() -> list[int]:
+    return [CLASS_POSITIVE] + [CLASS_NEGATIVE] * _NEGATIVE_PER_POSITIVE + [CLASS_NEUTRAL] * _NEUTRAL_PER_POSITIVE
+
+
 def _build_balanced_train_order(train_items: list[dict], seed: int, rng) -> list[int]:
     grouped = {label: [] for label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)}
     fallback: list[int] = []
+    by_date: dict[str, dict[int, list[int]]] = {}
     for index, item in enumerate(train_items):
         label = _item_class_label(item)
         if label in grouped:
             grouped[label].append(index)
+            by_date.setdefault(
+                _item_anchor_date(item),
+                {class_label: [] for class_label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)},
+            )[label].append(index)
         else:
             fallback.append(index)
     if not all(grouped[label] for label in grouped):
-        train_order = list(range(len(train_items)))
-        rng.shuffle(train_order)
-        return train_order
-    for indices in grouped.values():
-        rng.shuffle(indices)
-    pattern = [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 10
-    positions = {label: 0 for label in grouped}
-    train_order: list[int] = []
-    while any(positions[label] < len(grouped[label]) for label in grouped):
-        made_progress = False
-        for label in pattern:
-            position = positions[label]
-            if position < len(grouped[label]):
-                train_order.append(grouped[label][position])
-                positions[label] = position + 1
-                made_progress = True
-        if not made_progress:
-            break
+        raise RuntimeError(
+            f"Unable to build a strict same-date 1:{_NEGATIVE_PER_POSITIVE}:{_NEUTRAL_PER_POSITIVE} train order: "
+            "one or more classes are missing. Rebuild the three-class dataset."
+        )
     if fallback:
-        rng.shuffle(fallback)
-        train_order.extend(fallback)
+        raise RuntimeError(
+            "Unable to build a strict same-date train order: some rows are missing class labels. "
+            "Rebuild the three-class dataset."
+        )
+    train_order: list[int] = []
+    date_keys = list(by_date)
+    rng.shuffle(date_keys)
+    for anchor_date in date_keys:
+        date_grouped = by_date[anchor_date]
+        for indices in date_grouped.values():
+            rng.shuffle(indices)
+        positions = {label: 0 for label in date_grouped}
+        while (
+            positions[CLASS_POSITIVE] < len(date_grouped[CLASS_POSITIVE])
+            and positions[CLASS_NEGATIVE] + _NEGATIVE_PER_POSITIVE <= len(date_grouped[CLASS_NEGATIVE])
+            and positions[CLASS_NEUTRAL] + _NEUTRAL_PER_POSITIVE <= len(date_grouped[CLASS_NEUTRAL])
+        ):
+            for label in _class_pattern():
+                train_order.append(date_grouped[label][positions[label]])
+                positions[label] += 1
+    if not train_order:
+        raise RuntimeError(
+            f"Unable to build a strict same-date 1:{_NEGATIVE_PER_POSITIVE}:{_NEUTRAL_PER_POSITIVE} train order. "
+            "Rebuild the three-class dataset so each positive row has enough same-day negative and neutral rows."
+        )
     return train_order
 
 

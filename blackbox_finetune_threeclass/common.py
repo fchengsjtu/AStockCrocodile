@@ -15,7 +15,7 @@ CLASS_NAMES = {
     CLASS_POSITIVE: "positive",
 }
 CLASS_IDS = {name: label for label, name in CLASS_NAMES.items()}
-DEFAULT_CLASS_RATIO = (1, 4, 10)
+DEFAULT_CLASS_RATIO = (1, 4, 11)
 SYSTEM_PROMPT = (
     "Classify the supplied A-share K-line history into positive, negative, or neutral. "
     "Positive means the future three trading days first reach +20%; negative means they "
@@ -30,9 +30,9 @@ DEFAULT_TRAIN_END_DATE = "20241231"
 DEFAULT_VALIDATION_START_DATE = "20260101"
 DEFAULT_VALIDATION_END_DATE = "20260530"
 DEFAULT_TRAIN_SEED = recall_common.DEFAULT_TRAIN_SEED
-DEFAULT_DATA_DIR = PROJECT_DIR / f"data_{DEFAULT_SAMPLE_MODE}_p1_n4_u10"
-DEFAULT_VALIDATION_DIR = PROJECT_DIR / f"data_evaluation_{DEFAULT_SAMPLE_MODE}_p1_n4_u10"
-DEFAULT_OUTPUT_DIR = PROJECT_DIR / "runs" / f"qwen2.5-0.5b-threeclass-{DEFAULT_SAMPLE_MODE}-p1_n4_u10-lora"
+DEFAULT_DATA_DIR = PROJECT_DIR / f"data_{DEFAULT_SAMPLE_MODE}_p1_n4_u11"
+DEFAULT_VALIDATION_DIR = PROJECT_DIR / f"data_evaluation_{DEFAULT_SAMPLE_MODE}_p1_n4_u11"
+DEFAULT_OUTPUT_DIR = PROJECT_DIR / "runs" / f"qwen2.5-0.5b-threeclass-{DEFAULT_SAMPLE_MODE}-p1_n4_u11-lora"
 
 parse_date = recall_common.parse_date
 mysql_connect = recall_common.mysql_connect

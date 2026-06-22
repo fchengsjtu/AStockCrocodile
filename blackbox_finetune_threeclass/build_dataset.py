@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from blackbox_finetune.build_dataset import stable_rank
 from blackbox_finetune_threeclass.common import (
+    DEFAULT_CLASS_RATIO,
     CLASS_NAMES,
     CLASS_NEGATIVE,
     CLASS_NEUTRAL,
@@ -35,6 +36,9 @@ POSITIVE_GAIN = 0.20
 NEGATIVE_DROP = 0.06
 FUTURE_TRADING_DAYS = 3
 POSITIVE_COOLDOWN_TRADING_DAYS = 20
+NEGATIVE_PER_POSITIVE = DEFAULT_CLASS_RATIO[1]
+NEUTRAL_PER_POSITIVE = DEFAULT_CLASS_RATIO[2]
+SUPPORT_SEARCH_MULTIPLIER = 3
 
 
 @dataclass(frozen=True)
@@ -211,6 +215,10 @@ def _ranked_events(events: list[SampleEvent], seed: int, tag: str) -> list[Sampl
     )
 
 
+def _events_on_anchor_dates(events: list[SampleEvent], anchor_dates: set[str]) -> list[SampleEvent]:
+    return [event for event in events if event.anchor_date.isoformat() in anchor_dates]
+
+
 def _materialize_until(
     conn,
     events: list[SampleEvent],
@@ -275,65 +283,106 @@ def _stratified_split(rows: list[dict], train_ratio: float, seed: int) -> tuple[
     return train_rows, test_rows
 
 
+def _class_pattern() -> list[int]:
+    return [CLASS_POSITIVE] + [CLASS_NEGATIVE] * NEGATIVE_PER_POSITIVE + [CLASS_NEUTRAL] * NEUTRAL_PER_POSITIVE
+
+
+def _row_anchor_date(row: dict) -> str:
+    return str(row.get("metadata", {}).get("anchor_date", ""))
+
+
+def _rank_rows(rows: list[dict], seed: int, tag: str) -> list[dict]:
+    return sorted(
+        rows,
+        key=lambda row: stable_rank(
+            seed,
+            tag,
+            row["metadata"]["scode"],
+            row["metadata"]["anchor_date"],
+        ),
+    )
+
+
 def interleave_class_rows(rows: list[dict], seed: int, tag: str) -> list[dict]:
-    grouped = {
-        label: [row for row in rows if int(row["metadata"]["label"]) == label]
-        for label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)
-    }
-    for label, class_rows in grouped.items():
-        class_rows.sort(
-            key=lambda row: stable_rank(
-                seed,
-                f"{tag}-{CLASS_NAMES[label]}",
-                row["metadata"]["scode"],
-                row["metadata"]["anchor_date"],
-            )
-        )
-    pattern = [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 10
-    positions = {label: 0 for label in grouped}
+    by_date: dict[str, dict[int, list[dict]]] = {}
+    for row in rows:
+        by_date.setdefault(
+            _row_anchor_date(row),
+            {label: [] for label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)},
+        )[int(row["metadata"]["label"])].append(row)
     ordered: list[dict] = []
-    while any(positions[label] < len(grouped[label]) for label in grouped):
-        made_progress = False
-        for label in pattern:
-            position = positions[label]
-            if position < len(grouped[label]):
-                ordered.append(grouped[label][position])
-                positions[label] = position + 1
-                made_progress = True
-        if not made_progress:
-            break
+    pattern = _class_pattern()
+    date_keys = sorted(by_date, key=lambda anchor_date: stable_rank(seed, f"{tag}-date", anchor_date))
+    for anchor_date in date_keys:
+        grouped = by_date[anchor_date]
+        for label, class_rows in grouped.items():
+            grouped[label] = _rank_rows(class_rows, seed, f"{tag}-{anchor_date}-{CLASS_NAMES[label]}")
+        positions = {label: 0 for label in grouped}
+        while (
+            positions[CLASS_POSITIVE] < len(grouped[CLASS_POSITIVE])
+            and positions[CLASS_NEGATIVE] + NEGATIVE_PER_POSITIVE <= len(grouped[CLASS_NEGATIVE])
+            and positions[CLASS_NEUTRAL] + NEUTRAL_PER_POSITIVE <= len(grouped[CLASS_NEUTRAL])
+        ):
+            for label in pattern:
+                ordered.append(grouped[label][positions[label]])
+                positions[label] += 1
     return ordered
 
 
 def rebalance_materialized_samples(rows: list[dict], seed: int, positive_limit: int | None = None) -> list[dict]:
-    grouped = {
-        label: [row for row in rows if int(row["metadata"]["label"]) == label]
-        for label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)
-    }
-    positive_count = min(
-        len(grouped[CLASS_POSITIVE]),
-        len(grouped[CLASS_NEGATIVE]) // 4,
-        len(grouped[CLASS_NEUTRAL]) // 10,
+    by_date: dict[str, dict[int, list[dict]]] = {}
+    totals = {label: 0 for label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)}
+    for row in rows:
+        label = int(row["metadata"]["label"])
+        if label not in totals:
+            continue
+        totals[label] += 1
+        by_date.setdefault(
+            _row_anchor_date(row),
+            {class_label: [] for class_label in (CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL)},
+        )[label].append(row)
+    for anchor_date, grouped in by_date.items():
+        for label, class_rows in grouped.items():
+            grouped[label] = _rank_rows(class_rows, seed, f"materialized-{anchor_date}-{CLASS_NAMES[label]}")
+    positive_candidates: list[tuple[str, dict]] = []
+    for anchor_date, grouped in by_date.items():
+        positive_candidates.extend((anchor_date, row) for row in grouped[CLASS_POSITIVE])
+    positive_candidates.sort(
+        key=lambda item: stable_rank(
+            seed,
+            "materialized-positive-anchor",
+            item[1]["metadata"]["scode"],
+            item[1]["metadata"]["anchor_date"],
+        )
     )
-    if positive_limit and positive_limit > 0:
-        positive_count = min(positive_count, positive_limit)
-    if positive_count <= 0:
-        raise RuntimeError(
-            "Unable to create a 1:4:10 dataset after K-line filtering: "
-            f"positive={len(grouped[CLASS_POSITIVE])} "
-            f"negative={len(grouped[CLASS_NEGATIVE])} neutral={len(grouped[CLASS_NEUTRAL])}"
-        )
+    positions = {
+        anchor_date: {CLASS_NEGATIVE: 0, CLASS_NEUTRAL: 0}
+        for anchor_date in by_date
+    }
     selected: list[dict] = []
-    for label, count in (
-        (CLASS_POSITIVE, positive_count),
-        (CLASS_NEGATIVE, positive_count * 4),
-        (CLASS_NEUTRAL, positive_count * 10),
-    ):
-        ordered = sorted(
-            grouped[label],
-            key=lambda row: stable_rank(seed, "materialized", label, row["metadata"]["scode"], row["metadata"]["anchor_date"]),
+    selected_positive_count = 0
+    for anchor_date, positive_row in positive_candidates:
+        if positive_limit and positive_limit > 0 and selected_positive_count >= positive_limit:
+            break
+        grouped = by_date[anchor_date]
+        negative_position = positions[anchor_date][CLASS_NEGATIVE]
+        neutral_position = positions[anchor_date][CLASS_NEUTRAL]
+        if negative_position + NEGATIVE_PER_POSITIVE > len(grouped[CLASS_NEGATIVE]):
+            continue
+        if neutral_position + NEUTRAL_PER_POSITIVE > len(grouped[CLASS_NEUTRAL]):
+            continue
+        selected.append(positive_row)
+        selected.extend(grouped[CLASS_NEGATIVE][negative_position : negative_position + NEGATIVE_PER_POSITIVE])
+        selected.extend(grouped[CLASS_NEUTRAL][neutral_position : neutral_position + NEUTRAL_PER_POSITIVE])
+        positions[anchor_date][CLASS_NEGATIVE] = negative_position + NEGATIVE_PER_POSITIVE
+        positions[anchor_date][CLASS_NEUTRAL] = neutral_position + NEUTRAL_PER_POSITIVE
+        selected_positive_count += 1
+    if selected_positive_count <= 0:
+        raise RuntimeError(
+            f"Unable to create a strict same-date 1:{NEGATIVE_PER_POSITIVE}:{NEUTRAL_PER_POSITIVE} dataset "
+            f"after K-line filtering: positive={totals[CLASS_POSITIVE]} negative={totals[CLASS_NEGATIVE]} "
+            f"neutral={totals[CLASS_NEUTRAL]}"
         )
-        selected.extend(ordered[:count])
     return interleave_class_rows(selected, seed, "materialized")
 
 
@@ -392,10 +441,27 @@ def build_threeclass_dataset(
         usable_positive_count = len(positive_rows)
         if positive_limit and positive_limit > 0:
             usable_positive_count = min(usable_positive_count, positive_limit)
+        positive_anchor_dates = {str(row["metadata"]["anchor_date"]) for row in positive_rows[:usable_positive_count]}
+        negative_events = _events_on_anchor_dates(grouped[CLASS_NEGATIVE], positive_anchor_dates)
+        neutral_events = _events_on_anchor_dates(grouped[CLASS_NEUTRAL], positive_anchor_dates)
+        negative_target = min(
+            len(negative_events),
+            usable_positive_count * NEGATIVE_PER_POSITIVE * SUPPORT_SEARCH_MULTIPLIER,
+        )
+        neutral_target = min(
+            len(neutral_events),
+            usable_positive_count * NEUTRAL_PER_POSITIVE * SUPPORT_SEARCH_MULTIPLIER,
+        )
+        print(
+            f"same-date support search positive_dates={len(positive_anchor_dates)} "
+            f"negative_events={len(negative_events)} target={negative_target} "
+            f"neutral_events={len(neutral_events)} target={neutral_target}",
+            flush=True,
+        )
         negative_rows = _materialize_until(
             conn,
-            grouped[CLASS_NEGATIVE],
-            usable_positive_count * 4,
+            negative_events,
+            negative_target,
             seed,
             CLASS_NAMES[CLASS_NEGATIVE],
             daily_window,
@@ -406,8 +472,8 @@ def build_threeclass_dataset(
         )
         neutral_rows = _materialize_until(
             conn,
-            grouped[CLASS_NEUTRAL],
-            usable_positive_count * 10,
+            neutral_events,
+            neutral_target,
             seed,
             CLASS_NAMES[CLASS_NEUTRAL],
             daily_window,
@@ -443,7 +509,9 @@ def build_threeclass_dataset(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build positive/negative/neutral black-box samples at a strict 1:4:10 ratio")
+    parser = argparse.ArgumentParser(
+        description=f"Build positive/negative/neutral black-box samples at a strict 1:{NEGATIVE_PER_POSITIVE}:{NEUTRAL_PER_POSITIVE} ratio"
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--start-date", default=os.environ.get("TRAIN_START_DATE", DEFAULT_TRAIN_START_DATE))
     parser.add_argument("--end-date", default=os.environ.get("TRAIN_END_DATE", DEFAULT_TRAIN_END_DATE))

@@ -51,6 +51,12 @@ def sample(label: int, index: int) -> dict:
     }
 
 
+def sample_on_date(label: int, index: int, anchor_date: str) -> dict:
+    row = sample(label, index)
+    row["metadata"]["anchor_date"] = anchor_date
+    return row
+
+
 class ThreeClassTests(unittest.TestCase):
     def test_defaults_follow_current_recall60_xlong_run(self):
         args = build_dataset_parser().parse_args([])
@@ -130,42 +136,74 @@ class ThreeClassTests(unittest.TestCase):
             classify_future_path(10.0, [FutureBar(12.1, 9.3), FutureBar(10.0, 9.8), FutureBar(10.0, 9.8)])
         )
 
-    def test_rebalance_is_exactly_one_four_ten(self):
+    def test_rebalance_is_exactly_one_four_eleven(self):
         rows = (
-            [sample(CLASS_POSITIVE, index) for index in range(4)]
-            + [sample(CLASS_NEGATIVE, index + 100) for index in range(20)]
-            + [sample(CLASS_NEUTRAL, index + 200) for index in range(80)]
+            [sample_on_date(CLASS_POSITIVE, index, "2026-01-05") for index in range(4)]
+            + [sample_on_date(CLASS_NEGATIVE, index + 100, "2026-01-05") for index in range(20)]
+            + [sample_on_date(CLASS_NEUTRAL, index + 200, "2026-01-05") for index in range(80)]
         )
         selected = rebalance_materialized_samples(rows, seed=7)
         counts = {label: sum(int(row["metadata"]["label"]) == label for row in selected) for label in range(3)}
-        self.assertEqual(counts, {CLASS_NEGATIVE: 16, CLASS_NEUTRAL: 40, CLASS_POSITIVE: 4})
+        self.assertEqual(counts, {CLASS_NEGATIVE: 16, CLASS_NEUTRAL: 44, CLASS_POSITIVE: 4})
+        for start in range(0, len(selected), 16):
+            self.assertEqual({row["metadata"]["anchor_date"] for row in selected[start : start + 16]}, {"2026-01-05"})
 
-    def test_interleave_class_rows_uses_one_four_ten_pattern(self):
+    def test_rebalance_requires_same_day_negative_and_neutral_rows(self):
         rows = (
-            [sample(CLASS_POSITIVE, index) for index in range(2)]
-            + [sample(CLASS_NEGATIVE, index + 100) for index in range(8)]
-            + [sample(CLASS_NEUTRAL, index + 200) for index in range(20)]
+            [sample_on_date(CLASS_POSITIVE, index, "2026-01-05") for index in range(2)]
+            + [sample_on_date(CLASS_NEGATIVE, index + 100, "2026-01-06") for index in range(8)]
+            + [sample_on_date(CLASS_NEUTRAL, index + 200, "2026-01-06") for index in range(22)]
+        )
+        with self.assertRaisesRegex(RuntimeError, "strict same-date"):
+            rebalance_materialized_samples(rows, seed=7)
+
+    def test_interleave_class_rows_uses_one_four_eleven_pattern(self):
+        rows = (
+            [sample_on_date(CLASS_POSITIVE, index, "2026-01-05") for index in range(2)]
+            + [sample_on_date(CLASS_NEGATIVE, index + 100, "2026-01-05") for index in range(8)]
+            + [sample_on_date(CLASS_NEUTRAL, index + 200, "2026-01-05") for index in range(22)]
         )
         ordered = interleave_class_rows(rows, 11, "test")
-        labels = [int(row["metadata"]["label"]) for row in ordered[:15]]
-        self.assertEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 10)
+        labels = [int(row["metadata"]["label"]) for row in ordered[:16]]
+        self.assertEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 11)
+        self.assertEqual({row["metadata"]["anchor_date"] for row in ordered[:16]}, {"2026-01-05"})
+
+    def test_interleave_class_rows_drops_incomplete_same_day_cycles(self):
+        rows = (
+            [sample_on_date(CLASS_POSITIVE, 1, "2026-01-05")]
+            + [sample_on_date(CLASS_NEGATIVE, index + 100, "2026-01-06") for index in range(4)]
+            + [sample_on_date(CLASS_NEUTRAL, index + 200, "2026-01-06") for index in range(11)]
+        )
+        self.assertEqual(interleave_class_rows(rows, 11, "test"), [])
 
     def test_balanced_train_order_uses_class_labels_or_metadata(self):
         import random
 
         rows = (
-            [sample(CLASS_POSITIVE, index) for index in range(2)]
-            + [sample(CLASS_NEGATIVE, index + 100) for index in range(8)]
-            + [sample(CLASS_NEUTRAL, index + 200) for index in range(20)]
+            [sample_on_date(CLASS_POSITIVE, index, "2026-01-05") for index in range(2)]
+            + [sample_on_date(CLASS_NEGATIVE, index + 100, "2026-01-05") for index in range(8)]
+            + [sample_on_date(CLASS_NEUTRAL, index + 200, "2026-01-05") for index in range(22)]
         )
         rows[0]["class_label"] = rows[0]["metadata"].pop("label")
         order = threeclass_train._build_balanced_train_order(rows, 11, random.Random(11))
-        labels = [threeclass_train._item_class_label(rows[index]) for index in order[:15]]
-        self.assertEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 10)
+        labels = [threeclass_train._item_class_label(rows[index]) for index in order[:16]]
+        self.assertEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 11)
+        self.assertEqual({rows[index]["metadata"]["anchor_date"] for index in order[:16]}, {"2026-01-05"})
+
+    def test_balanced_train_order_rejects_cross_day_completion(self):
+        import random
+
+        rows = (
+            [sample_on_date(CLASS_POSITIVE, 1, "2026-01-05")]
+            + [sample_on_date(CLASS_NEGATIVE, index + 100, "2026-01-06") for index in range(4)]
+            + [sample_on_date(CLASS_NEUTRAL, index + 200, "2026-01-06") for index in range(11)]
+        )
+        with self.assertRaisesRegex(RuntimeError, "strict same-date"):
+            threeclass_train._build_balanced_train_order(rows, 11, random.Random(11))
 
     def test_training_defaults_use_requested_ratio_eval_size_and_learning_rate(self):
         args = threeclass_train.build_parser().parse_args([])
-        self.assertEqual(args.data_dir, Path("blackbox_finetune_threeclass/data_xlong_p1_n4_u10"))
+        self.assertEqual(args.data_dir, Path("blackbox_finetune_threeclass/data_xlong_p1_n4_u11"))
         self.assertEqual(args.eval_max_samples, 1500)
         self.assertEqual(args.learning_rate, 5e-6)
 
