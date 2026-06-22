@@ -40,6 +40,7 @@ _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT = 1.0
 _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT = 0.5
 _NEGATIVE_PER_POSITIVE = DEFAULT_CLASS_RATIO[1]
 _NEUTRAL_PER_POSITIVE = DEFAULT_CLASS_RATIO[2]
+_TOP_SCORE_WINDOW: list[tuple[float, int]] = []
 
 
 def _env_float(name: str, default: float) -> float:
@@ -168,11 +169,13 @@ def _positive_answer_tensors(tokenizer, tensors: dict, negative_indices: list[in
     return _answer_tensors_for_indices(tokenizer, tensors, negative_indices, CLASS_POSITIVE, max_seq_length)
 
 
-def _positive_high_score_reward(positive_answer_scores, monitored_labels):
+def _positive_high_score_reward(positive_answer_scores, monitored_labels, current_mask=None):
     if positive_answer_scores.numel() < 2 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
         return positive_answer_scores.new_zeros(()), 0.0
     top_values, top_indices = positive_answer_scores.topk(2)
     top_label = int(monitored_labels[top_indices[0]].detach().cpu())
+    if current_mask is not None and not bool(current_mask[top_indices[0]].detach().cpu()):
+        return positive_answer_scores.new_zeros(()), 0.0
     if top_label != CLASS_POSITIVE:
         return positive_answer_scores.new_zeros(()), 0.0
     margin = top_values[0] - top_values[1]
@@ -180,15 +183,17 @@ def _positive_high_score_reward(positive_answer_scores, monitored_labels):
     return reward, 1.0
 
 
-def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labels):
+def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labels, current_mask=None):
     if positive_answer_scores.numel() < 4:
         zero = positive_answer_scores.new_zeros(())
         return zero, zero
     top_values, top_indices = positive_answer_scores.topk(4)
-    baseline = top_values[3]
+    baseline = top_values[3].detach()
     negative_penalty = positive_answer_scores.new_zeros(())
     neutral_penalty = positive_answer_scores.new_zeros(())
     for rank_index in range(3):
+        if current_mask is not None and not bool(current_mask[top_indices[rank_index]].detach().cpu()):
+            continue
         label = int(monitored_labels[top_indices[rank_index]].detach().cpu())
         if label == CLASS_POSITIVE:
             continue
@@ -200,6 +205,36 @@ def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labe
     return negative_penalty, neutral_penalty
 
 
+def _windowed_positive_scores(current_scores, current_labels, micro_step, gradient_accumulation_steps):
+    import torch
+
+    global _TOP_SCORE_WINDOW
+    accum_steps = max(1, int(gradient_accumulation_steps or 1))
+    if micro_step is not None and int(micro_step) % accum_steps == 0:
+        _TOP_SCORE_WINDOW = []
+    if accum_steps <= 1 or not _TOP_SCORE_WINDOW:
+        current_mask = torch.ones_like(current_labels, dtype=torch.bool)
+        return current_scores, current_labels, current_mask
+    cached_scores = current_scores.new_tensor([score for score, _label in _TOP_SCORE_WINDOW])
+    cached_labels = current_labels.new_tensor([label for _score, label in _TOP_SCORE_WINDOW])
+    scores = torch.cat([cached_scores, current_scores])
+    labels = torch.cat([cached_labels, current_labels])
+    current_mask = torch.cat(
+        [
+            torch.zeros(cached_labels.shape, dtype=torch.bool, device=current_scores.device),
+            torch.ones(current_labels.shape, dtype=torch.bool, device=current_scores.device),
+        ]
+    )
+    return scores, labels, current_mask
+
+
+def _remember_positive_scores(current_scores, current_labels) -> None:
+    global _TOP_SCORE_WINDOW
+    detached_scores = current_scores.detach().float().cpu().tolist()
+    detached_labels = [int(label) for label in current_labels.detach().cpu().tolist()]
+    _TOP_SCORE_WINDOW.extend(zip(detached_scores, detached_labels))
+
+
 def _compute_asymmetric_training_loss(
     model,
     tokenizer,
@@ -207,6 +242,8 @@ def _compute_asymmetric_training_loss(
     batch: list[dict],
     penalty_rows=None,
     max_seq_length: int | None = None,
+    micro_step: int | None = None,
+    gradient_accumulation_steps: int | None = None,
     **_ignored_kwargs,
 ):
     import torch
@@ -299,18 +336,27 @@ def _compute_asymmetric_training_loss(
         high_score_labels.extend([CLASS_NEUTRAL] * len(neutral_indices))
         high_score_indices.extend(neutral_indices)
     if high_score_parts:
-        positive_answer_scores = torch.cat(high_score_parts)
-        monitored_labels = class_labels.new_tensor(high_score_labels)
+        current_positive_answer_scores = torch.cat(high_score_parts)
+        current_monitored_labels = class_labels.new_tensor(high_score_labels)
+        positive_answer_scores, monitored_labels, current_mask = _windowed_positive_scores(
+            current_positive_answer_scores,
+            current_monitored_labels,
+            micro_step,
+            gradient_accumulation_steps,
+        )
         if _HIGH_SCORE_POSITIVE_BONUS > 0:
             high_score_positive_reward, high_score_positive_hits = _positive_high_score_reward(
                 positive_answer_scores,
                 monitored_labels,
+                current_mask,
             )
         if _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT > 0 or _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT > 0:
             high_score_negative_penalty, high_score_neutral_penalty = _top_nonpositive_high_score_penalties(
                 positive_answer_scores,
                 monitored_labels,
+                current_mask,
             )
+        _remember_positive_scores(current_positive_answer_scores, current_monitored_labels)
 
     weighted_ce = (correct_nll * class_weights).mean()
 

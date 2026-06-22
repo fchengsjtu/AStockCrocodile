@@ -303,6 +303,8 @@ def _compute_training_loss(
     negative_loss_weight: float = 1.0,
     high_score_positive_bonus: float = 0.0,
     high_score_positive_cutoff: float = 1.0,
+    micro_step: int | None = None,
+    gradient_accumulation_steps: int | None = None,
 ):
     output = model(**tensors)
     metrics = {}
@@ -903,6 +905,8 @@ def train_recall60_lora(
                 negative_loss_weight=negative_loss_weight,
                 high_score_positive_bonus=high_score_positive_bonus,
                 high_score_positive_cutoff=high_score_positive_cutoff,
+                micro_step=micro_step,
+                gradient_accumulation_steps=gradient_accumulation_steps,
             )
             if not torch.isfinite(raw_loss.detach()):
                 consecutive_nonfinite += 1
