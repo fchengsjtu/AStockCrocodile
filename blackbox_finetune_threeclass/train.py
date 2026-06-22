@@ -29,7 +29,7 @@ from blackbox_finetune_threeclass.metrics import (
     summarize_scored_rows,
 )
 
-_POSITIVE_CE_WEIGHT = 2.0
+_POSITIVE_CE_WEIGHT = 4.0
 _NEGATIVE_CE_WEIGHT = 1.0
 _NEUTRAL_CE_WEIGHT = 0.5
 _FP_LOSS_WEIGHT = 1.0
@@ -178,42 +178,37 @@ def _positive_answer_tensors(tokenizer, tensors: dict, negative_indices: list[in
 
 
 def _positive_high_score_reward(positive_answer_scores, monitored_labels, current_mask=None):
-    if positive_answer_scores.numel() < 4 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
+    if positive_answer_scores.numel() < 5 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
         return positive_answer_scores.new_zeros(()), 0.0
-    top_values, top_indices = positive_answer_scores.topk(4)
-    reward = positive_answer_scores.new_zeros(())
-    hits = 0
-    for rank_index in range(3):
-        if current_mask is not None and not bool(current_mask[top_indices[rank_index]].detach().cpu()):
-            continue
-        label = int(monitored_labels[top_indices[rank_index]].detach().cpu())
-        if label != CLASS_POSITIVE:
-            continue
-        next_index = 3 if rank_index == 0 else rank_index + 1
-        reward = reward + (top_values[rank_index] - top_values[next_index]) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
-        hits += 1
-    return reward, hits / 3.0
+    top_values, top_indices = positive_answer_scores.topk(5)
+    if current_mask is not None and not bool(current_mask[top_indices[0]].detach().cpu()):
+        return positive_answer_scores.new_zeros(()), 0.0
+    top_label = int(monitored_labels[top_indices[0]].detach().cpu())
+    if top_label != CLASS_POSITIVE:
+        return positive_answer_scores.new_zeros(()), 0.0
+    baseline = top_values[1:].mean().detach()
+    reward = (top_values[0] - baseline) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+    return reward, 1.0
 
 
 def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labels, current_mask=None):
-    if positive_answer_scores.numel() < 4:
+    if positive_answer_scores.numel() < 5:
         zero = positive_answer_scores.new_zeros(())
         return zero, zero
-    top_values, top_indices = positive_answer_scores.topk(4)
-    baseline = top_values[3].detach()
+    top_values, top_indices = positive_answer_scores.topk(5)
     negative_penalty = positive_answer_scores.new_zeros(())
     neutral_penalty = positive_answer_scores.new_zeros(())
-    for rank_index in range(3):
-        if current_mask is not None and not bool(current_mask[top_indices[rank_index]].detach().cpu()):
-            continue
-        label = int(monitored_labels[top_indices[rank_index]].detach().cpu())
-        if label == CLASS_POSITIVE:
-            continue
-        margin = top_values[rank_index] - baseline
-        if label == CLASS_NEGATIVE:
-            negative_penalty = negative_penalty + margin * _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT
-        elif label == CLASS_NEUTRAL:
-            neutral_penalty = neutral_penalty + margin * _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
+    if current_mask is not None and not bool(current_mask[top_indices[0]].detach().cpu()):
+        return negative_penalty, neutral_penalty
+    top_label = int(monitored_labels[top_indices[0]].detach().cpu())
+    if top_label == CLASS_POSITIVE:
+        return negative_penalty, neutral_penalty
+    baseline = top_values[1:].mean().detach()
+    margin = top_values[0] - baseline
+    if top_label == CLASS_NEGATIVE:
+        negative_penalty = margin * _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT
+    elif top_label == CLASS_NEUTRAL:
+        neutral_penalty = margin * _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
     return negative_penalty, neutral_penalty
 
 
@@ -808,7 +803,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--positive-ce-weight",
         type=float,
-        default=_env_float("POSITIVE_CE_WEIGHT", 2.0),
+        default=_env_float("POSITIVE_CE_WEIGHT", 4.0),
         help="CE multiplier for true positive samples.",
     )
     parser.add_argument(
@@ -839,13 +834,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--high-score-negative-penalty-weight",
         type=float,
         default=_env_float("HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT", 1.0),
-        help="Weight for penalizing true negative samples that appear in the batch top-3 positive-answer scores.",
+        help="Weight for penalizing a true negative sample that is the batch top-1 positive-answer score.",
     )
     parser.add_argument(
         "--high-score-neutral-penalty-weight",
         type=float,
         default=_env_float("HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT", 0.5),
-        help="Weight for penalizing true neutral samples that appear in the batch top-3 positive-answer scores.",
+        help="Weight for penalizing a true neutral sample that is the batch top-1 positive-answer score.",
     )
     return parser
 
@@ -881,8 +876,8 @@ def main(argv: Iterable[str] | None = None) -> None:
     print(
         "three-class asymmetric loss: "
         f"total=weighted_ce+{_FP_LOSS_WEIGHT}*negative_fp+{_NEUTRAL_FP_LOSS_WEIGHT}*neutral_fp "
-        f"+top3_negative_penalty "
-        f"+top3_neutral_penalty "
+        f"+top1_negative_penalty "
+        f"+top1_neutral_penalty "
         f"-high_score_positive_reward "
         f"positive_ce_weight={_POSITIVE_CE_WEIGHT} negative_ce_weight={_NEGATIVE_CE_WEIGHT} "
         f"neutral_ce_weight={_NEUTRAL_CE_WEIGHT} "

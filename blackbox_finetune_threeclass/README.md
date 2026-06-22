@@ -78,15 +78,15 @@ total_loss =
     weighted_CE
     + FP_LOSS_WEIGHT * negative_fp_loss
     + NEUTRAL_FP_LOSS_WEIGHT * neutral_fp_loss
-    + top3_negative_penalty
-    + top3_neutral_penalty
+    + top1_negative_penalty
+    + top1_neutral_penalty
     - high_score_positive_reward
 ```
 
 Defaults:
 
 ```text
-POSITIVE_CE_WEIGHT=2.0
+POSITIVE_CE_WEIGHT=4.0
 NEGATIVE_CE_WEIGHT=1.0
 NEUTRAL_CE_WEIGHT=0.5
 FP_LOSS_WEIGHT=1.0
@@ -106,20 +106,22 @@ The high-score terms compare the Positive-answer scores inside the current train
 positive_answer_score = -positive_nll
 
 high_score_positive_reward =
-    if top1 is true positive: (top1_score - top4_score) * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
-    if top2 is true positive: (top2_score - top3_score) * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
-    if top3 is true positive: (top3_score - top4_score) * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+    if top1 is true positive:
+        (top1_score - average(top2_score, top3_score, top4_score, top5_score))
+        * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
 
-top3_negative_penalty =
-    sum((top_i_score - top4_score) * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT)
-    for true negative rows among top1/top2/top3
+top1_negative_penalty =
+    if top1 is true negative:
+        (top1_score - average(top2_score, top3_score, top4_score, top5_score))
+        * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT
 
-top3_neutral_penalty =
-    sum((top_i_score - top4_score) * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT)
-    for true neutral rows among top1/top2/top3
+top1_neutral_penalty =
+    if top1 is true neutral:
+        (top1_score - average(top2_score, top3_score, top4_score, top5_score))
+        * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
 ```
 
-For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit positive reward is applied to true positive rows in the batch top 3 by Positive-answer score, using the adjacent margin rule above. True negative and neutral rows are penalized only when they enter the batch top 3 by Positive-answer score. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_hits`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
+For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit high-score reward or penalty is applied only to the batch top-1 row by Positive-answer score, using the top1-versus-next-four-average margin rule above. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_hits`. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 

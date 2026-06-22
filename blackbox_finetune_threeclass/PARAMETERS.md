@@ -43,7 +43,7 @@ The default training class ratio is `positive:negative:neutral = 1:4:11`. One fu
 
 ## Class CE Weights
 
-`POSITIVE_CE_WEIGHT=2.0`
+`POSITIVE_CE_WEIGHT=4.0`
 : Makes true positive classification errors more important than default rows.
 
 `NEGATIVE_CE_WEIGHT=1.0`
@@ -66,13 +66,13 @@ The default training class ratio is `positive:negative:neutral = 1:4:11`. One fu
 : Enables the explicit positive reward when greater than zero. The reward is only active when the highest Positive-answer score in the batch belongs to a true positive row.
 
 `HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER=60.0`
-: Multiplies the margin between the batch's highest and second-highest Positive-answer scores when the top-scored row is a true positive.
+: Multiplies the margin between the batch's highest Positive-answer score and the average of ranks 2 through 5 when the top-scored row is a true positive.
 
 `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=20.0`
-: Penalizes true negative rows that enter the batch top 3 by Positive-answer score. The penalty is `(row_score - fourth_score) * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`.
+: Penalizes a true negative row only when it ranks first by Positive-answer score. The penalty is `(top1_score - average(top2_score..top5_score)) * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`.
 
 `HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT=15`
-: Penalizes true neutral rows that enter the batch top 3 by Positive-answer score. The penalty is `(row_score - fourth_score) * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT`.
+: Penalizes a true neutral row only when it ranks first by Positive-answer score. The penalty is `(top1_score - average(top2_score..top5_score)) * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT`.
 
 ## Evaluation And Prediction Ranking
 
