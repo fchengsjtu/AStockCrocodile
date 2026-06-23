@@ -412,7 +412,6 @@ def _compute_asymmetric_training_loss(
         "high_score_negative": float(high_score_negative_penalty.detach().cpu()),
         "high_score_neutral": float(high_score_neutral_penalty.detach().cpu()),
         "high_score_positive_reward": float(high_score_positive_reward.detach().cpu()),
-        "high_score_positive_bonus_multiplier": float(high_score_positive_reward.detach().cpu()),
     }
     if positive_answer_scores.numel():
         metrics["high_score_positive_best_rank"] = float(high_score_positive_best_rank)
