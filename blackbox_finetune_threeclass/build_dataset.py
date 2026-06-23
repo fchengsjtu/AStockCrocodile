@@ -546,6 +546,10 @@ def build_threeclass_dataset(
     else:
         samples = rebalance_materialized_samples(materialized, seed, positive_limit)
         train_rows, test_rows = _stratified_split(samples, train_ratio, seed)
+    for row in samples:
+        if int(row["metadata"]["label"]) == CLASS_POSITIVE and "positive_weight" not in row:
+            row["positive_weight"] = 1.0
+            row["metadata"]["positive_weight"] = 1.0
     output_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(output_dir / "train.jsonl", train_rows)
     write_jsonl(output_dir / "test.jsonl", test_rows)

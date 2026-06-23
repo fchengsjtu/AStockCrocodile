@@ -28,6 +28,7 @@ from blackbox_finetune_threeclass.metrics import (
     selection_score_top_rows,
     summarize_scored_rows,
 )
+from llm_finetune.common import write_jsonl
 
 _POSITIVE_CE_WEIGHT = 4.0
 _NEGATIVE_CE_WEIGHT = 1.0
@@ -43,6 +44,10 @@ _HIGH_SCORE_NEUTRAL_MARGIN = 0.1
 _NEGATIVE_PER_POSITIVE = DEFAULT_CLASS_RATIO[1]
 _NEUTRAL_PER_POSITIVE = DEFAULT_CLASS_RATIO[2]
 _TOP_SCORE_WINDOW: list[tuple[float, int]] = []
+_POSITIVE_PURIFICATION_ENABLED = True
+_POSITIVE_PURIFICATION_BOTTOM_K = 3
+_POSITIVE_PURIFICATION_GROUP_SIZE = 16
+_POSITIVE_PURIFICATION_DECAY = 0.5
 
 
 def _env_float(name: str, default: float) -> float:
@@ -95,6 +100,20 @@ def _configure_asymmetric_loss(
     _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT = max(0.0, float(high_score_neutral_penalty_weight))
     _HIGH_SCORE_NEGATIVE_MARGIN = max(0.0, float(high_score_negative_margin))
     _HIGH_SCORE_NEUTRAL_MARGIN = max(0.0, float(high_score_neutral_margin))
+
+
+def _configure_positive_purification(
+    enabled: bool,
+    bottom_k: int,
+    group_size: int,
+    decay: float,
+) -> None:
+    global _POSITIVE_PURIFICATION_ENABLED, _POSITIVE_PURIFICATION_BOTTOM_K
+    global _POSITIVE_PURIFICATION_GROUP_SIZE, _POSITIVE_PURIFICATION_DECAY
+    _POSITIVE_PURIFICATION_ENABLED = bool(enabled)
+    _POSITIVE_PURIFICATION_BOTTOM_K = max(1, int(bottom_k))
+    _POSITIVE_PURIFICATION_GROUP_SIZE = max(1, int(group_size))
+    _POSITIVE_PURIFICATION_DECAY = min(max(float(decay), 0.0), 1.0)
 
 
 def _extra_training_state() -> dict:
@@ -276,12 +295,17 @@ def _compute_asymmetric_training_loss(
 
     effective_max_seq_length = max(64, int(max_seq_length or DEFAULT_MAX_SEQ_LENGTH))
     class_labels = tensors.pop("class_labels")
+    positive_weights = tensors.pop("positive_weights", None)
     output = model(**tensors)
     correct_nll = _per_sample_answer_nll(output.logits, tensors["labels"])
+    if positive_weights is None:
+        positive_weights = torch.ones_like(correct_nll)
+    else:
+        positive_weights = positive_weights.to(dtype=correct_nll.dtype, device=correct_nll.device)
     class_weights = torch.ones_like(correct_nll)
     class_weights = torch.where(
         class_labels.eq(CLASS_POSITIVE),
-        torch.full_like(correct_nll, _POSITIVE_CE_WEIGHT),
+        torch.full_like(correct_nll, _POSITIVE_CE_WEIGHT) * positive_weights.clamp_min(0.0),
         class_weights,
     )
     class_weights = torch.where(
@@ -421,6 +445,7 @@ def _compute_asymmetric_training_loss(
 def _tokenize_threeclass_row(tokenizer, row: dict, max_seq_length: int) -> dict:
     item = _ORIGINAL_TOKENIZE_ROW(tokenizer, row, max_seq_length)
     item["class_label"] = int(row["metadata"]["label"])
+    item["positive_weight"] = _row_positive_weight(row)
     return item
 
 
@@ -433,6 +458,11 @@ def _collate_threeclass(tokenizer, batch: list[dict], device: str) -> dict:
         dtype=torch.long,
         device=device,
     )
+    tensors["positive_weights"] = torch.tensor(
+        [float(item.get("positive_weight", 1.0)) for item in batch],
+        dtype=torch.float32,
+        device=device,
+    )
     return tensors
 
 
@@ -443,6 +473,73 @@ def _item_class_label(item: dict) -> int | None:
     if "label" in metadata:
         return int(metadata["label"])
     return None
+
+
+def _row_positive_weight(row: dict) -> float:
+    metadata = row.get("metadata") if isinstance(row, dict) else None
+    value = None
+    if isinstance(row, dict):
+        value = row.get("positive_weight")
+    if value is None and isinstance(metadata, dict):
+        value = metadata.get("positive_weight")
+    try:
+        return max(0.0, float(value if value is not None else 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _set_row_positive_weight(row: dict, weight: float) -> None:
+    normalized = max(0.0, float(weight))
+    row["positive_weight"] = normalized
+    metadata = row.setdefault("metadata", {})
+    if isinstance(metadata, dict):
+        metadata["positive_weight"] = normalized
+
+
+def _initialize_positive_weights(rows: list[dict]) -> int:
+    initialized = 0
+    for row in rows:
+        if _item_class_label(row) != CLASS_POSITIVE:
+            continue
+        if "positive_weight" not in row and "positive_weight" not in (row.get("metadata") or {}):
+            _set_row_positive_weight(row, 1.0)
+            initialized += 1
+    return initialized
+
+
+def _sync_positive_weights_to_train_items(rows: list[dict], train_items: list[dict]) -> int:
+    synced = 0
+    for index, row in enumerate(rows):
+        if index >= len(train_items) or _item_class_label(row) != CLASS_POSITIVE:
+            continue
+        weight = _row_positive_weight(row)
+        if train_items[index].get("positive_weight") != weight:
+            train_items[index]["positive_weight"] = weight
+            synced += 1
+        metadata = train_items[index].get("metadata")
+        if isinstance(metadata, dict):
+            metadata["positive_weight"] = weight
+    return synced
+
+
+def _prepare_positive_weights_for_training(
+    *,
+    rows: list[dict],
+    train_items: list[dict],
+    train_path: Path,
+    **_kwargs,
+) -> dict:
+    initialized = _initialize_positive_weights(rows)
+    synced = _sync_positive_weights_to_train_items(rows, train_items)
+    if initialized:
+        write_jsonl(train_path, rows)
+    if not initialized and not synced:
+        return {}
+    return {
+        "positive_weight_initialized": initialized,
+        "positive_weight_synced": synced,
+        "positive_weight_train_path": str(train_path),
+    }
 
 
 def _item_anchor_date(item: dict) -> str:
@@ -508,6 +605,156 @@ def _reshuffle_balanced_train_order(train_order: list[int], train_items: list[di
     train_order[:] = _build_balanced_train_order(train_items, 0, rng)
 
 
+def _update_positive_weights_from_ranked_groups(
+    rows: list[dict],
+    train_items: list[dict],
+    train_order: list[int],
+    positive_scores_by_index: dict[int, float],
+    group_size: int,
+    bottom_k: int,
+    decay: float,
+) -> dict[str, int | float]:
+    normalized_group_size = max(1, int(group_size))
+    normalized_bottom_k = max(1, int(bottom_k))
+    normalized_decay = min(max(float(decay), 0.0), 1.0)
+    updated = 0
+    positive_seen = 0
+    groups = 0
+    for offset in range(0, len(train_order), normalized_group_size):
+        group_indices = [
+            int(index)
+            for index in train_order[offset : offset + normalized_group_size]
+            if int(index) in positive_scores_by_index
+        ]
+        if not group_indices:
+            continue
+        groups += 1
+        ranked_low_to_high = sorted(group_indices, key=lambda index: positive_scores_by_index[index])
+        bottom_indices = set(ranked_low_to_high[: min(normalized_bottom_k, len(ranked_low_to_high))])
+        for index in group_indices:
+            if _item_class_label(rows[index]) == CLASS_POSITIVE:
+                positive_seen += 1
+            if index not in bottom_indices or _item_class_label(rows[index]) != CLASS_POSITIVE:
+                continue
+            old_weight = _row_positive_weight(rows[index])
+            new_weight = old_weight * normalized_decay
+            _set_row_positive_weight(rows[index], new_weight)
+            if index < len(train_items):
+                train_items[index]["positive_weight"] = new_weight
+                metadata = train_items[index].get("metadata")
+                if isinstance(metadata, dict):
+                    metadata["positive_weight"] = new_weight
+            updated += 1
+    return {
+        "positive_purification_groups": groups,
+        "positive_purification_seen": positive_seen,
+        "positive_purification_updated": updated,
+        "positive_purification_decay": normalized_decay,
+    }
+
+
+def _positive_answer_item(tokenizer, row: dict, max_seq_length: int) -> dict:
+    messages = compact_messages_from_sample(row)
+    prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
+    answer = label_answer(CLASS_POSITIVE) + tokenizer.eos_token
+    prompt_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    answer_ids = tokenizer(answer, add_special_tokens=False)["input_ids"]
+    if len(answer_ids) >= max_seq_length:
+        answer_ids = answer_ids[: max_seq_length - 1] + [tokenizer.eos_token_id]
+    prompt_budget = max(1, max_seq_length - len(answer_ids))
+    if len(prompt_ids) > prompt_budget:
+        prompt_ids = prompt_ids[-prompt_budget:]
+    input_ids = (prompt_ids + answer_ids)[:max_seq_length]
+    labels = ([-100] * len(prompt_ids) + answer_ids)[:max_seq_length]
+    return {"input_ids": input_ids, "labels": labels, "attention_mask": [1] * len(input_ids)}
+
+
+def _score_positive_answer_rows(
+    model,
+    tokenizer,
+    rows: list[dict],
+    indices: list[int],
+    max_seq_length: int,
+) -> dict[int, float]:
+    import torch
+
+    if not indices:
+        return {}
+    device = next(model.parameters()).device
+    items = [_positive_answer_item(tokenizer, rows[index], max_seq_length) for index in indices]
+    tensors = _ORIGINAL_COLLATE(tokenizer, items, str(device))
+    with torch.no_grad():
+        output = model(**tensors)
+        scores = -_per_sample_answer_nll(output.logits, tensors["labels"])
+    return {
+        int(index): float(score)
+        for index, score in zip(indices, scores.detach().float().cpu().tolist())
+    }
+
+
+def _purify_positive_weights_after_checkpoint(
+    *,
+    model,
+    tokenizer,
+    rows: list[dict],
+    train_items: list[dict],
+    train_path: Path,
+    train_order: list[int],
+    update: int,
+    max_seq_length: int,
+    batch_size: int,
+    gradient_accumulation_steps: int,
+    **_kwargs,
+) -> dict:
+    if not _POSITIVE_PURIFICATION_ENABLED:
+        return {}
+    if not rows or not train_order:
+        return {}
+    initialized = _initialize_positive_weights(rows)
+    group_size = _POSITIVE_PURIFICATION_GROUP_SIZE or max(1, int(batch_size) * int(gradient_accumulation_steps))
+    group_size = max(1, int(group_size))
+    score_start = time.monotonic()
+    was_training = model.training
+    model.eval()
+    scores_by_index: dict[int, float] = {}
+    try:
+        for offset in range(0, len(train_order), group_size):
+            indices = [int(index) for index in train_order[offset : offset + group_size]]
+            scores_by_index.update(_score_positive_answer_rows(model, tokenizer, rows, indices, max_seq_length))
+            if offset and offset % max(group_size * 100, group_size) == 0:
+                print(
+                    f"positive purification scoring progress {min(offset, len(train_order))}/{len(train_order)}",
+                    flush=True,
+                )
+    finally:
+        if was_training:
+            model.train()
+    stats = _update_positive_weights_from_ranked_groups(
+        rows=rows,
+        train_items=train_items,
+        train_order=train_order,
+        positive_scores_by_index=scores_by_index,
+        group_size=group_size,
+        bottom_k=_POSITIVE_PURIFICATION_BOTTOM_K,
+        decay=_POSITIVE_PURIFICATION_DECAY,
+    )
+    write_jsonl(train_path, rows)
+    weights_snapshot = train_path.with_name(f"train_positive_weights_update-{update:06d}.jsonl")
+    write_jsonl(weights_snapshot, rows)
+    stats.update(
+        {
+            "positive_purification_enabled": True,
+            "positive_purification_initialized": initialized,
+            "positive_purification_group_size": group_size,
+            "positive_purification_bottom_k": _POSITIVE_PURIFICATION_BOTTOM_K,
+            "positive_purification_train_path": str(train_path),
+            "positive_purification_snapshot": str(weights_snapshot),
+            "positive_purification_elapsed": f"{time.monotonic() - score_start:.1f}s",
+        }
+    )
+    return stats
+
+
 _ORIGINAL_TOKENIZE_ROW = base_train._tokenize_row
 _ORIGINAL_COLLATE = base_train._collate
 
@@ -541,6 +788,10 @@ def _current_training_parameters() -> dict:
         "high_score_neutral_penalty_weight": _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT,
         "high_score_negative_margin": _HIGH_SCORE_NEGATIVE_MARGIN,
         "high_score_neutral_margin": _HIGH_SCORE_NEUTRAL_MARGIN,
+        "positive_purification_enabled": _POSITIVE_PURIFICATION_ENABLED,
+        "positive_purification_bottom_k": _POSITIVE_PURIFICATION_BOTTOM_K,
+        "positive_purification_group_size": _POSITIVE_PURIFICATION_GROUP_SIZE,
+        "positive_purification_decay": _POSITIVE_PURIFICATION_DECAY,
     }
 
 
@@ -758,6 +1009,8 @@ def _patch_base_trainer(initial_binary_adapter_dir: Path | None = None) -> None:
     base_train._compute_training_loss = _compute_asymmetric_training_loss
     base_train._extra_training_state = _extra_training_state
     base_train._load_extra_training_state = _load_extra_training_state
+    base_train._after_train_items_prepared = _prepare_positive_weights_for_training
+    base_train._after_checkpoint_evaluation = _purify_positive_weights_after_checkpoint
     base_train._build_train_order = _build_balanced_train_order
     base_train._reshuffle_train_order = _reshuffle_balanced_train_order
     base_train._training_run_summary = _threeclass_training_run_summary
@@ -791,7 +1044,8 @@ def _threeclass_training_run_summary(**kwargs) -> str:
         f"fp_weights=({params['fp_loss_weight']},{params['neutral_fp_loss_weight']}) "
         f"high_score_positive_reward=(enabled={params['high_score_positive_bonus']},top_margin_multiplier={params['high_score_positive_bonus_max_multiplier']}) "
         f"high_score_penalties=({params['high_score_negative_penalty_weight']},{params['high_score_neutral_penalty_weight']}) "
-        f"high_score_margins=({params['high_score_negative_margin']},{params['high_score_neutral_margin']})"
+        f"high_score_margins=({params['high_score_negative_margin']},{params['high_score_neutral_margin']}) "
+        f"positive_purification=(enabled={params['positive_purification_enabled']},group_size={params['positive_purification_group_size']},bottom_k={params['positive_purification_bottom_k']},decay={params['positive_purification_decay']})"
     )
 
 
@@ -878,6 +1132,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=_env_float("HIGH_SCORE_NEUTRAL_MARGIN", 0.1),
         help="Required margin for suppressing a top-1 true neutral below the next-four average.",
     )
+    parser.add_argument(
+        "--positive-purification-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("POSITIVE_PURIFICATION_ENABLED", True),
+        help="After each checkpoint, halve low-ranked positive sample weights and rewrite train.jsonl.",
+    )
+    parser.add_argument(
+        "--positive-purification-bottom-k",
+        type=int,
+        default=_env_int("POSITIVE_PURIFICATION_BOTTOM_K", 3),
+        help="Within each purification group, positives ranked in the bottom K positive-answer scores are decayed.",
+    )
+    parser.add_argument(
+        "--positive-purification-group-size",
+        type=int,
+        default=_env_int("POSITIVE_PURIFICATION_GROUP_SIZE", 16),
+        help="Number of training rows treated as one update group for positive purification ranking.",
+    )
+    parser.add_argument(
+        "--positive-purification-decay",
+        type=float,
+        default=_env_float("POSITIVE_PURIFICATION_DECAY", 0.5),
+        help="Multiplier applied to a low-ranked positive sample's positive_weight after each checkpoint.",
+    )
     return parser
 
 
@@ -903,6 +1181,12 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.high_score_negative_margin,
         args.high_score_neutral_margin,
     )
+    _configure_positive_purification(
+        args.positive_purification_enabled,
+        args.positive_purification_bottom_k,
+        args.positive_purification_group_size,
+        args.positive_purification_decay,
+    )
     _patch_base_trainer(initial_binary_adapter_dir)
     prepare_rtx3060(args.cuda_device, require_device=not args.allow_non_rtx3060)
     if initial_binary_adapter_dir is not None:
@@ -924,7 +1208,11 @@ def main(argv: Iterable[str] | None = None) -> None:
         f"high_score_negative_penalty_weight={_HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT} "
         f"high_score_neutral_penalty_weight={_HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT} "
         f"high_score_negative_margin={_HIGH_SCORE_NEGATIVE_MARGIN} "
-        f"high_score_neutral_margin={_HIGH_SCORE_NEUTRAL_MARGIN}",
+        f"high_score_neutral_margin={_HIGH_SCORE_NEUTRAL_MARGIN} "
+        f"positive_purification_enabled={_POSITIVE_PURIFICATION_ENABLED} "
+        f"positive_purification_group_size={_POSITIVE_PURIFICATION_GROUP_SIZE} "
+        f"positive_purification_bottom_k={_POSITIVE_PURIFICATION_BOTTOM_K} "
+        f"positive_purification_decay={_POSITIVE_PURIFICATION_DECAY}",
         flush=True,
     )
     base_train.train_recall60_lora(

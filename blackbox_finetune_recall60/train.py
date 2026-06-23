@@ -82,6 +82,14 @@ def _load_extra_training_state(state: dict) -> None:
     return None
 
 
+def _after_checkpoint_evaluation(**_kwargs) -> dict:
+    return {}
+
+
+def _after_train_items_prepared(**_kwargs) -> dict:
+    return {}
+
+
 def _build_train_order(train_items: list[dict], seed: int, rng) -> list[int]:
     train_order = list(range(len(train_items)))
     rng.shuffle(train_order)
@@ -758,6 +766,15 @@ def train_recall60_lora(
             max_seq_length,
             rebuild_token_cache,
         )
+    prepared_hook_result = _after_train_items_prepared(
+        rows=rows,
+        train_items=train_items,
+        train_path=train_path,
+        on_the_fly_tokenize=on_the_fly_tokenize,
+    )
+    if prepared_hook_result:
+        hook_text = " ".join(f"{key}={value}" for key, value in sorted(prepared_hook_result.items()))
+        print(f"train items prepared hook: {hook_text}", flush=True)
     optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=max(0.0, float(weight_decay)))
     scheduler = None
     total_updates = max(1, math.ceil((len(train_items) * max(epochs, 0.001)) / max(1, batch_size * gradient_accumulation_steps)))
@@ -1079,6 +1096,25 @@ def train_recall60_lora(
                         minimum=fp_threshold_min,
                         maximum=fp_threshold_max,
                     )
+                checkpoint_hook_result = _after_checkpoint_evaluation(
+                    model=model,
+                    tokenizer=tokenizer,
+                    rows=rows,
+                    train_items=train_items,
+                    train_path=train_path,
+                    train_order=train_order,
+                    checkpoint_dir=checkpoint_dir,
+                    update=update,
+                    max_seq_length=max_seq_length,
+                    batch_size=batch_size,
+                    gradient_accumulation_steps=gradient_accumulation_steps,
+                    on_the_fly_tokenize=on_the_fly_tokenize,
+                )
+                if checkpoint_hook_result:
+                    hook_text = " ".join(
+                        f"{key}={value}" for key, value in sorted(checkpoint_hook_result.items())
+                    )
+                    print(f"checkpoint post-evaluation hook: {hook_text}", flush=True)
                 print(
                     f"evaluation threshold updated for next checkpoint: {evaluation_threshold:.6f} "
                     f"high_score_positive_cutoff={high_score_positive_cutoff:.6f} "

@@ -80,6 +80,20 @@ The default training class ratio is `positive:negative:neutral = 1:4:11`. One fu
 `HIGH_SCORE_NEUTRAL_MARGIN=0.1`
 : Required shortfall margin used by the true-neutral top-1 penalty.
 
+## Positive Sample Purification
+
+`POSITIVE_PURIFICATION_ENABLED=1`
+: Enables checkpoint-time positive sample purification. Disable it with `0` or `--no-positive-purification-enabled`.
+
+`POSITIVE_PURIFICATION_GROUP_SIZE=16`
+: Scores training rows in groups of 16, matching one default optimizer update window.
+
+`POSITIVE_PURIFICATION_BOTTOM_K=3`
+: If a true positive row is among the lowest 3 Positive-answer scores inside its group, it is treated as an inconsistent positive sample for this checkpoint.
+
+`POSITIVE_PURIFICATION_DECAY=0.5`
+: Multiplies the low-ranked positive row's persistent `positive_weight` by this value. `positive_weight` starts at `1.0` and multiplies the positive CE loss. After each checkpoint, the updated rows are written back to `train.jsonl` and also snapshotted as `train_positive_weights_update-XXXXXX.jsonl`.
+
 ## Evaluation And Prediction Ranking
 
 `EVAL_SAMPLE_METHOD=random`, `EVAL_MAX_SAMPLES=750`

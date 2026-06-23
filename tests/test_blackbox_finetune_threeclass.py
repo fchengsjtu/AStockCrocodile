@@ -353,6 +353,10 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.high_score_negative_margin, 0.2)
         self.assertEqual(args.high_score_neutral_margin, 0.1)
         self.assertTrue(args.fp_dynamic_penalty)
+        self.assertTrue(args.positive_purification_enabled)
+        self.assertEqual(args.positive_purification_group_size, 16)
+        self.assertEqual(args.positive_purification_bottom_k, 3)
+        self.assertEqual(args.positive_purification_decay, 0.5)
 
     def test_threeclass_extra_training_state_is_empty(self):
         threeclass_train._load_extra_training_state({"legacy_state": -0.75})
@@ -374,12 +378,47 @@ class ThreeClassTests(unittest.TestCase):
             def __call__(self, text, add_special_tokens=False):
                 return {"input_ids": [1, 2] if text == "prompt" else [3, 0]}
 
+        row = sample(CLASS_NEGATIVE, 1)
+        row["positive_weight"] = 0.25
         item = threeclass_train._tokenize_threeclass_row(
             FakeTokenizer(),
-            sample(CLASS_NEGATIVE, 1),
+            row,
             32,
         )
         self.assertEqual(item["class_label"], CLASS_NEGATIVE)
+        self.assertEqual(item["positive_weight"], 0.25)
+
+    def test_positive_purification_halves_bottom_three_positive_weights(self):
+        rows = []
+        for index in range(16):
+            label = CLASS_POSITIVE if index in {0, 7, 14} else CLASS_NEUTRAL
+            row = sample(label, index)
+            if label == CLASS_POSITIVE:
+                row["positive_weight"] = 1.0
+            rows.append(row)
+        train_items = [dict(row) for row in rows]
+        scores = {index: float(index) for index in range(16)}
+        scores[0] = -3.0
+        scores[7] = -2.0
+        scores[14] = 15.0
+
+        stats = threeclass_train._update_positive_weights_from_ranked_groups(
+            rows,
+            train_items,
+            list(range(16)),
+            scores,
+            group_size=16,
+            bottom_k=3,
+            decay=0.5,
+        )
+
+        self.assertEqual(stats["positive_purification_seen"], 3)
+        self.assertEqual(stats["positive_purification_updated"], 2)
+        self.assertEqual(rows[0]["positive_weight"], 0.5)
+        self.assertEqual(rows[7]["positive_weight"], 0.5)
+        self.assertEqual(rows[14]["positive_weight"], 1.0)
+        self.assertEqual(rows[0]["metadata"]["positive_weight"], 0.5)
+        self.assertEqual(train_items[7]["positive_weight"], 0.5)
 
     def test_negative_auxiliary_losses_penalize_preferred_positive_answer(self):
         try:
