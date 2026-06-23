@@ -184,13 +184,13 @@ def _positive_answer_tensors(tokenizer, tensors: dict, negative_indices: list[in
 
 
 def _positive_high_score_reward(positive_answer_scores, monitored_labels, current_mask=None):
-    if positive_answer_scores.numel() < 5 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
+    if positive_answer_scores.numel() < 10 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
         return positive_answer_scores.new_zeros(()), 0.0
-    top_values, top_indices = positive_answer_scores.topk(5)
-    baseline = top_values[1:].mean().detach()
+    top_values, top_indices = positive_answer_scores.topk(10)
+    baseline = top_values[5:].mean().detach()
     reward = positive_answer_scores.new_zeros(())
     hits = 0
-    for rank_index in range(3):
+    for rank_index in range(5):
         if current_mask is not None and not bool(current_mask[top_indices[rank_index]].detach().cpu()):
             continue
         label = int(monitored_labels[top_indices[rank_index]].detach().cpu())
@@ -198,7 +198,7 @@ def _positive_high_score_reward(positive_answer_scores, monitored_labels, curren
             continue
         reward = reward + (top_values[rank_index] - baseline) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
         hits += 1
-    return reward, hits / 3.0
+    return reward, hits / 5.0
 
 
 def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labels, current_mask=None):

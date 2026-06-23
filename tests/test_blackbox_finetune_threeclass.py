@@ -433,7 +433,7 @@ class ThreeClassTests(unittest.TestCase):
             1.0,
         )
 
-    def test_positive_high_score_reward_uses_top3_margin_over_next_four_average(self):
+    def test_positive_high_score_reward_uses_top5_margin_over_six_to_ten_average(self):
         try:
             import torch
         except ModuleNotFoundError:
@@ -451,20 +451,59 @@ class ThreeClassTests(unittest.TestCase):
             0.5,
         )
         reward, hit = threeclass_train._positive_high_score_reward(
-            torch.tensor([0.90, 0.80, 0.70, 0.60, 0.50]),
-            torch.tensor([CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL, CLASS_NEGATIVE, CLASS_NEUTRAL]),
+            torch.tensor([1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]),
+            torch.tensor(
+                [
+                    CLASS_POSITIVE,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                ]
+            ),
         )
-        self.assertAlmostEqual(hit, 1 / 3)
-        self.assertAlmostEqual(float(reward), 2.5, places=6)
+        self.assertAlmostEqual(hit, 1 / 5)
+        self.assertAlmostEqual(float(reward), 7.0, places=6)
         reward, hit = threeclass_train._positive_high_score_reward(
-            torch.tensor([0.90, 0.80, 0.70, 0.60, 0.50]),
-            torch.tensor([CLASS_NEGATIVE, CLASS_POSITIVE, CLASS_POSITIVE, CLASS_NEGATIVE, CLASS_NEUTRAL]),
+            torch.tensor([1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]),
+            torch.tensor(
+                [
+                    CLASS_NEGATIVE,
+                    CLASS_POSITIVE,
+                    CLASS_POSITIVE,
+                    CLASS_NEGATIVE,
+                    CLASS_POSITIVE,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                ]
+            ),
         )
-        self.assertAlmostEqual(hit, 2 / 3)
-        self.assertAlmostEqual(float(reward), 2.0, places=6)
+        self.assertAlmostEqual(hit, 3 / 5)
+        self.assertAlmostEqual(float(reward), 14.0, places=6)
         no_reward, no_hit = threeclass_train._positive_high_score_reward(
-            torch.tensor([0.90, 0.80, 0.70, 0.60, 0.50]),
-            torch.tensor([CLASS_NEGATIVE, CLASS_NEUTRAL, CLASS_NEGATIVE, CLASS_POSITIVE, CLASS_NEUTRAL]),
+            torch.tensor([1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]),
+            torch.tensor(
+                [
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_POSITIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                ]
+            ),
         )
         self.assertEqual(no_hit, 0.0)
         self.assertEqual(float(no_reward), 0.0)
@@ -510,42 +549,42 @@ class ThreeClassTests(unittest.TestCase):
         threeclass_train._TOP_SCORE_WINDOW = []
         threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 1.0, 8.0, 1.0, 0.5)
         pending_scores, pending_labels, pending_mask = threeclass_train._update_positive_scores(
-            torch.tensor([0.50]),
-            torch.tensor([CLASS_NEGATIVE]),
+            torch.tensor([0.90, 0.10]),
+            torch.tensor([CLASS_NEGATIVE, CLASS_NEUTRAL]),
             micro_step=0,
             gradient_accumulation_steps=5,
         )
         self.assertEqual(pending_scores.numel(), 0)
         self.assertEqual(pending_labels.numel(), 0)
         self.assertEqual(pending_mask.numel(), 0)
-        self.assertEqual(len(threeclass_train._TOP_SCORE_WINDOW), 1)
+        self.assertEqual(len(threeclass_train._TOP_SCORE_WINDOW), 2)
         threeclass_train._update_positive_scores(
-            torch.tensor([0.40]),
-            torch.tensor([CLASS_NEUTRAL]),
+            torch.tensor([0.80, 0.20]),
+            torch.tensor([CLASS_NEUTRAL, CLASS_NEGATIVE]),
             micro_step=1,
             gradient_accumulation_steps=5,
         )
         threeclass_train._update_positive_scores(
-            torch.tensor([0.30]),
-            torch.tensor([CLASS_NEGATIVE]),
+            torch.tensor([0.70, 0.30]),
+            torch.tensor([CLASS_NEGATIVE, CLASS_NEUTRAL]),
             micro_step=2,
             gradient_accumulation_steps=5,
         )
         threeclass_train._update_positive_scores(
-            torch.tensor([0.20]),
-            torch.tensor([CLASS_NEUTRAL]),
+            torch.tensor([0.60, 0.40]),
+            torch.tensor([CLASS_NEUTRAL, CLASS_NEGATIVE]),
             micro_step=3,
             gradient_accumulation_steps=5,
         )
         second_scores, second_labels, second_mask = threeclass_train._update_positive_scores(
-            torch.tensor([0.70]),
-            torch.tensor([CLASS_POSITIVE]),
+            torch.tensor([1.00, 0.50]),
+            torch.tensor([CLASS_POSITIVE, CLASS_NEUTRAL]),
             micro_step=4,
             gradient_accumulation_steps=5,
         )
         reward, hit = threeclass_train._positive_high_score_reward(second_scores, second_labels, second_mask)
-        self.assertAlmostEqual(hit, 1 / 3)
-        self.assertAlmostEqual(float(reward), 2.8, places=6)
+        self.assertAlmostEqual(hit, 1 / 5)
+        self.assertAlmostEqual(float(reward), 5.6, places=6)
         self.assertEqual(threeclass_train._TOP_SCORE_WINDOW, [])
         threeclass_train._TOP_SCORE_WINDOW = []
 
