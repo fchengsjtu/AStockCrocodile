@@ -37,6 +37,14 @@ bash blackbox_finetune_threeclass/scripts/one_click_deploy.sh dataset-only
 bash blackbox_finetune_threeclass/scripts/one_click_deploy.sh diagnose
 ```
 
+To run a focused 1000-update exploration pass that checkpoints every 100 updates and exports positive-top/bottom groups from the full training set after each checkpoint:
+
+```bash
+bash blackbox_finetune_threeclass/scripts/train_1000_selected_groups.sh
+```
+
+The script computes `EPOCHS` from the current `train.jsonl` row count so the base trainer reaches `TARGET_UPDATES=1000`. At each checkpoint, the trainer scores every training row by Positive-answer score within each 16-row update group. If the group's true positive row ranks first, the whole group is written to `selected_groups/update-XXXXXX/top1_positive/train.jsonl`; if it ranks last, the whole group is written to `selected_groups/update-XXXXXX/bottom1_positive/train.jsonl`. Per-checkpoint counts and rank distribution are written to `selected_groups/update-XXXXXX/stats.json`.
+
 Set `REBUILD_DATASET=1` to rebuild data. Otherwise the existing training `train.jsonl` and validation `test.jsonl` files are reused.
 
 Candidate classification is queried from MySQL in symbol batches to avoid one full-market window query timing out. `CANDIDATE_BATCH_SIZE` defaults to `80`; lower it to `40` or `20` on a slow MySQL host. `MYSQL_QUERY_RETRIES` defaults to `3` and reconnects the current batch after MySQL errors 2006/2013/2055.
@@ -101,6 +109,8 @@ POSITIVE_PURIFICATION_ENABLED=1
 POSITIVE_PURIFICATION_GROUP_SIZE=16
 POSITIVE_PURIFICATION_BOTTOM_K=3
 POSITIVE_PURIFICATION_DECAY=0.5
+SELECTED_GROUPS_ENABLED=0
+SELECTED_GROUPS_OUTPUT_DIR=
 FP_DYNAMIC_PENALTY=1
 ```
 
@@ -141,6 +151,8 @@ top1_neutral_penalty =
 For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit high-score reward is applied once per optimizer update to every true positive row in the gradient-accumulation window, using the top5-through-top10 average baseline above. Positive rows above that baseline reduce loss; positive rows below it produce a negative reward, which increases loss. The explicit high-score penalty is still applied only to the window's top-1 row when that row is negative or neutral. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_best_rank`. `high_score_positive_best_rank` is the best rank achieved by any true positive row in the update window, where `1` means a positive row is ranked first. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
 
 Positive purification adds a persistent `positive_weight` field to true positive rows. It starts at `1.0` and becomes the trust weight for the full 1:4:11 update group built around that positive row. The positive row's CE is multiplied by `positive_weight`; negative and neutral CE weights are not changed by this field. The derived `update_positive_weight` multiplies the group's `negative_fp`, `neutral_fp`, and high-score reward/penalty terms. After each checkpoint evaluation, the trainer scores the positive answer for each training row in groups of `POSITIVE_PURIFICATION_GROUP_SIZE` rows. If a true positive row is in the lowest `POSITIVE_PURIFICATION_BOTTOM_K` scores inside its group, its `positive_weight` is multiplied by `POSITIVE_PURIFICATION_DECAY`. The updated training set is written back to `train.jsonl`, and a checkpoint-specific snapshot named `train_positive_weights_update-XXXXXX.jsonl` is also written beside it.
+
+When `SELECTED_GROUPS_ENABLED=1`, the same full-training-set checkpoint scoring pass also writes two reusable group datasets. `top1_positive/train.jsonl` contains every full update group whose only true positive row ranked first by Positive-answer score. `bottom1_positive/train.jsonl` contains every full update group whose true positive row ranked last. The rows keep persistent `positive_weight` values but omit derived `update_positive_weight`, so they can be used as fresh training datasets.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 

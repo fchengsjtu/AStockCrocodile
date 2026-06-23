@@ -365,6 +365,8 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.positive_purification_group_size, 16)
         self.assertEqual(args.positive_purification_bottom_k, 3)
         self.assertEqual(args.positive_purification_decay, 0.5)
+        self.assertFalse(args.selected_groups_enabled)
+        self.assertIsNone(args.selected_groups_output_dir)
 
     def test_threeclass_extra_training_state_is_empty(self):
         threeclass_train._load_extra_training_state({"legacy_state": -0.75})
@@ -428,6 +430,35 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(train_items[0]["positive_weight"], 0.5)
         self.assertEqual({threeclass_train._row_update_positive_weight(train_items[index]) for index in range(16)}, {0.5})
         self.assertEqual({threeclass_train._row_update_positive_weight(train_items[index]) for index in range(16, 32)}, {1.0})
+
+    def test_select_extreme_positive_groups_exports_top_and_bottom_positive_cycles(self):
+        rows = []
+        for index in range(32):
+            label = CLASS_POSITIVE if index in {0, 16} else CLASS_NEUTRAL
+            row = sample(label, index)
+            row["update_positive_weight"] = 0.25
+            row["metadata"]["update_positive_weight"] = 0.25
+            rows.append(row)
+        scores = {index: float(31 - index) for index in range(32)}
+        scores[0] = 100.0
+        scores[16] = -100.0
+
+        top_rows, bottom_rows, stats = threeclass_train._select_extreme_positive_groups(
+            rows,
+            list(range(32)),
+            scores,
+            group_size=16,
+        )
+
+        self.assertEqual(stats["scored_groups"], 2)
+        self.assertEqual(stats["top1_positive_groups"], 1)
+        self.assertEqual(stats["bottom1_positive_groups"], 1)
+        self.assertEqual(len(top_rows), 16)
+        self.assertEqual(len(bottom_rows), 16)
+        self.assertEqual(top_rows[0]["metadata"]["label"], CLASS_POSITIVE)
+        self.assertEqual(bottom_rows[0]["metadata"]["label"], CLASS_POSITIVE)
+        self.assertNotIn("update_positive_weight", top_rows[0])
+        self.assertNotIn("update_positive_weight", top_rows[0]["metadata"])
 
     def test_negative_auxiliary_losses_penalize_preferred_positive_answer(self):
         try:

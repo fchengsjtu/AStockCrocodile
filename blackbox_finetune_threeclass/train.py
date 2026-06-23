@@ -48,6 +48,8 @@ _POSITIVE_PURIFICATION_ENABLED = True
 _POSITIVE_PURIFICATION_BOTTOM_K = 3
 _POSITIVE_PURIFICATION_GROUP_SIZE = 16
 _POSITIVE_PURIFICATION_DECAY = 0.5
+_SELECTED_GROUPS_ENABLED = False
+_SELECTED_GROUPS_OUTPUT_DIR = ""
 
 
 def _env_float(name: str, default: float) -> float:
@@ -114,6 +116,12 @@ def _configure_positive_purification(
     _POSITIVE_PURIFICATION_BOTTOM_K = max(1, int(bottom_k))
     _POSITIVE_PURIFICATION_GROUP_SIZE = max(1, int(group_size))
     _POSITIVE_PURIFICATION_DECAY = min(max(float(decay), 0.0), 1.0)
+
+
+def _configure_selected_groups(enabled: bool, output_dir: Path | str | None) -> None:
+    global _SELECTED_GROUPS_ENABLED, _SELECTED_GROUPS_OUTPUT_DIR
+    _SELECTED_GROUPS_ENABLED = bool(enabled)
+    _SELECTED_GROUPS_OUTPUT_DIR = str(output_dir or "")
 
 
 def _extra_training_state() -> dict:
@@ -721,6 +729,124 @@ def _update_positive_weights_from_ranked_groups(
     }
 
 
+def _selected_group_row(row: dict) -> dict:
+    copied = dict(row)
+    copied.pop("update_positive_weight", None)
+    metadata = copied.get("metadata")
+    if isinstance(metadata, dict):
+        copied["metadata"] = dict(metadata)
+        copied["metadata"].pop("update_positive_weight", None)
+    return copied
+
+
+def _select_extreme_positive_groups(
+    rows: list[dict],
+    train_order: list[int],
+    positive_scores_by_index: dict[int, float],
+    group_size: int,
+) -> tuple[list[dict], list[dict], dict[str, int | float]]:
+    normalized_group_size = max(1, int(group_size))
+    top1_rows: list[dict] = []
+    bottom1_rows: list[dict] = []
+    groups = 0
+    scored_groups = 0
+    positive_groups = 0
+    top1_groups = 0
+    bottom1_groups = 0
+    skipped_incomplete = 0
+    missing_scores = 0
+    rank_counts: dict[int, int] = {}
+
+    for offset in range(0, len(train_order), normalized_group_size):
+        group_indices = [int(index) for index in train_order[offset : offset + normalized_group_size]]
+        if len(group_indices) != normalized_group_size:
+            skipped_incomplete += 1
+            continue
+        groups += 1
+        positives = [index for index in group_indices if _item_class_label(rows[index]) == CLASS_POSITIVE]
+        if len(positives) != 1:
+            continue
+        positive_groups += 1
+        if any(index not in positive_scores_by_index for index in group_indices):
+            missing_scores += 1
+            continue
+        scored_groups += 1
+        ranked = sorted(group_indices, key=lambda index: positive_scores_by_index[index], reverse=True)
+        positive_index = positives[0]
+        positive_rank = ranked.index(positive_index) + 1
+        rank_counts[positive_rank] = rank_counts.get(positive_rank, 0) + 1
+        group_rows = [_selected_group_row(rows[index]) for index in group_indices]
+        if positive_rank == 1:
+            top1_groups += 1
+            top1_rows.extend(group_rows)
+        if positive_rank == len(ranked):
+            bottom1_groups += 1
+            bottom1_rows.extend(group_rows)
+
+    stats: dict[str, int | float] = {
+        "group_size": normalized_group_size,
+        "groups": groups,
+        "positive_groups": positive_groups,
+        "scored_groups": scored_groups,
+        "skipped_incomplete_groups": skipped_incomplete,
+        "missing_score_groups": missing_scores,
+        "top1_positive_groups": top1_groups,
+        "bottom1_positive_groups": bottom1_groups,
+        "top1_positive_rows": len(top1_rows),
+        "bottom1_positive_rows": len(bottom1_rows),
+        "top1_positive_ratio": (top1_groups / scored_groups) if scored_groups else 0.0,
+        "bottom1_positive_ratio": (bottom1_groups / scored_groups) if scored_groups else 0.0,
+    }
+    for rank, count in sorted(rank_counts.items()):
+        stats[f"positive_rank_{rank}"] = count
+    return top1_rows, bottom1_rows, stats
+
+
+def _selected_groups_base_dir(train_path: Path, output_dir: Path | str | None = None) -> Path:
+    if output_dir:
+        return Path(output_dir)
+    if _SELECTED_GROUPS_OUTPUT_DIR:
+        return Path(_SELECTED_GROUPS_OUTPUT_DIR)
+    return train_path.parent / "selected_groups"
+
+
+def _write_selected_groups_after_checkpoint(
+    *,
+    rows: list[dict],
+    train_order: list[int],
+    positive_scores_by_index: dict[int, float],
+    train_path: Path,
+    update: int,
+    group_size: int,
+    output_dir: Path | str | None = None,
+) -> dict[str, int | float | str]:
+    top1_rows, bottom1_rows, stats = _select_extreme_positive_groups(
+        rows,
+        train_order,
+        positive_scores_by_index,
+        group_size,
+    )
+    update_dir = _selected_groups_base_dir(train_path, output_dir) / f"update-{update:06d}"
+    top1_dir = update_dir / "top1_positive"
+    bottom1_dir = update_dir / "bottom1_positive"
+    top1_dir.mkdir(parents=True, exist_ok=True)
+    bottom1_dir.mkdir(parents=True, exist_ok=True)
+    write_jsonl(top1_dir / "train.jsonl", top1_rows)
+    write_jsonl(top1_dir / "test.jsonl", [])
+    write_jsonl(bottom1_dir / "train.jsonl", bottom1_rows)
+    write_jsonl(bottom1_dir / "test.jsonl", [])
+    stats = {
+        **stats,
+        "update": int(update),
+        "selected_groups_dir": str(update_dir),
+        "top1_positive_train_path": str(top1_dir / "train.jsonl"),
+        "bottom1_positive_train_path": str(bottom1_dir / "train.jsonl"),
+    }
+    stats_path = update_dir / "stats.json"
+    stats_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {**stats, "selected_groups_stats_path": str(stats_path)}
+
+
 def _positive_answer_item(tokenizer, row: dict, max_seq_length: int) -> dict:
     messages = compact_messages_from_sample(row)
     prompt = tokenizer.apply_chat_template(messages[:-1], tokenize=False, add_generation_prompt=True)
@@ -774,7 +900,7 @@ def _purify_positive_weights_after_checkpoint(
     gradient_accumulation_steps: int,
     **_kwargs,
 ) -> dict:
-    if not _POSITIVE_PURIFICATION_ENABLED:
+    if not _POSITIVE_PURIFICATION_ENABLED and not _SELECTED_GROUPS_ENABLED:
         return {}
     if not rows or not train_order:
         return {}
@@ -797,29 +923,42 @@ def _purify_positive_weights_after_checkpoint(
     finally:
         if was_training:
             model.train()
-    stats = _update_positive_weights_from_ranked_groups(
-        rows=rows,
-        train_items=train_items,
-        train_order=train_order,
-        positive_scores_by_index=scores_by_index,
-        group_size=group_size,
-        bottom_k=_POSITIVE_PURIFICATION_BOTTOM_K,
-        decay=_POSITIVE_PURIFICATION_DECAY,
-    )
-    write_jsonl(train_path, rows)
-    weights_snapshot = train_path.with_name(f"train_positive_weights_update-{update:06d}.jsonl")
-    write_jsonl(weights_snapshot, rows)
-    stats.update(
-        {
-            "positive_purification_enabled": True,
-            "positive_purification_initialized": initialized,
-            "positive_purification_group_size": group_size,
-            "positive_purification_bottom_k": _POSITIVE_PURIFICATION_BOTTOM_K,
-            "positive_purification_train_path": str(train_path),
-            "positive_purification_snapshot": str(weights_snapshot),
-            "positive_purification_elapsed": f"{time.monotonic() - score_start:.1f}s",
-        }
-    )
+    stats: dict[str, int | float | str | bool] = {}
+    if _SELECTED_GROUPS_ENABLED:
+        selected_stats = _write_selected_groups_after_checkpoint(
+            rows=rows,
+            train_order=train_order,
+            positive_scores_by_index=scores_by_index,
+            train_path=train_path,
+            update=update,
+            group_size=group_size,
+        )
+        stats.update({f"selected_groups_{key}": value for key, value in selected_stats.items()})
+    if _POSITIVE_PURIFICATION_ENABLED:
+        purification_stats = _update_positive_weights_from_ranked_groups(
+            rows=rows,
+            train_items=train_items,
+            train_order=train_order,
+            positive_scores_by_index=scores_by_index,
+            group_size=group_size,
+            bottom_k=_POSITIVE_PURIFICATION_BOTTOM_K,
+            decay=_POSITIVE_PURIFICATION_DECAY,
+        )
+        write_jsonl(train_path, rows)
+        weights_snapshot = train_path.with_name(f"train_positive_weights_update-{update:06d}.jsonl")
+        write_jsonl(weights_snapshot, rows)
+        purification_stats.update(
+            {
+                "positive_purification_enabled": True,
+                "positive_purification_initialized": initialized,
+                "positive_purification_group_size": group_size,
+                "positive_purification_bottom_k": _POSITIVE_PURIFICATION_BOTTOM_K,
+                "positive_purification_train_path": str(train_path),
+                "positive_purification_snapshot": str(weights_snapshot),
+            }
+        )
+        stats.update(purification_stats)
+    stats["checkpoint_training_score_elapsed"] = f"{time.monotonic() - score_start:.1f}s"
     return stats
 
 
@@ -860,6 +999,8 @@ def _current_training_parameters() -> dict:
         "positive_purification_bottom_k": _POSITIVE_PURIFICATION_BOTTOM_K,
         "positive_purification_group_size": _POSITIVE_PURIFICATION_GROUP_SIZE,
         "positive_purification_decay": _POSITIVE_PURIFICATION_DECAY,
+        "selected_groups_enabled": _SELECTED_GROUPS_ENABLED,
+        "selected_groups_output_dir": _SELECTED_GROUPS_OUTPUT_DIR,
     }
 
 
@@ -1224,6 +1365,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=_env_float("POSITIVE_PURIFICATION_DECAY", 0.5),
         help="Multiplier applied to a low-ranked positive sample's positive_weight after each checkpoint.",
     )
+    parser.add_argument(
+        "--selected-groups-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("SELECTED_GROUPS_ENABLED", False),
+        help="After each checkpoint, export groups where the positive row ranks first or last by positive-answer score.",
+    )
+    parser.add_argument(
+        "--selected-groups-output-dir",
+        type=Path,
+        default=Path(os.environ["SELECTED_GROUPS_OUTPUT_DIR"]) if os.environ.get("SELECTED_GROUPS_OUTPUT_DIR") else None,
+        help="Directory for selected group datasets. Defaults to DATA_DIR/selected_groups.",
+    )
     return parser
 
 
@@ -1255,6 +1408,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.positive_purification_group_size,
         args.positive_purification_decay,
     )
+    _configure_selected_groups(args.selected_groups_enabled, args.selected_groups_output_dir)
     _patch_base_trainer(initial_binary_adapter_dir)
     prepare_rtx3060(args.cuda_device, require_device=not args.allow_non_rtx3060)
     if initial_binary_adapter_dir is not None:
@@ -1280,7 +1434,9 @@ def main(argv: Iterable[str] | None = None) -> None:
         f"positive_purification_enabled={_POSITIVE_PURIFICATION_ENABLED} "
         f"positive_purification_group_size={_POSITIVE_PURIFICATION_GROUP_SIZE} "
         f"positive_purification_bottom_k={_POSITIVE_PURIFICATION_BOTTOM_K} "
-        f"positive_purification_decay={_POSITIVE_PURIFICATION_DECAY}",
+        f"positive_purification_decay={_POSITIVE_PURIFICATION_DECAY} "
+        f"selected_groups_enabled={_SELECTED_GROUPS_ENABLED} "
+        f"selected_groups_output_dir={_SELECTED_GROUPS_OUTPUT_DIR or '<default>'}",
         flush=True,
     )
     base_train.train_recall60_lora(

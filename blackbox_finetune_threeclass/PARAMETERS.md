@@ -94,6 +94,15 @@ The default training class ratio is `positive:negative:neutral = 1:4:11`. One fu
 `POSITIVE_PURIFICATION_DECAY=0.5`
 : Multiplies the low-ranked positive row's persistent `positive_weight` by this value. `positive_weight` starts at `1.0` and multiplies that row's positive CE. It is also copied to the full 1:4:11 group's `update_positive_weight`, which multiplies false-positive losses and high-score reward/penalty terms for that update group. Negative and neutral CE weights are not changed by `positive_weight`. After each checkpoint, the updated rows are written back to `train.jsonl` and also snapshotted as `train_positive_weights_update-XXXXXX.jsonl`.
 
+`SELECTED_GROUPS_ENABLED=0`
+: Enables checkpoint-time export of two exploratory training datasets. The trainer scores every training row by Positive-answer score in each `POSITIVE_PURIFICATION_GROUP_SIZE` group. If the group's positive row ranks first, the whole group goes to `top1_positive/train.jsonl`; if the positive row ranks last, the whole group goes to `bottom1_positive/train.jsonl`.
+
+`SELECTED_GROUPS_OUTPUT_DIR=`
+: Optional output root for selected group datasets. Empty means `DATA_DIR/selected_groups`. The dedicated `train_1000_selected_groups.sh` script defaults this to `$OUTPUT_DIR/selected_groups`.
+
+`NO_AUTO_RESUME=0`
+: When set to `1`, `one_click_deploy.sh` passes `--no-auto-resume` to the trainer. The selected-group exploration script sets this by default so a 1000-update run is not silently continued from an older checkpoint in the same output directory.
+
 ## Evaluation And Prediction Ranking
 
 `EVAL_SAMPLE_METHOD=random`, `EVAL_MAX_SAMPLES=750`
