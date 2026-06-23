@@ -69,10 +69,10 @@ The default training class ratio is `positive:negative:neutral = 1:4:11`. One fu
 : Multiplies each positive row's margin against the average Positive-answer score of ranks 5 through 10. Positive rows below that baseline contribute a negative reward, increasing loss.
 
 `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=20.0`
-: Penalizes a true negative row only when it ranks first by Positive-answer score. The penalty is `relu(HIGH_SCORE_NEGATIVE_MARGIN - top1_score + average(top2_score..top5_score)) * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`.
+: Penalizes a true negative row only when it ranks first by Positive-answer score. The penalty is `relu(top1_score - average(top2_score..top5_score) + HIGH_SCORE_NEGATIVE_MARGIN) * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`.
 
 `HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT=15`
-: Penalizes a true neutral row only when it ranks first by Positive-answer score. The penalty is `relu(HIGH_SCORE_NEUTRAL_MARGIN - top1_score + average(top2_score..top5_score)) * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT`.
+: Penalizes a true neutral row only when it ranks first by Positive-answer score. The penalty is `relu(top1_score - average(top2_score..top5_score) + HIGH_SCORE_NEUTRAL_MARGIN) * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT`.
 
 `HIGH_SCORE_NEGATIVE_MARGIN=0.2`
 : Required shortfall margin used by the true-negative top-1 penalty.

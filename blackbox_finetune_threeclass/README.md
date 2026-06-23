@@ -118,18 +118,18 @@ high_score_positive_reward =
 top1_negative_penalty =
     if top1 is true negative:
         relu(
-            HIGH_SCORE_NEGATIVE_MARGIN
-            - top1_score
-            + average(top2_score, top3_score, top4_score, top5_score)
+            top1_score
+            - average(top2_score, top3_score, top4_score, top5_score)
+            + HIGH_SCORE_NEGATIVE_MARGIN
         )
         * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT
 
 top1_neutral_penalty =
     if top1 is true neutral:
         relu(
-            HIGH_SCORE_NEUTRAL_MARGIN
-            - top1_score
-            + average(top2_score, top3_score, top4_score, top5_score)
+            top1_score
+            - average(top2_score, top3_score, top4_score, top5_score)
+            + HIGH_SCORE_NEUTRAL_MARGIN
         )
         * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
 ```

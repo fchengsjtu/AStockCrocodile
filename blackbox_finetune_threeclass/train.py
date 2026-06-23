@@ -216,10 +216,10 @@ def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labe
         return negative_penalty, neutral_penalty
     baseline = top_values[1:].mean().detach()
     if top_label == CLASS_NEGATIVE:
-        negative_penalty = (baseline + _HIGH_SCORE_NEGATIVE_MARGIN - top_values[0]).clamp_min(0.0)
+        negative_penalty = (top_values[0] - baseline + _HIGH_SCORE_NEGATIVE_MARGIN).clamp_min(0.0)
         negative_penalty = negative_penalty * _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT
     elif top_label == CLASS_NEUTRAL:
-        neutral_penalty = (baseline + _HIGH_SCORE_NEUTRAL_MARGIN - top_values[0]).clamp_min(0.0)
+        neutral_penalty = (top_values[0] - baseline + _HIGH_SCORE_NEUTRAL_MARGIN).clamp_min(0.0)
         neutral_penalty = neutral_penalty * _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
     return negative_penalty, neutral_penalty
 
