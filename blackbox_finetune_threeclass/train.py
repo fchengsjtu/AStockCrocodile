@@ -186,20 +186,20 @@ def _positive_answer_tensors(tokenizer, tensors: dict, negative_indices: list[in
 def _positive_high_score_reward(positive_answer_scores, monitored_labels, current_mask=None):
     if positive_answer_scores.numel() < 10 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
         return positive_answer_scores.new_zeros(()), 0.0
-    top_values, top_indices = positive_answer_scores.topk(10)
-    baseline = top_values[5:].mean().detach()
+    sorted_values, sorted_indices = positive_answer_scores.sort(descending=True)
+    baseline = sorted_values[4:10].mean().detach()
     reward = positive_answer_scores.new_zeros(())
-    rank_scores = []
-    for rank_index in range(5):
-        if current_mask is not None and not bool(current_mask[top_indices[rank_index]].detach().cpu()):
+    best_positive_rank = 0
+    for rank_index, sample_index in enumerate(sorted_indices):
+        if current_mask is not None and not bool(current_mask[sample_index].detach().cpu()):
             continue
-        label = int(monitored_labels[top_indices[rank_index]].detach().cpu())
+        label = int(monitored_labels[sample_index].detach().cpu())
         if label != CLASS_POSITIVE:
             continue
-        reward = reward + (top_values[rank_index] - baseline) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
-        rank_scores.append(1.0 / float(rank_index + 1))
-    rank_metric = sum(rank_scores) / len(rank_scores) if rank_scores else 0.0
-    return reward, rank_metric
+        reward = reward + (sorted_values[rank_index] - baseline) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+        if best_positive_rank == 0:
+            best_positive_rank = rank_index + 1
+    return reward, float(best_positive_rank)
 
 
 def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labels, current_mask=None):
@@ -351,7 +351,7 @@ def _compute_asymmetric_training_loss(
         neutral_positive_nll = None
         neutral_fp_loss = correct_nll.new_zeros(())
 
-    high_score_positive_hits = 0
+    high_score_positive_best_rank = 0.0
     high_score_positive_reward = correct_nll.new_zeros(())
     high_score_negative_penalty = correct_nll.new_zeros(())
     high_score_neutral_penalty = correct_nll.new_zeros(())
@@ -381,7 +381,7 @@ def _compute_asymmetric_training_loss(
             gradient_accumulation_steps,
         )
         if positive_answer_scores.numel() and _HIGH_SCORE_POSITIVE_BONUS > 0:
-            high_score_positive_reward, high_score_positive_hits = _positive_high_score_reward(
+            high_score_positive_reward, high_score_positive_best_rank = _positive_high_score_reward(
                 positive_answer_scores,
                 monitored_labels,
                 current_mask,
@@ -415,7 +415,7 @@ def _compute_asymmetric_training_loss(
         "high_score_positive_bonus_multiplier": float(high_score_positive_reward.detach().cpu()),
     }
     if positive_answer_scores.numel():
-        metrics["high_score_positive_hits"] = float(high_score_positive_hits)
+        metrics["high_score_positive_best_rank"] = float(high_score_positive_best_rank)
     return total_loss, metrics
 
 

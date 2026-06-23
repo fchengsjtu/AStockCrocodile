@@ -63,10 +63,10 @@ The default training class ratio is `positive:negative:neutral = 1:4:11`. One fu
 ## Batch Top-Score Reward And Penalty
 
 `HIGH_SCORE_POSITIVE_BONUS=2.0`
-: Enables the explicit positive reward when greater than zero. The reward is only active when the highest Positive-answer score in the batch belongs to a true positive row.
+: Enables the explicit positive reward when greater than zero. Every true positive row in the update window participates.
 
 `HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER=60.0`
-: Multiplies the margin between the batch's highest Positive-answer score and the average of ranks 2 through 5 when the top-scored row is a true positive.
+: Multiplies each positive row's margin against the average Positive-answer score of ranks 5 through 10. Positive rows below that baseline contribute a negative reward, increasing loss.
 
 `HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=20.0`
 : Penalizes a true negative row only when it ranks first by Positive-answer score. The penalty is `relu(HIGH_SCORE_NEGATIVE_MARGIN - top1_score + average(top2_score..top5_score)) * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT`.

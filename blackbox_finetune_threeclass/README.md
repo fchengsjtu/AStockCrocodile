@@ -108,10 +108,10 @@ The high-score terms compare the Positive-answer scores once per optimizer updat
 positive_answer_score = -positive_nll
 
 high_score_positive_reward =
-    for true positive rows in top1/top2/top3/top4/top5:
+    for every true positive row:
         (
             positive_row_score
-            - average(top6_score, top7_score, top8_score, top9_score, top10_score)
+            - average(top5_score, top6_score, top7_score, top8_score, top9_score, top10_score)
         )
         * HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
 
@@ -134,7 +134,7 @@ top1_neutral_penalty =
         * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
 ```
 
-For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit high-score reward is applied once per optimizer update to true positive rows in the gradient-accumulation window's top 5 by Positive-answer score, using the top6-through-top10 average baseline above. The explicit high-score penalty is still applied only to the window's top-1 row when that row is negative or neutral. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_hits`. `high_score_positive_hits` is a rank-quality metric for positive rows in the top 5: rank 1 contributes `1.0`, rank 2 contributes `0.5`, rank 3 contributes `0.3333`, rank 4 contributes `0.25`, and rank 5 contributes `0.2`; if multiple positive rows are in the top 5, their rank scores are averaged. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
+For true positive samples, `positive_nll` is the normal CE target NLL. For true negative samples, it is the extra `{"c":"positive"}` answer NLL already computed for `negative_fp_loss`. For true neutral samples, it is the extra `{"c":"positive"}` answer NLL already computed for `neutral_fp_loss`. The explicit high-score reward is applied once per optimizer update to every true positive row in the gradient-accumulation window, using the top5-through-top10 average baseline above. Positive rows above that baseline reduce loss; positive rows below it produce a negative reward, which increases loss. The explicit high-score penalty is still applied only to the window's top-1 row when that row is negative or neutral. Training logs print `loss`, `ce`, `negative_fp`, `neutral_fp`, `high_score_negative`, `high_score_neutral`, `high_score_positive_reward`, and `high_score_positive_best_rank`. `high_score_positive_best_rank` is the best rank achieved by any true positive row in the update window, where `1` means a positive row is ranked first. Negative and neutral auxiliary penalties require extra positive-answer forward passes, so training is slower and uses more GPU memory than plain CE.
 
 To initialize from a good binary recall60 adapter while starting a new three-class run at update 0:
 

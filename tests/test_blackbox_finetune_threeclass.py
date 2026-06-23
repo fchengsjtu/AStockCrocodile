@@ -433,7 +433,7 @@ class ThreeClassTests(unittest.TestCase):
             1.0,
         )
 
-    def test_positive_high_score_reward_uses_top5_margin_over_six_to_ten_average(self):
+    def test_positive_high_score_reward_uses_all_positive_ranks_against_rank_five_to_ten_average(self):
         try:
             import torch
         except ModuleNotFoundError:
@@ -468,7 +468,7 @@ class ThreeClassTests(unittest.TestCase):
             ),
         )
         self.assertAlmostEqual(hit, 1.0)
-        self.assertAlmostEqual(float(reward), 7.0, places=6)
+        self.assertAlmostEqual(float(reward), 6.5, places=6)
         reward, hit = threeclass_train._positive_high_score_reward(
             torch.tensor([1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]),
             torch.tensor(
@@ -486,9 +486,9 @@ class ThreeClassTests(unittest.TestCase):
                 ]
             ),
         )
-        self.assertAlmostEqual(hit, (1 / 2 + 1 / 3 + 1 / 5) / 3)
-        self.assertAlmostEqual(float(reward), 14.0, places=6)
-        no_reward, no_hit = threeclass_train._positive_high_score_reward(
+        self.assertAlmostEqual(hit, 2.0)
+        self.assertAlmostEqual(float(reward), 12.5, places=6)
+        negative_reward, low_rank = threeclass_train._positive_high_score_reward(
             torch.tensor([1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]),
             torch.tensor(
                 [
@@ -497,16 +497,16 @@ class ThreeClassTests(unittest.TestCase):
                     CLASS_NEGATIVE,
                     CLASS_NEUTRAL,
                     CLASS_NEGATIVE,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
                     CLASS_POSITIVE,
-                    CLASS_NEUTRAL,
-                    CLASS_NEGATIVE,
-                    CLASS_NEUTRAL,
-                    CLASS_NEGATIVE,
                 ]
             ),
         )
-        self.assertEqual(no_hit, 0.0)
-        self.assertEqual(float(no_reward), 0.0)
+        self.assertEqual(low_rank, 10.0)
+        self.assertAlmostEqual(float(negative_reward), -2.5, places=6)
 
     def test_top_nonpositive_high_score_penalties_use_target_margin_shortfall(self):
         try:
@@ -584,7 +584,7 @@ class ThreeClassTests(unittest.TestCase):
         )
         reward, hit = threeclass_train._positive_high_score_reward(second_scores, second_labels, second_mask)
         self.assertAlmostEqual(hit, 1.0)
-        self.assertAlmostEqual(float(reward), 5.6, places=6)
+        self.assertAlmostEqual(float(reward), 5.2, places=6)
         self.assertEqual(threeclass_train._TOP_SCORE_WINDOW, [])
         threeclass_train._TOP_SCORE_WINDOW = []
 
