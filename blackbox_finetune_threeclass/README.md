@@ -95,6 +95,8 @@ HIGH_SCORE_POSITIVE_BONUS=1.0
 HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER=8.0
 HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT=1.0
 HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT=0.5
+HIGH_SCORE_NEGATIVE_MARGIN=0.2
+HIGH_SCORE_NEUTRAL_MARGIN=0.1
 FP_DYNAMIC_PENALTY=1
 ```
 
@@ -112,12 +114,20 @@ high_score_positive_reward =
 
 top1_negative_penalty =
     if top1 is true negative:
-        (top1_score - average(top2_score, top3_score, top4_score, top5_score))
+        relu(
+            HIGH_SCORE_NEGATIVE_MARGIN
+            - top1_score
+            + average(top2_score, top3_score, top4_score, top5_score)
+        )
         * HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT
 
 top1_neutral_penalty =
     if top1 is true neutral:
-        (top1_score - average(top2_score, top3_score, top4_score, top5_score))
+        relu(
+            HIGH_SCORE_NEUTRAL_MARGIN
+            - top1_score
+            + average(top2_score, top3_score, top4_score, top5_score)
+        )
         * HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
 ```
 

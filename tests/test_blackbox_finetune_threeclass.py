@@ -350,6 +350,8 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(args.high_score_positive_bonus_max_multiplier, 8.0)
         self.assertEqual(args.high_score_negative_penalty_weight, 1.0)
         self.assertEqual(args.high_score_neutral_penalty_weight, 0.5)
+        self.assertEqual(args.high_score_negative_margin, 0.2)
+        self.assertEqual(args.high_score_neutral_margin, 0.1)
         self.assertTrue(args.fp_dynamic_penalty)
 
     def test_threeclass_extra_training_state_is_empty(self):
@@ -461,7 +463,7 @@ class ThreeClassTests(unittest.TestCase):
         self.assertEqual(no_hit, 0.0)
         self.assertEqual(float(no_reward), 0.0)
 
-    def test_top_nonpositive_high_score_penalties_use_top1_margin_over_next_four_average(self):
+    def test_top_nonpositive_high_score_penalties_use_target_margin_shortfall(self):
         try:
             import torch
         except ModuleNotFoundError:
@@ -477,19 +479,21 @@ class ThreeClassTests(unittest.TestCase):
             8.0,
             10.0,
             5.0,
+            0.2,
+            0.1,
         )
         negative_penalty, neutral_penalty = threeclass_train._top_nonpositive_high_score_penalties(
-            torch.tensor([0.90, 0.80, 0.70, 0.60, 0.50]),
+            torch.tensor([0.70, 0.65, 0.60, 0.55, 0.50]),
             torch.tensor([CLASS_NEGATIVE, CLASS_NEUTRAL, CLASS_POSITIVE, CLASS_POSITIVE, CLASS_NEGATIVE]),
         )
-        self.assertAlmostEqual(float(negative_penalty), 2.5, places=6)
+        self.assertAlmostEqual(float(negative_penalty), 0.75, places=6)
         self.assertEqual(float(neutral_penalty), 0.0)
         negative_penalty, neutral_penalty = threeclass_train._top_nonpositive_high_score_penalties(
-            torch.tensor([0.90, 0.80, 0.70, 0.60, 0.50]),
+            torch.tensor([0.62, 0.60, 0.58, 0.56, 0.54]),
             torch.tensor([CLASS_NEUTRAL, CLASS_NEGATIVE, CLASS_POSITIVE, CLASS_POSITIVE, CLASS_NEGATIVE]),
         )
         self.assertEqual(float(negative_penalty), 0.0)
-        self.assertAlmostEqual(float(neutral_penalty), 1.25, places=6)
+        self.assertAlmostEqual(float(neutral_penalty), 0.25, places=6)
 
     def test_update_positive_reward_waits_for_accumulation_boundary(self):
         try:
@@ -546,14 +550,14 @@ class ThreeClassTests(unittest.TestCase):
             self.skipTest("torch is not installed in this environment")
 
         threeclass_train._TOP_SCORE_WINDOW = [
-            (0.70, CLASS_POSITIVE),
             (0.60, CLASS_POSITIVE),
+            (0.55, CLASS_POSITIVE),
             (0.50, CLASS_NEUTRAL),
-            (0.40, CLASS_NEUTRAL),
+            (0.45, CLASS_NEUTRAL),
         ]
-        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 1.0, 8.0, 10.0, 5.0)
+        threeclass_train._configure_asymmetric_loss(2.0, 1.0, 0.5, 1.0, 0.3, 1.0, 8.0, 10.0, 5.0, 0.2, 0.1)
         scores, labels, current_mask = threeclass_train._update_positive_scores(
-            torch.tensor([0.90]),
+            torch.tensor([0.65]),
             torch.tensor([CLASS_NEGATIVE]),
             micro_step=4,
             gradient_accumulation_steps=5,
@@ -563,7 +567,7 @@ class ThreeClassTests(unittest.TestCase):
             labels,
             current_mask,
         )
-        self.assertAlmostEqual(float(negative_penalty), 3.5, places=6)
+        self.assertAlmostEqual(float(negative_penalty), 0.75, places=6)
         self.assertEqual(float(neutral_penalty), 0.0)
         threeclass_train._TOP_SCORE_WINDOW = []
 

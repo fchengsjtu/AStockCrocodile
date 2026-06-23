@@ -38,6 +38,8 @@ _HIGH_SCORE_POSITIVE_BONUS = 1.0
 _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER = 8.0
 _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT = 1.0
 _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT = 0.5
+_HIGH_SCORE_NEGATIVE_MARGIN = 0.2
+_HIGH_SCORE_NEUTRAL_MARGIN = 0.1
 _NEGATIVE_PER_POSITIVE = DEFAULT_CLASS_RATIO[1]
 _NEUTRAL_PER_POSITIVE = DEFAULT_CLASS_RATIO[2]
 _TOP_SCORE_WINDOW: list[tuple[float, int]] = []
@@ -74,12 +76,14 @@ def _configure_asymmetric_loss(
     high_score_positive_bonus_max_multiplier: float,
     high_score_negative_penalty_weight: float,
     high_score_neutral_penalty_weight: float,
+    high_score_negative_margin: float = 0.2,
+    high_score_neutral_margin: float = 0.1,
 ) -> None:
     global _POSITIVE_CE_WEIGHT, _NEGATIVE_CE_WEIGHT, _NEUTRAL_CE_WEIGHT
     global _FP_LOSS_WEIGHT, _NEUTRAL_FP_LOSS_WEIGHT
     global _HIGH_SCORE_POSITIVE_BONUS
     global _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER, _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT
-    global _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
+    global _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT, _HIGH_SCORE_NEGATIVE_MARGIN, _HIGH_SCORE_NEUTRAL_MARGIN
     _POSITIVE_CE_WEIGHT = max(0.0, float(positive_ce_weight))
     _NEGATIVE_CE_WEIGHT = max(0.0, float(negative_ce_weight))
     _NEUTRAL_CE_WEIGHT = max(0.0, float(neutral_ce_weight))
@@ -89,6 +93,8 @@ def _configure_asymmetric_loss(
     _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER = max(0.0, float(high_score_positive_bonus_max_multiplier))
     _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT = max(0.0, float(high_score_negative_penalty_weight))
     _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT = max(0.0, float(high_score_neutral_penalty_weight))
+    _HIGH_SCORE_NEGATIVE_MARGIN = max(0.0, float(high_score_negative_margin))
+    _HIGH_SCORE_NEUTRAL_MARGIN = max(0.0, float(high_score_neutral_margin))
 
 
 def _extra_training_state() -> dict:
@@ -204,11 +210,12 @@ def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labe
     if top_label == CLASS_POSITIVE:
         return negative_penalty, neutral_penalty
     baseline = top_values[1:].mean().detach()
-    margin = top_values[0] - baseline
     if top_label == CLASS_NEGATIVE:
-        negative_penalty = margin * _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT
+        negative_penalty = (baseline + _HIGH_SCORE_NEGATIVE_MARGIN - top_values[0]).clamp_min(0.0)
+        negative_penalty = negative_penalty * _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT
     elif top_label == CLASS_NEUTRAL:
-        neutral_penalty = margin * _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
+        neutral_penalty = (baseline + _HIGH_SCORE_NEUTRAL_MARGIN - top_values[0]).clamp_min(0.0)
+        neutral_penalty = neutral_penalty * _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT
     return negative_penalty, neutral_penalty
 
 
@@ -527,6 +534,8 @@ def _current_training_parameters() -> dict:
         "high_score_positive_bonus_max_multiplier": _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER,
         "high_score_negative_penalty_weight": _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT,
         "high_score_neutral_penalty_weight": _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT,
+        "high_score_negative_margin": _HIGH_SCORE_NEGATIVE_MARGIN,
+        "high_score_neutral_margin": _HIGH_SCORE_NEUTRAL_MARGIN,
     }
 
 
@@ -710,6 +719,7 @@ def _evaluate_training_checkpoint(
         f"fp=({params['fp_loss_weight']:.4g},{params['neutral_fp_loss_weight']:.4g}) "
         f"high_score_positive_reward=(enabled={params['high_score_positive_bonus']:.4g},top_margin_multiplier={params['high_score_positive_bonus_max_multiplier']:.4g}) "
         f"high_score_penalty=({params['high_score_negative_penalty_weight']:.4g},{params['high_score_neutral_penalty_weight']:.4g}) "
+        f"high_score_margin=({params['high_score_negative_margin']:.4g},{params['high_score_neutral_margin']:.4g}) "
         f"selection_weights=({eval_params['negative_weight']:.4g},{eval_params['neutral_weight']:.4g})",
         flush=True,
     )
@@ -775,7 +785,8 @@ def _threeclass_training_run_summary(**kwargs) -> str:
         f"ce_weights=({params['positive_ce_weight']},{params['negative_ce_weight']},{params['neutral_ce_weight']}) "
         f"fp_weights=({params['fp_loss_weight']},{params['neutral_fp_loss_weight']}) "
         f"high_score_positive_reward=(enabled={params['high_score_positive_bonus']},top_margin_multiplier={params['high_score_positive_bonus_max_multiplier']}) "
-        f"high_score_penalties=({params['high_score_negative_penalty_weight']},{params['high_score_neutral_penalty_weight']})"
+        f"high_score_penalties=({params['high_score_negative_penalty_weight']},{params['high_score_neutral_penalty_weight']}) "
+        f"high_score_margins=({params['high_score_negative_margin']},{params['high_score_neutral_margin']})"
     )
 
 
@@ -850,6 +861,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=_env_float("HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT", 0.5),
         help="Weight for penalizing a true neutral sample that is the batch top-1 positive-answer score.",
     )
+    parser.add_argument(
+        "--high-score-negative-margin",
+        type=float,
+        default=_env_float("HIGH_SCORE_NEGATIVE_MARGIN", 0.2),
+        help="Required margin for suppressing a top-1 true negative below the next-four average.",
+    )
+    parser.add_argument(
+        "--high-score-neutral-margin",
+        type=float,
+        default=_env_float("HIGH_SCORE_NEUTRAL_MARGIN", 0.1),
+        help="Required margin for suppressing a top-1 true neutral below the next-four average.",
+    )
     return parser
 
 
@@ -872,6 +895,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         args.high_score_positive_bonus_max_multiplier,
         args.high_score_negative_penalty_weight,
         args.high_score_neutral_penalty_weight,
+        args.high_score_negative_margin,
+        args.high_score_neutral_margin,
     )
     _patch_base_trainer(initial_binary_adapter_dir)
     prepare_rtx3060(args.cuda_device, require_device=not args.allow_non_rtx3060)
@@ -892,7 +917,9 @@ def main(argv: Iterable[str] | None = None) -> None:
         f"high_score_positive_bonus={_HIGH_SCORE_POSITIVE_BONUS} "
         f"high_score_positive_bonus_max_multiplier={_HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER} "
         f"high_score_negative_penalty_weight={_HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT} "
-        f"high_score_neutral_penalty_weight={_HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT}",
+        f"high_score_neutral_penalty_weight={_HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT} "
+        f"high_score_negative_margin={_HIGH_SCORE_NEGATIVE_MARGIN} "
+        f"high_score_neutral_margin={_HIGH_SCORE_NEUTRAL_MARGIN}",
         flush=True,
     )
     base_train.train_recall60_lora(
