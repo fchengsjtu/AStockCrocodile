@@ -183,6 +183,18 @@ def _positive_answer_tensors(tokenizer, tensors: dict, negative_indices: list[in
     return _answer_tensors_for_indices(tokenizer, tensors, negative_indices, CLASS_POSITIVE, max_seq_length)
 
 
+def _positive_high_score_rank_multiplier(rank: int) -> float:
+    if rank <= 1:
+        return 1.0
+    if rank <= 5:
+        return 0.5
+    if rank <= 10:
+        return 0.25
+    if rank <= 16:
+        return 0.125
+    return 0.0
+
+
 def _positive_high_score_reward(positive_answer_scores, monitored_labels, current_mask=None):
     if positive_answer_scores.numel() < 10 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
         return positive_answer_scores.new_zeros(()), 0.0
@@ -196,9 +208,12 @@ def _positive_high_score_reward(positive_answer_scores, monitored_labels, curren
         label = int(monitored_labels[sample_index].detach().cpu())
         if label != CLASS_POSITIVE:
             continue
-        reward = reward + (sorted_values[rank_index] - baseline) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+        rank = rank_index + 1
+        multiplier = _positive_high_score_rank_multiplier(rank)
+        if multiplier > 0:
+            reward = reward + (sorted_values[rank_index] - baseline) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER * multiplier
         if best_positive_rank == 0:
-            best_positive_rank = rank_index + 1
+            best_positive_rank = rank
     return reward, float(best_positive_rank)
 
 

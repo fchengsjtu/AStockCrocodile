@@ -433,7 +433,7 @@ class ThreeClassTests(unittest.TestCase):
             1.0,
         )
 
-    def test_positive_high_score_reward_uses_all_positive_ranks_against_rank_five_to_ten_average(self):
+    def test_positive_high_score_reward_scales_by_positive_rank_band(self):
         try:
             import torch
         except ModuleNotFoundError:
@@ -487,7 +487,7 @@ class ThreeClassTests(unittest.TestCase):
             ),
         )
         self.assertAlmostEqual(hit, 2.0)
-        self.assertAlmostEqual(float(reward), 12.5, places=6)
+        self.assertAlmostEqual(float(reward), 6.25, places=6)
         negative_reward, low_rank = threeclass_train._positive_high_score_reward(
             torch.tensor([1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]),
             torch.tensor(
@@ -506,7 +506,32 @@ class ThreeClassTests(unittest.TestCase):
             ),
         )
         self.assertEqual(low_rank, 10.0)
-        self.assertAlmostEqual(float(negative_reward), -2.5, places=6)
+        self.assertAlmostEqual(float(negative_reward), -0.625, places=6)
+        rank_12_reward, rank_12 = threeclass_train._positive_high_score_reward(
+            torch.tensor([1.60, 1.50, 1.40, 1.30, 1.20, 1.10, 1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]),
+            torch.tensor(
+                [
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_POSITIVE,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                    CLASS_NEGATIVE,
+                    CLASS_NEUTRAL,
+                ]
+            ),
+        )
+        self.assertEqual(rank_12, 12.0)
+        self.assertAlmostEqual(float(rank_12_reward), -0.5625, places=6)
 
     def test_top_nonpositive_high_score_penalties_push_down_top1(self):
         try:
