@@ -871,19 +871,49 @@ def _score_positive_answer_rows(
     max_seq_length: int,
 ) -> dict[int, float]:
     import torch
+    import torch.nn.functional as functional
 
     if not indices:
         return {}
     device = next(model.parameters()).device
     items = [_positive_answer_item(tokenizer, rows[index], max_seq_length) for index in indices]
-    tensors = _ORIGINAL_COLLATE(tokenizer, items, str(device))
+    grouped: dict[tuple[int, int], list[tuple[int, dict]]] = {}
+    for index, item in zip(indices, items):
+        answer_len = sum(1 for label in item["labels"] if int(label) != -100)
+        grouped.setdefault((len(item["input_ids"]), answer_len), []).append((int(index), item))
+
+    scores_by_index: dict[int, float] = {}
     with torch.no_grad():
-        output = model(**tensors)
-        scores = -_per_sample_answer_nll(output.logits, tensors["labels"])
-    return {
-        int(index): float(score)
-        for index, score in zip(indices, scores.detach().float().cpu().tolist())
-    }
+        for (_sequence_len, answer_len), group in grouped.items():
+            if answer_len <= 0:
+                continue
+            group_indices = [index for index, _item in group]
+            group_items = [item for _index, item in group]
+            tensors = _ORIGINAL_COLLATE(tokenizer, group_items, str(device))
+            try:
+                output = model(
+                    input_ids=tensors["input_ids"],
+                    attention_mask=tensors["attention_mask"],
+                    logits_to_keep=answer_len + 1,
+                    use_cache=False,
+                )
+                # logits_to_keep=A+1 returns the final A+1 positions. For a
+                # prompt+answer row with answer length A, positions 0..A-1
+                # predict exactly the A answer tokens.
+                answer_logits = output.logits[:, :answer_len, :].float()
+                answer_labels = tensors["labels"][:, -answer_len:].contiguous()
+                token_losses = functional.cross_entropy(
+                    answer_logits.reshape(-1, answer_logits.size(-1)),
+                    answer_labels.reshape(-1),
+                    reduction="none",
+                ).reshape(answer_labels.shape)
+                scores = -token_losses.mean(dim=1)
+            except TypeError:
+                output = model(**tensors)
+                scores = -_per_sample_answer_nll(output.logits, tensors["labels"])
+            for index, score in zip(group_indices, scores.detach().float().cpu().tolist()):
+                scores_by_index[index] = float(score)
+    return scores_by_index
 
 
 def _purify_positive_weights_after_checkpoint(
