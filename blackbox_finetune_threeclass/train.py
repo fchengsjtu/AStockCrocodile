@@ -187,14 +187,18 @@ def _positive_high_score_reward(positive_answer_scores, monitored_labels, curren
     if positive_answer_scores.numel() < 5 or _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER <= 0:
         return positive_answer_scores.new_zeros(()), 0.0
     top_values, top_indices = positive_answer_scores.topk(5)
-    if current_mask is not None and not bool(current_mask[top_indices[0]].detach().cpu()):
-        return positive_answer_scores.new_zeros(()), 0.0
-    top_label = int(monitored_labels[top_indices[0]].detach().cpu())
-    if top_label != CLASS_POSITIVE:
-        return positive_answer_scores.new_zeros(()), 0.0
     baseline = top_values[1:].mean().detach()
-    reward = (top_values[0] - baseline) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
-    return reward, 1.0
+    reward = positive_answer_scores.new_zeros(())
+    hits = 0
+    for rank_index in range(3):
+        if current_mask is not None and not bool(current_mask[top_indices[rank_index]].detach().cpu()):
+            continue
+        label = int(monitored_labels[top_indices[rank_index]].detach().cpu())
+        if label != CLASS_POSITIVE:
+            continue
+        reward = reward + (top_values[rank_index] - baseline) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
+        hits += 1
+    return reward, hits / 3.0
 
 
 def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labels, current_mask=None):
