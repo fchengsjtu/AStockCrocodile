@@ -296,12 +296,18 @@ def _compute_asymmetric_training_loss(
     effective_max_seq_length = max(64, int(max_seq_length or DEFAULT_MAX_SEQ_LENGTH))
     class_labels = tensors.pop("class_labels")
     positive_weights = tensors.pop("positive_weights", None)
+    update_positive_weights = tensors.pop("update_positive_weights", None)
     output = model(**tensors)
     correct_nll = _per_sample_answer_nll(output.logits, tensors["labels"])
     if positive_weights is None:
         positive_weights = torch.ones_like(correct_nll)
     else:
         positive_weights = positive_weights.to(dtype=correct_nll.dtype, device=correct_nll.device)
+    if update_positive_weights is None:
+        update_positive_weights = positive_weights
+    else:
+        update_positive_weights = update_positive_weights.to(dtype=correct_nll.dtype, device=correct_nll.device)
+    update_positive_weight = update_positive_weights.clamp_min(0.0).mean()
     class_weights = torch.ones_like(correct_nll)
     class_weights = torch.where(
         class_labels.eq(CLASS_POSITIVE),
@@ -341,6 +347,7 @@ def _compute_asymmetric_training_loss(
             class_labels,
             gradient_accumulation_steps,
         )
+        negative_fp_loss = negative_fp_loss * update_positive_weight
     else:
         positive_nll = None
         negative_fp_loss = correct_nll.new_zeros(())
@@ -369,6 +376,7 @@ def _compute_asymmetric_training_loss(
                 class_labels,
                 gradient_accumulation_steps,
             )
+            neutral_fp_loss = neutral_fp_loss * update_positive_weight
         else:
             neutral_fp_loss = correct_nll.new_zeros(())
     else:
@@ -410,6 +418,7 @@ def _compute_asymmetric_training_loss(
                 monitored_labels,
                 current_mask,
             )
+            high_score_positive_reward = high_score_positive_reward * update_positive_weight
         if positive_answer_scores.numel() and (
             _HIGH_SCORE_NEGATIVE_PENALTY_WEIGHT > 0 or _HIGH_SCORE_NEUTRAL_PENALTY_WEIGHT > 0
         ):
@@ -418,6 +427,8 @@ def _compute_asymmetric_training_loss(
                 monitored_labels,
                 current_mask,
             )
+            high_score_negative_penalty = high_score_negative_penalty * update_positive_weight
+            high_score_neutral_penalty = high_score_neutral_penalty * update_positive_weight
 
     weighted_ce = (correct_nll * class_weights).mean()
 
@@ -436,6 +447,7 @@ def _compute_asymmetric_training_loss(
         "high_score_negative": float(high_score_negative_penalty.detach().cpu()),
         "high_score_neutral": float(high_score_neutral_penalty.detach().cpu()),
         "high_score_positive_reward": float(high_score_positive_reward.detach().cpu()),
+        "update_positive_weight": float(update_positive_weight.detach().cpu()),
     }
     if positive_answer_scores.numel():
         metrics["high_score_positive_best_rank"] = float(high_score_positive_best_rank)
@@ -446,6 +458,7 @@ def _tokenize_threeclass_row(tokenizer, row: dict, max_seq_length: int) -> dict:
     item = _ORIGINAL_TOKENIZE_ROW(tokenizer, row, max_seq_length)
     item["class_label"] = int(row["metadata"]["label"])
     item["positive_weight"] = _row_positive_weight(row)
+    item["update_positive_weight"] = _row_update_positive_weight(row)
     return item
 
 
@@ -460,6 +473,11 @@ def _collate_threeclass(tokenizer, batch: list[dict], device: str) -> dict:
     )
     tensors["positive_weights"] = torch.tensor(
         [float(item.get("positive_weight", 1.0)) for item in batch],
+        dtype=torch.float32,
+        device=device,
+    )
+    tensors["update_positive_weights"] = torch.tensor(
+        [float(item.get("update_positive_weight", item.get("positive_weight", 1.0))) for item in batch],
         dtype=torch.float32,
         device=device,
     )
@@ -486,6 +504,21 @@ def _row_positive_weight(row: dict) -> float:
         return max(0.0, float(value if value is not None else 1.0))
     except (TypeError, ValueError):
         return 1.0
+
+
+def _row_update_positive_weight(row: dict) -> float:
+    metadata = row.get("metadata") if isinstance(row, dict) else None
+    value = None
+    if isinstance(row, dict):
+        value = row.get("update_positive_weight")
+    if value is None and isinstance(metadata, dict):
+        value = metadata.get("update_positive_weight")
+    if value is None:
+        return _row_positive_weight(row)
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return _row_positive_weight(row)
 
 
 def _set_row_positive_weight(row: dict, weight: float) -> None:
@@ -520,6 +553,39 @@ def _sync_positive_weights_to_train_items(rows: list[dict], train_items: list[di
         if isinstance(metadata, dict):
             metadata["positive_weight"] = weight
     return synced
+
+
+def _set_item_update_positive_weight(item: dict, weight: float) -> None:
+    normalized = max(0.0, float(weight))
+    item["update_positive_weight"] = normalized
+    metadata = item.get("metadata")
+    if isinstance(metadata, dict):
+        metadata["update_positive_weight"] = normalized
+
+
+def _assign_cycle_update_positive_weight(train_items: list[dict], cycle: list[int]) -> float:
+    positive_indices = [index for index in cycle if _item_class_label(train_items[index]) == CLASS_POSITIVE]
+    if len(positive_indices) != 1:
+        raise RuntimeError(
+            f"Expected exactly one positive sample in a 1:{_NEGATIVE_PER_POSITIVE}:{_NEUTRAL_PER_POSITIVE} update group; "
+            f"got {len(positive_indices)}. Rebuild the three-class dataset."
+        )
+    weight = _row_positive_weight(train_items[positive_indices[0]])
+    for index in cycle:
+        _set_item_update_positive_weight(train_items[index], weight)
+    return weight
+
+
+def _refresh_order_update_positive_weights(train_items: list[dict], train_order: list[int], group_size: int) -> int:
+    normalized_group_size = max(1, int(group_size))
+    refreshed = 0
+    for offset in range(0, len(train_order), normalized_group_size):
+        cycle = [int(index) for index in train_order[offset : offset + normalized_group_size]]
+        if len(cycle) != normalized_group_size:
+            continue
+        _assign_cycle_update_positive_weight(train_items, cycle)
+        refreshed += len(cycle)
+    return refreshed
 
 
 def _prepare_positive_weights_for_training(
@@ -591,6 +657,7 @@ def _build_balanced_train_order(train_items: list[dict], seed: int, rng) -> list
             for label in _class_pattern():
                 cycle.append(date_grouped[label][positions[label]])
                 positions[label] += 1
+            _assign_cycle_update_positive_weight(train_items, cycle)
             rng.shuffle(cycle)
             train_order.extend(cycle)
     if not train_order:
@@ -645,6 +712,7 @@ def _update_positive_weights_from_ranked_groups(
                 if isinstance(metadata, dict):
                     metadata["positive_weight"] = new_weight
             updated += 1
+        _refresh_order_update_positive_weights(train_items, group_indices, len(group_indices))
     return {
         "positive_purification_groups": groups,
         "positive_purification_seen": positive_seen,

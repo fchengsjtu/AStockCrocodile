@@ -205,12 +205,20 @@ class ThreeClassTests(unittest.TestCase):
             + [sample_on_date(CLASS_NEGATIVE, index + 100, "2026-01-05") for index in range(8)]
             + [sample_on_date(CLASS_NEUTRAL, index + 200, "2026-01-05") for index in range(22)]
         )
+        rows[0]["positive_weight"] = 0.25
+        rows[1]["positive_weight"] = 0.75
         rows[0]["class_label"] = rows[0]["metadata"].pop("label")
         order = threeclass_train._build_balanced_train_order(rows, 11, random.Random(11))
         labels = [threeclass_train._item_class_label(rows[index]) for index in order[:16]]
         counts = {label: labels.count(label) for label in range(3)}
         self.assertEqual(counts, {CLASS_NEGATIVE: 4, CLASS_NEUTRAL: 11, CLASS_POSITIVE: 1})
         self.assertEqual({rows[index]["metadata"]["anchor_date"] for index in order[:16]}, {"2026-01-05"})
+        group_positive_index = next(index for index in order[:16] if threeclass_train._item_class_label(rows[index]) == CLASS_POSITIVE)
+        group_weight = rows[group_positive_index]["positive_weight"]
+        self.assertEqual(
+            {threeclass_train._row_update_positive_weight(rows[index]) for index in order[:16]},
+            {group_weight},
+        )
         self.assertNotEqual(labels, [CLASS_POSITIVE] + [CLASS_NEGATIVE] * 4 + [CLASS_NEUTRAL] * 11)
 
     def test_balanced_train_order_rejects_cross_day_completion(self):
@@ -387,38 +395,39 @@ class ThreeClassTests(unittest.TestCase):
         )
         self.assertEqual(item["class_label"], CLASS_NEGATIVE)
         self.assertEqual(item["positive_weight"], 0.25)
+        self.assertEqual(item["update_positive_weight"], 0.25)
 
     def test_positive_purification_halves_bottom_three_positive_weights(self):
         rows = []
-        for index in range(16):
-            label = CLASS_POSITIVE if index in {0, 7, 14} else CLASS_NEUTRAL
+        for index in range(32):
+            label = CLASS_POSITIVE if index in {0, 16} else CLASS_NEUTRAL
             row = sample(label, index)
             if label == CLASS_POSITIVE:
                 row["positive_weight"] = 1.0
             rows.append(row)
         train_items = [dict(row) for row in rows]
-        scores = {index: float(index) for index in range(16)}
+        scores = {index: float(index) for index in range(32)}
         scores[0] = -3.0
-        scores[7] = -2.0
-        scores[14] = 15.0
+        scores[16] = 99.0
 
         stats = threeclass_train._update_positive_weights_from_ranked_groups(
             rows,
             train_items,
-            list(range(16)),
+            list(range(32)),
             scores,
             group_size=16,
             bottom_k=3,
             decay=0.5,
         )
 
-        self.assertEqual(stats["positive_purification_seen"], 3)
-        self.assertEqual(stats["positive_purification_updated"], 2)
+        self.assertEqual(stats["positive_purification_seen"], 2)
+        self.assertEqual(stats["positive_purification_updated"], 1)
         self.assertEqual(rows[0]["positive_weight"], 0.5)
-        self.assertEqual(rows[7]["positive_weight"], 0.5)
-        self.assertEqual(rows[14]["positive_weight"], 1.0)
+        self.assertEqual(rows[16]["positive_weight"], 1.0)
         self.assertEqual(rows[0]["metadata"]["positive_weight"], 0.5)
-        self.assertEqual(train_items[7]["positive_weight"], 0.5)
+        self.assertEqual(train_items[0]["positive_weight"], 0.5)
+        self.assertEqual({threeclass_train._row_update_positive_weight(train_items[index]) for index in range(16)}, {0.5})
+        self.assertEqual({threeclass_train._row_update_positive_weight(train_items[index]) for index in range(16, 32)}, {1.0})
 
     def test_negative_auxiliary_losses_penalize_preferred_positive_answer(self):
         try:

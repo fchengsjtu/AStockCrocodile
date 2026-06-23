@@ -92,7 +92,7 @@ The default training class ratio is `positive:negative:neutral = 1:4:11`. One fu
 : If a true positive row is among the lowest 3 Positive-answer scores inside its group, it is treated as an inconsistent positive sample for this checkpoint.
 
 `POSITIVE_PURIFICATION_DECAY=0.5`
-: Multiplies the low-ranked positive row's persistent `positive_weight` by this value. `positive_weight` starts at `1.0` and multiplies the positive CE loss. After each checkpoint, the updated rows are written back to `train.jsonl` and also snapshotted as `train_positive_weights_update-XXXXXX.jsonl`.
+: Multiplies the low-ranked positive row's persistent `positive_weight` by this value. `positive_weight` starts at `1.0` and multiplies that row's positive CE. It is also copied to the full 1:4:11 group's `update_positive_weight`, which multiplies false-positive losses and high-score reward/penalty terms for that update group. Negative and neutral CE weights are not changed by `positive_weight`. After each checkpoint, the updated rows are written back to `train.jsonl` and also snapshotted as `train_positive_weights_update-XXXXXX.jsonl`.
 
 ## Evaluation And Prediction Ranking
 
