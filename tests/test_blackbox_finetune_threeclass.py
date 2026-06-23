@@ -467,7 +467,7 @@ class ThreeClassTests(unittest.TestCase):
                 ]
             ),
         )
-        self.assertAlmostEqual(hit, 1 / 5)
+        self.assertAlmostEqual(hit, 1.0)
         self.assertAlmostEqual(float(reward), 7.0, places=6)
         reward, hit = threeclass_train._positive_high_score_reward(
             torch.tensor([1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]),
@@ -486,7 +486,7 @@ class ThreeClassTests(unittest.TestCase):
                 ]
             ),
         )
-        self.assertAlmostEqual(hit, 3 / 5)
+        self.assertAlmostEqual(hit, (1 / 2 + 1 / 3 + 1 / 5) / 3)
         self.assertAlmostEqual(float(reward), 14.0, places=6)
         no_reward, no_hit = threeclass_train._positive_high_score_reward(
             torch.tensor([1.00, 0.90, 0.80, 0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]),
@@ -583,7 +583,7 @@ class ThreeClassTests(unittest.TestCase):
             gradient_accumulation_steps=5,
         )
         reward, hit = threeclass_train._positive_high_score_reward(second_scores, second_labels, second_mask)
-        self.assertAlmostEqual(hit, 1 / 5)
+        self.assertAlmostEqual(hit, 1.0)
         self.assertAlmostEqual(float(reward), 5.6, places=6)
         self.assertEqual(threeclass_train._TOP_SCORE_WINDOW, [])
         threeclass_train._TOP_SCORE_WINDOW = []

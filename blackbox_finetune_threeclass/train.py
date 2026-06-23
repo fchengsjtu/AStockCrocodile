@@ -189,7 +189,7 @@ def _positive_high_score_reward(positive_answer_scores, monitored_labels, curren
     top_values, top_indices = positive_answer_scores.topk(10)
     baseline = top_values[5:].mean().detach()
     reward = positive_answer_scores.new_zeros(())
-    hits = 0
+    rank_scores = []
     for rank_index in range(5):
         if current_mask is not None and not bool(current_mask[top_indices[rank_index]].detach().cpu()):
             continue
@@ -197,8 +197,9 @@ def _positive_high_score_reward(positive_answer_scores, monitored_labels, curren
         if label != CLASS_POSITIVE:
             continue
         reward = reward + (top_values[rank_index] - baseline) * _HIGH_SCORE_POSITIVE_BONUS_MAX_MULTIPLIER
-        hits += 1
-    return reward, hits / 5.0
+        rank_scores.append(1.0 / float(rank_index + 1))
+    rank_metric = sum(rank_scores) / len(rank_scores) if rank_scores else 0.0
+    return reward, rank_metric
 
 
 def _top_nonpositive_high_score_penalties(positive_answer_scores, monitored_labels, current_mask=None):
@@ -412,8 +413,9 @@ def _compute_asymmetric_training_loss(
         "high_score_neutral": float(high_score_neutral_penalty.detach().cpu()),
         "high_score_positive_reward": float(high_score_positive_reward.detach().cpu()),
         "high_score_positive_bonus_multiplier": float(high_score_positive_reward.detach().cpu()),
-        "high_score_positive_hits": float(high_score_positive_hits),
     }
+    if positive_answer_scores.numel():
+        metrics["high_score_positive_hits"] = float(high_score_positive_hits)
     return total_loss, metrics
 
 
