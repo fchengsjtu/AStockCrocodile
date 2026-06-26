@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterable
 
 LOCAL_DEPS = Path(__file__).resolve().parent / ".deps"
-if LOCAL_DEPS.exists():
+if LOCAL_DEPS.exists() and os.environ.get("ASTOCK_DISABLE_LOCAL_DEPS", "").lower() not in {"1", "true", "yes", "on"}:
     sys.path.insert(0, str(LOCAL_DEPS))
 
 import akshare as ak
