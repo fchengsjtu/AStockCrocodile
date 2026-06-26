@@ -51,6 +51,8 @@ else
 fi
 mkdir -p "$OUTPUT_ROOT"
 SUMMARY_JSONL="$OUTPUT_ROOT/summary.jsonl"
+SUMMARY_JSON="$OUTPUT_ROOT/summary.json"
+: > "$SUMMARY_JSONL"
 
 echo "Batch evaluating recall60 checkpoints"
 echo "  checkpoint_root=$CHECKPOINT_ROOT"
@@ -64,6 +66,20 @@ for checkpoint_subdir in "${CHECKPOINT_SUBDIRS[@]}"; do
   adapter_dir="$CHECKPOINT_ROOT/$checkpoint_subdir"
   if [[ ! -d "$adapter_dir" ]]; then
     echo "WARNING missing checkpoint directory; skipping: $adapter_dir" >&2
+    "$PYTHON_BIN" - "$checkpoint_subdir" "$adapter_dir" "$SUMMARY_JSONL" <<'PY'
+import json
+import sys
+
+checkpoint, adapter_dir, summary_path = sys.argv[1:4]
+record = {
+    "checkpoint": checkpoint,
+    "adapter_dir": adapter_dir,
+    "status": "missing_checkpoint",
+}
+with open(summary_path, "a", encoding="utf-8") as file:
+    file.write(json.dumps(record, ensure_ascii=False) + "\n")
+print(json.dumps(record, ensure_ascii=False, indent=2))
+PY
     continue
   fi
 
@@ -72,6 +88,7 @@ for checkpoint_subdir in "${CHECKPOINT_SUBDIRS[@]}"; do
   echo
   echo "==== evaluate $checkpoint_subdir ===="
 
+  set +e
   "$PYTHON_BIN" -m blackbox_finetune_recall60.evaluate \
     --base-model "$BASE_MODEL" \
     --adapter-dir "$adapter_dir" \
@@ -82,20 +99,30 @@ for checkpoint_subdir in "${CHECKPOINT_SUBDIRS[@]}"; do
     --max-seq-length "$MAX_SEQ_LENGTH" \
     --cuda-device "$CUDA_DEVICE" \
     --output-dir "$output_dir"
+  eval_exit_code=$?
+  set -e
 
   result_path="$output_dir/evaluation.json"
-  "$PYTHON_BIN" - "$checkpoint_subdir" "$adapter_dir" "$result_path" "$SUMMARY_JSONL" <<'PY'
+  "$PYTHON_BIN" - "$checkpoint_subdir" "$adapter_dir" "$result_path" "$SUMMARY_JSONL" "$eval_exit_code" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-checkpoint, adapter_dir, result_path, summary_path = sys.argv[1:5]
-with open(result_path, "r", encoding="utf-8") as file:
-    result = json.load(file)
+checkpoint, adapter_dir, result_path, summary_path, eval_exit_code = sys.argv[1:6]
+result_file = Path(result_path)
+if result_file.exists():
+    with result_file.open("r", encoding="utf-8") as file:
+        result = json.load(file)
+    status = "ok" if int(eval_exit_code) == 0 else "evaluate_failed_after_result"
+else:
+    result = {}
+    status = "evaluate_failed_no_result"
 record = {
     "checkpoint": checkpoint,
     "adapter_dir": adapter_dir,
     "result_path": result_path,
+    "status": status,
+    "eval_exit_code": int(eval_exit_code),
     "samples": result.get("samples"),
     "positive_samples": result.get("positive_samples"),
     "tp": result.get("tp"),
@@ -113,5 +140,21 @@ print(json.dumps(record, ensure_ascii=False, indent=2))
 PY
 done
 
+"$PYTHON_BIN" - "$SUMMARY_JSONL" "$SUMMARY_JSON" <<'PY'
+import json
+import sys
+
+summary_jsonl, summary_json = sys.argv[1:3]
+records = []
+with open(summary_jsonl, "r", encoding="utf-8") as file:
+    for line in file:
+        line = line.strip()
+        if line:
+            records.append(json.loads(line))
+with open(summary_json, "w", encoding="utf-8") as file:
+    json.dump(records, file, ensure_ascii=False, indent=2)
+PY
+
 echo
 echo "Batch evaluation summary: $SUMMARY_JSONL"
+echo "Batch evaluation summary JSON: $SUMMARY_JSON"
