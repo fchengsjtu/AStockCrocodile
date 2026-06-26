@@ -43,6 +43,23 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 export ASTOCK_DISABLE_LOCAL_DEPS="${ASTOCK_DISABLE_LOCAL_DEPS:-1}"
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
+is_wsl() {
+  grep -qiE "microsoft|wsl" /proc/version 2>/dev/null
+}
+
+default_windows_host_from_wsl() {
+  awk '/^nameserver / { print $2; exit }' /etc/resolv.conf
+}
+
+if is_wsl && [[ -z "${MYSQL_HOST:-}" ]]; then
+  MYSQL_HOST="$(default_windows_host_from_wsl)"
+  export MYSQL_HOST
+  MYSQL_HOST_SOURCE="wsl_windows_gateway"
+else
+  MYSQL_HOST_SOURCE="${MYSQL_HOST:+environment}"
+  MYSQL_HOST_SOURCE="${MYSQL_HOST_SOURCE:-env.txt/default}"
+fi
+
 resolve_python() {
   local requested="${MAIN_PYTHON:-}"
   if [[ -n "$requested" && -x "$requested" ]]; then
@@ -134,6 +151,8 @@ echo "CrawlMode=$CRAWL_MODE"
 echo "CrawlStartDate=$CRAWL_START_DATE"
 echo "LogFile=$LOG_FILE"
 echo "ASTOCK_DISABLE_LOCAL_DEPS=$ASTOCK_DISABLE_LOCAL_DEPS"
+echo "MYSQL_HOST=${MYSQL_HOST:-<env.txt>}"
+echo "MYSQL_HOST_SOURCE=$MYSQL_HOST_SOURCE"
 
 ensure_crawler_deps
 
