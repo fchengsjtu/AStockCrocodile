@@ -4,7 +4,7 @@ import argparse
 import json
 import random
 import sys
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +14,6 @@ if str(PROJECT_ROOT) not in sys.path:
 from blackbox_negative_reshuffle.core import (
     copy_dataset,
     copy_model_files,
-    SourceMetadata,
     load_source_metadata,
     read_jsonl,
     reshuffle_split,
@@ -23,6 +22,9 @@ from blackbox_negative_reshuffle.core import (
     score_negative_rows,
     write_jsonl,
 )
+
+NEGATIVE_EXCLUSION_TRADING_DAYS = 20
+TRADING_DATE_SYMBOL_BATCH_SIZE = 500
 
 
 def infer_dataset_settings(rows: list[dict], sample_mode: str | None) -> tuple[str, object, object]:
@@ -47,6 +49,157 @@ def infer_dataset_settings(rows: list[dict], sample_mode: str | None) -> tuple[s
     return resolved_mode, min(dates), max(dates)
 
 
+def load_excluded_positive_windows(conn, stat_type: str, start_date: date, end_date: date, padding_days: int = 10) -> dict[str, set[date]]:
+    from blackbox_finetune_recall60.common import parse_date
+
+    sql = """
+        SELECT SCode, PrevTradeDate
+        FROM klinestatistics
+        WHERE StatType = %s
+          AND PrevTradeDate >= %s
+          AND PrevTradeDate <= %s
+          AND PrevTradeDate IS NOT NULL
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (stat_type, start_date - timedelta(days=padding_days), end_date + timedelta(days=padding_days)))
+        rows = cur.fetchall()
+    raw_dates: dict[str, set[date]] = {}
+    for scode, prev_trade_date in rows:
+        raw_dates.setdefault(str(scode), set()).add(parse_date(prev_trade_date))
+    return raw_dates
+
+
+def load_trading_dates_for_symbols(conn, symbols: list[str], start_date: date, end_date: date) -> dict[str, list[date]]:
+    from blackbox_finetune_recall60.common import parse_date
+
+    if not symbols:
+        return {}
+    placeholders = ",".join(["%s"] * len(symbols))
+    sql = f"""
+        SELECT SCode, DATE(KTime)
+        FROM dkandles
+        WHERE KType = 'D'
+          AND SCode IN ({placeholders})
+          AND KTime >= %s
+          AND KTime < %s
+        ORDER BY SCode, KTime
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, [*symbols, start_date, end_date + timedelta(days=1)])
+        rows = cur.fetchall()
+    dates: dict[str, list[date]] = {}
+    for scode, trade_date in rows:
+        dates.setdefault(str(scode), []).append(parse_date(trade_date))
+    return dates
+
+
+def load_trading_dates_for_symbols_batched(
+    conn,
+    symbols: list[str],
+    start_date: date,
+    end_date: date,
+    batch_size: int = TRADING_DATE_SYMBOL_BATCH_SIZE,
+) -> dict[str, list[date]]:
+    result: dict[str, list[date]] = {}
+    for start in range(0, len(symbols), batch_size):
+        batch = symbols[start : start + batch_size]
+        batch_dates = load_trading_dates_for_symbols(conn, batch, start_date, end_date)
+        for scode, dates in batch_dates.items():
+            result.setdefault(scode, []).extend(dates)
+    return result
+
+
+def excluded_dates_by_symbol(
+    conn,
+    positive_windows: dict[str, set[date]],
+    start_date: date,
+    end_date: date,
+    buffer: int,
+    batch_size: int,
+) -> dict[str, set[date]]:
+    result: dict[str, set[date]] = {scode: set() for scode in positive_windows}
+    symbols = sorted(positive_windows)
+    for start in range(0, len(symbols), batch_size):
+        batch = symbols[start : start + batch_size]
+        padding_days = max(20, buffer * 3 + 10)
+        date_map = load_trading_dates_for_symbols_batched(
+            conn,
+            batch,
+            start_date - timedelta(days=padding_days),
+            end_date + timedelta(days=padding_days),
+            batch_size,
+        )
+        for scode in batch:
+            dates = date_map.get(scode, [])
+            index = {trade_date: idx for idx, trade_date in enumerate(dates)}
+            for pos_date in positive_windows.get(scode, set()):
+                idx = index.get(pos_date)
+                if idx is None:
+                    continue
+                lo = max(0, idx - buffer)
+                hi = min(len(dates), idx + buffer + 1)
+                result.setdefault(scode, set()).update(dates[lo:hi])
+    return result
+
+
+def load_random_negative_events_without_akshare_dependency(
+    conn,
+    stat_type: str,
+    start_date: date,
+    end_date: date,
+    limit: int,
+    seed: int,
+    batch_size: int,
+):
+    from blackbox_finetune_recall60.common import SampleEvent, parse_date
+
+    positive_windows = load_excluded_positive_windows(
+        conn,
+        stat_type,
+        start_date,
+        end_date,
+        NEGATIVE_EXCLUSION_TRADING_DAYS * 3 + 10,
+    )
+    excluded = excluded_dates_by_symbol(
+        conn,
+        positive_windows,
+        start_date,
+        end_date,
+        NEGATIVE_EXCLUSION_TRADING_DAYS,
+        batch_size,
+    )
+    candidates: list[SampleEvent] = []
+    seen: set[tuple[str, date]] = set()
+    scan_limit = max(limit * 3, limit + 1000, 5000)
+    attempt = 0
+    while len(candidates) < limit and attempt < 5:
+        sql = """
+            SELECT SCode, DATE(KTime)
+            FROM dkandles
+            WHERE KType = 'D'
+              AND KTime >= %s
+              AND KTime < %s
+            ORDER BY RAND(%s)
+            LIMIT %s
+        """
+        with conn.cursor() as cur:
+            cur.execute(sql, (start_date, end_date + timedelta(days=1), seed + attempt, scan_limit))
+            rows = cur.fetchall()
+        for scode, trade_date_value in rows:
+            scode = str(scode)
+            trade_date = parse_date(trade_date_value)
+            key = (scode, trade_date)
+            if key in seen or trade_date in excluded.get(scode, set()):
+                continue
+            seen.add(key)
+            candidates.append(SampleEvent(scode, trade_date, 0, "negative", None))
+            if len(candidates) >= limit:
+                break
+        attempt += 1
+        scan_limit *= 2
+    return candidates[:limit]
+
+
 def load_database_replacement_pool(
     current_negative_keys: set[tuple[str, str, int]],
     required_count: int,
@@ -59,7 +212,6 @@ def load_database_replacement_pool(
     max_attempts: int,
     cache_path: Path | None = None,
 ) -> list[dict]:
-    from blackbox_finetune.build_dataset import load_random_negative_events
     from blackbox_finetune_recall60.common import materialize_events, mysql_connect
 
     replacements: dict[tuple[str, str, int], dict] = {}
@@ -73,8 +225,6 @@ def load_database_replacement_pool(
             f"path={cache_path}",
             flush=True,
         )
-        if len(replacements) >= required_count:
-            return list(replacements.values())
     with mysql_connect() as conn:
         for attempt in range(max(1, max_attempts)):
             remaining = required_count - len(replacements)
@@ -83,7 +233,7 @@ def load_database_replacement_pool(
             prior_usable = len(replacements)
             growth_factor = min(8, 3 + attempt // 2)
             requested_events = max(remaining * growth_factor, remaining + 5000)
-            events = load_random_negative_events(
+            events = load_random_negative_events_without_akshare_dependency(
                 conn,
                 stat_type,
                 start_date,
@@ -158,83 +308,6 @@ def build_model_scorer(model_dir: Path, base_model: str | None, max_seq_length: 
     return scorer, resolved_base_model
 
 
-def _score_row_key(row: dict) -> tuple[str, str, int]:
-    metadata = row.get("metadata", row)
-    return (
-        str(metadata.get("scode", row.get("scode", ""))),
-        str(metadata.get("anchor_date", row.get("anchor_date", ""))),
-        0,
-    )
-
-
-def load_cached_negative_scores(
-    scores_path: Path,
-    current_negatives: list[dict],
-) -> list[tuple[float, dict]]:
-    score_by_key: dict[tuple[str, str, int], float] = {}
-    for row in read_jsonl(scores_path):
-        key = _score_row_key(row)
-        if key[0] and key[1] and "score" in row:
-            score_by_key[key] = float(row["score"])
-    scored: list[tuple[float, dict]] = []
-    missing: list[tuple[str, str, int]] = []
-    for row in current_negatives:
-        key = row_key(row)
-        if key not in score_by_key:
-            missing.append(key)
-            scored.append((float("-inf"), row))
-            continue
-        scored.append((score_by_key[key], row))
-    if missing:
-        preview = ", ".join(f"{code}@{day}" for code, day, _ in missing[:5])
-        print(
-            f"WARNING cached negative scores do not cover all current negatives; "
-            f"missing={len(missing)} preview={preview}. "
-            f"Missing rows are ranked last and will be replaced first.",
-            flush=True,
-        )
-    scored.sort(key=lambda item: item[0], reverse=True)
-    print(
-        f"loaded cached negative scores rows={len(scored)} "
-        f"scored={len(scored) - len(missing)} missing={len(missing)} path={scores_path}",
-        flush=True,
-    )
-    return scored
-
-
-def load_cycle_metadata(source_cycle_dir: Path) -> SourceMetadata:
-    source_cycle_dir = source_cycle_dir.resolve()
-    training_dir = source_cycle_dir / "datasets" / "training"
-    evaluation_dir = source_cycle_dir / "datasets" / "evaluation"
-    for directory, names in (
-        (training_dir, ("train.jsonl", "test.jsonl", "all.jsonl")),
-        (evaluation_dir, ("test.jsonl",)),
-    ):
-        missing = [name for name in names if not (directory / name).is_file()]
-        if missing:
-            raise FileNotFoundError(f"{directory} is missing: {', '.join(missing)}")
-    eval_candidates = sorted((source_cycle_dir / "runs" / "evaluations").glob("eval-*.json"))
-    if eval_candidates:
-        evaluation_json = eval_candidates[-1]
-    else:
-        evaluation_json = source_cycle_dir / "reshuffle_manifest.json"
-    return SourceMetadata(evaluation_json, training_dir, evaluation_dir)
-
-
-def resolve_base_model_without_loading(model_dir: Path, base_model: str | None) -> str | None:
-    if base_model:
-        return base_model
-    config_path = model_dir / "adapter_config.json"
-    if config_path.is_file():
-        try:
-            config = json.loads(config_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return None
-        value = config.get("base_model_name_or_path")
-        return str(value) if value else None
-    return None
-
-
 def run_reshuffle(
     model_dir: Path,
     evaluation_json: Path | None,
@@ -250,15 +323,11 @@ def run_reshuffle(
     sample_mode: str | None,
     database_batch_size: int,
     database_max_attempts: int,
-    source_cycle_dir: Path | None = None,
-    reuse_scores_path: Path | None = None,
-    recompute_scores: bool = False,
-    target_negative_ratio: float | None = None,
 ) -> Path:
     model_dir = model_dir.resolve()
-    run_dir = source_cycle_dir.resolve().parent / output_name if source_cycle_dir else model_dir / "negative_reshuffle" / output_name
+    run_dir = model_dir / "negative_reshuffle" / output_name
     run_dir.mkdir(parents=True, exist_ok=True)
-    metadata = load_cycle_metadata(source_cycle_dir) if source_cycle_dir else load_source_metadata(model_dir, evaluation_json)
+    metadata = load_source_metadata(model_dir, evaluation_json)
     train_rows = read_jsonl(metadata.training_dataset_dir / "train.jsonl")
     test_rows = read_jsonl(metadata.training_dataset_dir / "test.jsonl")
     all_source_rows = train_rows + test_rows
@@ -270,70 +339,36 @@ def run_reshuffle(
     current_negatives = list(current_negative_by_key.values())
     if not current_negatives:
         raise RuntimeError("original training dataset contains no negative samples")
-    default_scores_path = (
-        reuse_scores_path
-        or (source_cycle_dir / "negative_scores.jsonl" if source_cycle_dir else run_dir / "negative_scores.jsonl")
+    scorer, resolved_base_model = build_model_scorer(
+        model_dir,
+        base_model,
+        max_seq_length,
+        cuda_device,
     )
-    if not recompute_scores and default_scores_path is not None and default_scores_path.is_file():
-        scored_current_negatives = load_cached_negative_scores(default_scores_path, current_negatives)
-        resolved_base_model = resolve_base_model_without_loading(model_dir, base_model)
-        scores_source = str(default_scores_path)
-        scores_recomputed = False
-    else:
-        scorer, resolved_base_model = build_model_scorer(
-            model_dir,
-            base_model,
-            max_seq_length,
-            cuda_device,
-        )
-        scored_current_negatives = score_negative_rows(current_negatives, scorer, progress_every)
-        scores_source = "model"
-        scores_recomputed = True
+    scored_current_negatives = score_negative_rows(current_negatives, scorer, progress_every)
     rng = random.Random(seed)
-    train_positive_count = sum(row_label(row) == 1 for row in train_rows)
-    test_positive_count = sum(row_label(row) == 1 for row in test_rows)
     train_negative_count = sum(row_label(row) == 0 for row in train_rows)
     test_negative_count = sum(row_label(row) == 0 for row in test_rows)
-    train_target_negative_count = (
-        train_negative_count
-        if target_negative_ratio is None
-        else max(0, round(train_positive_count * max(0.0, target_negative_ratio)))
-    )
-    test_target_negative_count = (
-        test_negative_count
-        if target_negative_ratio is None
-        else max(0, round(test_positive_count * max(0.0, target_negative_ratio)))
-    )
     train_keep_count = (
-        min(max(0, keep_count), train_target_negative_count)
+        min(max(0, keep_count), train_negative_count)
         if keep_count is not None
-        else round(train_target_negative_count * min(max(keep_ratio, 0.0), 1.0))
+        else round(train_negative_count * min(max(keep_ratio, 0.0), 1.0))
     )
     test_keep_count = (
-        min(max(0, keep_count), test_target_negative_count)
+        min(max(0, keep_count), test_negative_count)
         if keep_count is not None
-        else round(test_target_negative_count * min(max(keep_ratio, 0.0), 1.0))
+        else round(test_negative_count * min(max(keep_ratio, 0.0), 1.0))
     )
     replacement_count = (
-        train_target_negative_count
+        train_negative_count
         - train_keep_count
-        + test_target_negative_count
+        + test_negative_count
         - test_keep_count
     )
     resolved_sample_mode, start_date, end_date = infer_dataset_settings(
         all_source_rows,
         sample_mode,
     )
-    replacement_cache_path = run_dir / "database_replacement_pool.jsonl"
-    if source_cycle_dir:
-        source_pool_path = source_cycle_dir / "database_replacement_pool.jsonl"
-        if source_pool_path.is_file() and not replacement_cache_path.exists():
-            replacement_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            replacement_cache_path.write_text(
-                source_pool_path.read_text(encoding="utf-8"),
-                encoding="utf-8",
-                newline="\n",
-            )
     replacement_pool = load_database_replacement_pool(
         current_negative_keys=set(current_negative_by_key),
         required_count=replacement_count,
@@ -344,7 +379,7 @@ def run_reshuffle(
         seed=seed,
         batch_size=database_batch_size,
         max_attempts=database_max_attempts,
-        cache_path=replacement_cache_path,
+        cache_path=run_dir / "database_replacement_pool.jsonl",
     )
     new_train_rows, train_keys, train_stats = reshuffle_split(
         train_rows,
@@ -352,7 +387,6 @@ def run_reshuffle(
         replacement_pool,
         train_keep_count,
         rng,
-        target_negative_count=train_target_negative_count,
     )
     new_test_rows, test_keys, test_stats = reshuffle_split(
         test_rows,
@@ -361,7 +395,6 @@ def run_reshuffle(
         test_keep_count,
         rng,
         excluded_keys=train_keys,
-        target_negative_count=test_target_negative_count,
     )
     training_output = run_dir / "datasets" / "training"
     evaluation_output = run_dir / "datasets" / "evaluation"
@@ -372,21 +405,17 @@ def run_reshuffle(
     copy_dataset(metadata.evaluation_dataset_dir, evaluation_output)
     copied_model_files = copy_model_files(model_dir, adapter_output)
     scores_output = run_dir / "negative_scores.jsonl"
-    if scores_recomputed:
-        write_jsonl(
-            scores_output,
-            (
-                {
-                    "scode": row.get("metadata", {}).get("scode"),
-                    "anchor_date": row.get("metadata", {}).get("anchor_date"),
-                    "score": score,
-                }
-                for score, row in scored_current_negatives
-            ),
-        )
-    elif default_scores_path != scores_output:
-        scores_output.parent.mkdir(parents=True, exist_ok=True)
-        scores_output.write_text(default_scores_path.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    write_jsonl(
+        scores_output,
+        (
+            {
+                "scode": row.get("metadata", {}).get("scode"),
+                "anchor_date": row.get("metadata", {}).get("anchor_date"),
+                "score": score,
+            }
+            for score, row in scored_current_negatives
+        ),
+    )
     manifest = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "source_model_path": str(model_dir),
@@ -397,9 +426,6 @@ def run_reshuffle(
         "generated_eval_dataset_path": str(evaluation_output),
         "generated_model_path": str(adapter_output),
         "base_model": resolved_base_model,
-        "source_cycle_dir": str(source_cycle_dir) if source_cycle_dir else None,
-        "negative_scores_source": scores_source,
-        "negative_scores_recomputed": scores_recomputed,
         "max_seq_length": max_seq_length,
         "stat_type": stat_type,
         "sample_mode": resolved_sample_mode,
@@ -408,11 +434,6 @@ def run_reshuffle(
         "seed": seed,
         "keep_ratio": keep_ratio,
         "keep_count": keep_count,
-        "target_negative_ratio": target_negative_ratio,
-        "source_train_negative_count": train_negative_count,
-        "source_test_negative_count": test_negative_count,
-        "target_train_negative_count": train_target_negative_count,
-        "target_test_negative_count": test_target_negative_count,
         "scored_current_negative_count": len(current_negatives),
         "database_replacement_pool_count": len(replacement_pool),
         "train": train_stats,
@@ -456,7 +477,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--evaluation-json", type=Path)
     parser.add_argument("--output-name", default=datetime.now().strftime("run-%Y%m%d-%H%M%S"))
-    parser.add_argument("--keep-ratio", type=float, default=0.30)
+    parser.add_argument("--keep-ratio", type=float, default=0.20)
     parser.add_argument("--keep-count", type=int)
     parser.add_argument("--seed", type=int, default=937498347)
     parser.add_argument("--base-model")
@@ -466,26 +487,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stat-type", default="short_term_surge_3d_20pct")
     parser.add_argument("--sample-mode", choices=["short", "long", "xlong", "xxlong"])
     parser.add_argument("--database-batch-size", type=int, default=80)
-    parser.add_argument(
-        "--source-cycle-dir",
-        type=Path,
-        help="Reuse an existing negative_reshuffle cycle directory as the source dataset, score cache, and replacement-pool cache.",
-    )
-    parser.add_argument(
-        "--reuse-scores-path",
-        type=Path,
-        help="Use this existing negative_scores.jsonl instead of rescoring current negatives.",
-    )
-    parser.add_argument(
-        "--recompute-scores",
-        action="store_true",
-        help="Ignore cached negative scores and score current negatives with the model.",
-    )
-    parser.add_argument(
-        "--target-negative-ratio",
-        type=float,
-        help="Generate each split with this many negative rows per positive row. Defaults to preserving the source split negative count.",
-    )
     parser.add_argument(
         "--database-max-attempts",
         type=int,
@@ -512,10 +513,6 @@ def main() -> None:
         sample_mode=args.sample_mode,
         database_batch_size=max(1, args.database_batch_size),
         database_max_attempts=max(1, args.database_max_attempts),
-        source_cycle_dir=args.source_cycle_dir,
-        reuse_scores_path=args.reuse_scores_path,
-        recompute_scores=args.recompute_scores,
-        target_negative_ratio=args.target_negative_ratio,
     )
 
 
