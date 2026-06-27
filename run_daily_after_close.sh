@@ -5,25 +5,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 TRADE_DATE="$(date +%Y%m%d)"
-MODEL_DIR="D:\\Models\\precision10@0.4-1400"
 CRAWLER_WORKERS="${CRAWLER_WORKERS:-8}"
 CRAWL_MODE="${CRAWL_MODE:-full}"
 CRAWL_START_DATE="${CRAWL_START_DATE:-20100101}"
 
-if [[ $# -gt 2 ]]; then
-  echo "Usage: bash ./run_daily_after_close.sh [trade_date:yyyymmdd] [model_dir]" >&2
-  echo '   or: bash ./run_daily_after_close.sh [model_dir]' >&2
+if [[ $# -gt 1 ]]; then
+  echo "Usage: bash ./run_daily_after_close.sh [trade_date:yyyymmdd]" >&2
   exit 2
 fi
 if [[ $# -eq 1 ]]; then
   if [[ "$1" =~ ^[0-9]{8}$ ]]; then
     TRADE_DATE="$1"
   else
-    MODEL_DIR="$1"
+    echo "Trade date must use yyyyMMdd format, for example 20260529." >&2
+    exit 2
   fi
-elif [[ $# -eq 2 ]]; then
-  TRADE_DATE="$1"
-  MODEL_DIR="$2"
 fi
 
 if [[ ! "$TRADE_DATE" =~ ^[0-9]{8}$ ]]; then
@@ -144,7 +140,6 @@ PY
 
 echo "ProjectDir=$ROOT"
 echo "TradeDate=$TRADE_DATE"
-echo "ModelDir=$MODEL_DIR"
 echo "Python=$PYTHON_EXE"
 echo "CrawlerWorkers=$CRAWLER_WORKERS"
 echo "CrawlMode=$CRAWL_MODE"
@@ -175,6 +170,4 @@ else
   echo "Skip monthly K-line generation: trade date is not the last trading day of the month."
 fi
 
-run_step "predict blackbox recall60" bash ./predict_blackbox_recall60.sh "$MODEL_DIR" "$TRADE_DATE"
-
-echo "Daily after-close WSL workflow completed."
+echo "Daily after-close WSL data update completed."
