@@ -7,9 +7,9 @@ cd "$PROJECT_ROOT"
 
 # Edit this tuple when you want to evaluate a different checkpoint set.
 CHECKPOINT_SUBDIRS=(
-  "update-000500"
-  "update-000900"
-  "update-001000"
+  "update-00300"
+  "update-00900"
+  "update-001800"
 )
 
 to_wsl_path() {
@@ -21,8 +21,8 @@ to_wsl_path() {
   fi
 }
 
-CHECKPOINT_ROOT="${1:-/mnt/d/Models/precision10@0.4-3200/negative_reshuffle/cycle-01/continue_from_precision10_0_4_3200/checkpoints}"
-EVAL_DATA_DIR="${2:-blackbox_finetune_recall60/data_evaluation_no_partial_week_recall60_xlong_neg9}"
+CHECKPOINT_ROOT="${1:-/mnt/d/Models/precision10@0.4-c2-900/negative_reshuffle/cycle-03/continue_from_precision10_0_4_c2_900/checkpoints}"
+EVAL_DATA_DIR="${2:-/mnt/d/Models/precision10@0.4-c2-900/negative_reshuffle/cycle-03/datasets/evaluation}"
 OUTPUT_ROOT="${3:-}"
 
 CHECKPOINT_ROOT="$(to_wsl_path "$CHECKPOINT_ROOT")"
