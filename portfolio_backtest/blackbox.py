@@ -5,6 +5,7 @@ import sys
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
+from time import perf_counter
 
 import pandas as pd
 
@@ -198,10 +199,13 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
         print(f"{config.strategy_name} predict date={trade_date} symbols={len(symbols)} batches={len(batches)}", flush=True)
         scored_count = 0
         threshold_count = 0
+        skipped_name_count = 0
         missing_daily_count = 0
         missing_weekly_count = 0
         missing_monthly_count = 0
+        skipped_rule_count = 0
         for batch_index, batch in enumerate(batches, start=1):
+            batch_started = perf_counter()
             daily_map = modules.common.load_kline_map(conn, "dkandles", "D", batch, lookback_start, trade_date)
             weekly_map = modules.common.load_kline_map(conn, "wkandles", "W", batch, lookback_start, trade_date)
             monthly_map = (
@@ -211,8 +215,14 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
             )
             batch_scored = 0
             batch_threshold_count = 0
+            batch_skipped_name = 0
+            batch_missing_daily = 0
+            batch_missing_weekly = 0
+            batch_missing_monthly = 0
+            batch_skipped_rule = 0
             for scode in batch:
                 if is_special_treatment_stock_name(names.get(scode)):
+                    batch_skipped_name += 1
                     continue
                 daily = modules.common.pick_window(daily_map.get(scode, []), trade_date, config.blackbox_daily_window)
                 if hasattr(modules.common, "pick_weekly_window"):
@@ -224,14 +234,17 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
                 else:
                     monthly = modules.common.pick_window(monthly_map.get(scode, []), trade_date, config.blackbox_monthly_window) if config.blackbox_monthly_window > 0 else []
                 if daily is None or len(daily) < config.blackbox_daily_window:
+                    batch_missing_daily += 1
                     missing_daily_count += 1
                     continue
                 if weekly is None or len(weekly) < config.blackbox_weekly_window:
+                    batch_missing_weekly += 1
                     missing_weekly_count += 1
                     continue
                 if config.blackbox_monthly_window > 0 and (
                     monthly is None or len(monthly) < config.blackbox_monthly_window
                 ):
+                    batch_missing_monthly += 1
                     missing_monthly_count += 1
                     continue
                 if not windows_are_scoreable(
@@ -243,12 +256,19 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
                     config.blackbox_monthly_window,
                 ):
                     continue
+                if hasattr(modules.common, "_sample_windows_are_valid") and not modules.common._sample_windows_are_valid(config.blackbox_sample_mode, weekly, monthly, daily):
+                    batch_skipped_rule += 1
+                    continue
                 prompt = tokenizer.apply_chat_template(
                     modules.common.build_messages(scode, trade_date, daily, weekly, monthly, sample_mode=config.blackbox_sample_mode),
                     tokenize=False,
                     add_generation_prompt=True,
                 )
                 pred = modules.inference.score_prediction(model, tokenizer, prompt, config.blackbox_max_seq_length, config.blackbox_threshold)
+                batch_scored += 1
+                scored_count += 1
+                if float(pred["positive_probability"]) < config.blackbox_threshold:
+                    continue
                 close_price = close_from_daily_window(daily)
                 rows.append(
                     candidate_from_prediction(
@@ -260,20 +280,24 @@ def iter_blackbox_signal_days(conn, config: PortfolioBacktestConfig):
                         pred,
                     )
                 )
-                batch_scored += 1
-                scored_count += 1
-                if float(pred["positive_probability"]) >= config.blackbox_threshold:
-                    batch_threshold_count += 1
-                    threshold_count += 1
+                batch_threshold_count += 1
+                threshold_count += 1
+            skipped_name_count += batch_skipped_name
+            skipped_rule_count += batch_skipped_rule
+            elapsed = perf_counter() - batch_started
             print(
                 f"{config.strategy_name} batch {batch_index}/{len(batches)} "
-                f"scored={batch_scored} above_threshold={batch_threshold_count}",
+                f"scored={batch_scored} above_threshold={batch_threshold_count} "
+                f"skipped_name={batch_skipped_name} missing_daily={batch_missing_daily} "
+                f"missing_weekly={batch_missing_weekly} missing_monthly={batch_missing_monthly} "
+                f"skipped_rule={batch_skipped_rule} elapsed={elapsed:.2f}s",
                 flush=True,
             )
         print(
             f"{config.strategy_name} date={trade_date} scored={scored_count} "
             f"above_threshold={threshold_count} missing_daily={missing_daily_count} "
-            f"missing_weekly={missing_weekly_count} missing_monthly={missing_monthly_count}",
+            f"missing_weekly={missing_weekly_count} missing_monthly={missing_monthly_count} "
+            f"skipped_name={skipped_name_count} skipped_rule={skipped_rule_count}",
             flush=True,
         )
         result = pd.DataFrame(rows, columns=["TradeDate", "SCode", "SName", "Close", "Score", "Reason", "StrategyName"])
