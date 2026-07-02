@@ -134,10 +134,13 @@ def format_top_predictions(frame: pd.DataFrame, limit: int = 5) -> str:
         ascending=[False, True],
         na_position="last",
     ).head(max(0, limit))
-    return ",".join(
-        f"{row.SCode}:{row.SName if pd.notna(row.SName) and row.SName else '<unknown>'}"
-        for row in top_rows.itertuples(index=False)
-    ) or "<none>"
+    items = []
+    for row in top_rows.itertuples(index=False):
+        name = row.SName if pd.notna(row.SName) and row.SName else "<unknown>"
+        score = float(row.Score) if pd.notna(row.Score) else float("nan")
+        score_text = f"{score:.6f}" if pd.notna(score) else "nan"
+        items.append(f"{row.SCode}:{name}:score={score_text}")
+    return ",".join(items) or "<none>"
 
 
 def windows_are_scoreable(
