@@ -14,7 +14,7 @@ if [[ ! "$START_DATE" =~ ^[0-9]{8}$ || ! "$END_DATE" =~ ^[0-9]{8}$ ]]; then
   exit 2
 fi
 
-if command -v wslpath >/dev/null 2>&1; then
+if [[ "$MODEL_DIR" =~ ^[A-Za-z]:[\\/] ]] && command -v wslpath >/dev/null 2>&1; then
   MODEL_PATH="$(wslpath -u "$MODEL_DIR" 2>/dev/null || printf '%s\n' "$MODEL_DIR")"
 else
   MODEL_PATH="$MODEL_DIR"
