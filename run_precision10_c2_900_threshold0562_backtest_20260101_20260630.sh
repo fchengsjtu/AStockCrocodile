@@ -36,13 +36,22 @@ export HF_LOCAL_FILES_ONLY="${HF_LOCAL_FILES_ONLY:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export TRUST_REMOTE_CODE="${TRUST_REMOTE_CODE:-0}"
-export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 VENV_DIR="${VENV_DIR:-$HOME/.venvs/astock-blackbox-finetune-recall60}"
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   echo "Missing WSL blackbox Python: $VENV_DIR/bin/python" >&2
   exit 1
 fi
+
+CRAWLER_VENV_DIR="${CRAWLER_VENV_DIR:-$HOME/.venvs/astock-crawler}"
+EXTRA_PYTHONPATH="$ROOT"
+if [[ -x "$CRAWLER_VENV_DIR/bin/python" ]]; then
+  CRAWLER_SITE_PACKAGES="$("$CRAWLER_VENV_DIR/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
+  if [[ -d "$CRAWLER_SITE_PACKAGES" ]]; then
+    EXTRA_PYTHONPATH="$EXTRA_PYTHONPATH:$CRAWLER_SITE_PACKAGES"
+  fi
+fi
+export PYTHONPATH="$EXTRA_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}"
 
 cat <<EOF
 Running threshold blackbox portfolio backtest in WSL/Linux
@@ -55,6 +64,7 @@ Running threshold blackbox portfolio backtest in WSL/Linux
   buy_budget=100000
   sample_mode=$SAMPLE_MODE
   max_seq_length=$MAX_SEQ_LENGTH
+  crawler_venv=$CRAWLER_VENV_DIR
 EOF
 
 "$VENV_DIR/bin/python" -m portfolio_backtest.run \
