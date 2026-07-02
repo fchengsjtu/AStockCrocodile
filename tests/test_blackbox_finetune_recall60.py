@@ -587,7 +587,7 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertFalse(common._sample_windows_are_valid("long", weekly_with_ma13, monthly_rows[:4], anchor_daily))
         self.assertTrue(common._sample_windows_are_valid("long", weekly_with_ma13, monthly_rows, anchor_daily))
 
-    def test_sample_modes_require_anchor_close_in_configured_bottom_band(self):
+    def test_sample_modes_do_not_filter_by_bottom_band(self):
         weekly_rows = [dict(daily(f"202512{day:02d}", 10, 100, 10, 50), ma13=1.0) for day in range(1, 22)]
         monthly_rows = [daily(f"2025{month:02d}28", 10, 100, 10, 50) for month in range(1, 14)]
         low_daily = [daily("20260101", 18, 19, 17, 19)]
@@ -595,13 +595,13 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
 
         with patch.dict("os.environ", {"SAMPLE_BOTTOM_BAND_RATIO": "0.10"}):
             self.assertTrue(common._sample_windows_are_valid("short", weekly_rows, [], low_daily))
-            self.assertFalse(common._sample_windows_are_valid("short", weekly_rows, [], high_daily))
+            self.assertTrue(common._sample_windows_are_valid("short", weekly_rows, [], high_daily))
             self.assertTrue(common._sample_windows_are_valid("long", weekly_rows, monthly_rows[:5], low_daily))
-            self.assertFalse(common._sample_windows_are_valid("long", weekly_rows, monthly_rows[:5], high_daily))
+            self.assertTrue(common._sample_windows_are_valid("long", weekly_rows, monthly_rows[:5], high_daily))
             self.assertTrue(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:8], low_daily))
             self.assertTrue(common._sample_windows_are_valid("xxlong", weekly_rows, monthly_rows, low_daily))
-            self.assertFalse(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:8], high_daily))
-            self.assertFalse(common._sample_windows_are_valid("xxlong", weekly_rows, monthly_rows, high_daily))
+            self.assertTrue(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:8], high_daily))
+            self.assertTrue(common._sample_windows_are_valid("xxlong", weekly_rows, monthly_rows, high_daily))
             self.assertFalse(common._sample_windows_are_valid("xlong", weekly_rows, monthly_rows[:7], low_daily))
 
     def test_bottom_band_ratio_can_come_from_environment(self):

@@ -422,15 +422,19 @@ def _is_close_in_bottom_band(daily: list[dict] | None, range_rows: list[dict] | 
 
 
 def _sample_windows_are_valid(sample_mode: str, weekly: list[dict], monthly: list[dict] | None, daily: list[dict] | None = None) -> bool:
-    if sample_mode == SHORT_SAMPLE_MODE:
-        return len(weekly) >= 5 and _has_positive_ma13(weekly[-5:]) and _is_close_in_bottom_band(daily, weekly)
     config = sample_mode_config(sample_mode)
+    daily_required = config.get("daily", 0)
+    weekly_required = config.get("weekly", 0)
+    if daily_required > 0 and (daily is None or len(daily) < daily_required):
+        return False
+    if len(weekly) < weekly_required:
+        return False
+    if sample_mode == SHORT_SAMPLE_MODE:
+        return len(weekly) >= 5 and _has_positive_ma13(weekly[-5:])
     monthly_required = config.get("monthly", 0)
     if monthly_required > 0 and (monthly is None or len(monthly) < monthly_required):
         return False
-    if sample_mode in {XLONG_SAMPLE_MODE, XXLONG_SAMPLE_MODE}:
-        return _is_close_in_bottom_band(daily, monthly)
-    return _is_close_in_bottom_band(daily, weekly)
+    return True
 
 DELISTED_NAME_MARKERS = ("\u9000\u5e02",)
 DELISTED_NAME_PREFIXES = ("\u9000", "PT")
