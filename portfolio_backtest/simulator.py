@@ -238,6 +238,10 @@ def process_position_exit(
             return cash, fee, [trade]
     else:
         stop_price = round_cent(position.cost_price * (1.0 - config.stop_loss_pct))
+        if float(row.Open) <= stop_price and position.shares > 0:
+            reason = f"gap_open_{stop_loss_rule_name(config.stop_loss_pct).removesuffix('_take_profit_10_20_hold_3d')}"
+            cash, fee, trade = sell_position(config, trade_date, position, position.shares, float(row.Open), reason)
+            return cash, fee, [trade]
         if float(row.Low) <= stop_price and position.shares > 0:
             reason = stop_loss_rule_name(config.stop_loss_pct).removesuffix("_take_profit_10_20_hold_3d")
             cash, fee, trade = sell_position(config, trade_date, position, position.shares, stop_price, reason)

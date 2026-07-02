@@ -95,9 +95,47 @@ class PortfolioBacktestTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            "000002:Stock2,000004:Stock4,000005:Stock5,000006:Stock6,000003:Stock3",
+            "000002:Stock2:score=0.900000,000004:Stock4:score=0.800000,000005:Stock5:score=0.700000,000006:Stock6:score=0.600000,000003:Stock3:score=0.400000",
         )
         self.assertEqual(format_top_predictions(pd.DataFrame()), "<none>")
+
+    def test_six_percent_rule_sells_gap_down_at_open_price(self):
+        signals = pd.DataFrame(
+            [
+                {
+                    "TradeDate": date(2026, 1, 1),
+                    "SCode": "000001",
+                    "SName": "A",
+                    "Close": 10.0,
+                    "Score": 1.0,
+                    "Reason": "x",
+                    "StrategyName": "test",
+                }
+            ]
+        )
+        daily = pd.DataFrame(
+            [
+                ["000001", "A", date(2026, 1, 1), 10.0, 10.0, 10.0, 10.0, 1000.0, 100.0],
+                ["000001", "A", date(2026, 1, 2), 10.0, 10.0, 10.0, 10.0, 1000.0, 100.0],
+                ["000001", "A", date(2026, 1, 3), 9.0, 9.2, 9.4, 8.8, 900.0, 100.0],
+            ],
+            columns=["SCode", "SName", "TradeDate", "Open", "Close", "High", "Low", "Amount", "Volume"],
+        )
+        config = PortfolioBacktestConfig(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 3),
+            strategy_name="test",
+            initial_cash=1_000_000.0,
+            stop_loss_pct=0.06,
+            trade_rule_name=stop_loss_rule_name(0.06),
+        )
+
+        _, _, trades = simulate_portfolio(signals, daily, config, verbose=False)
+
+        sells = trades[trades["Side"] == "SELL"]
+        self.assertEqual(len(sells), 1)
+        self.assertEqual(sells.iloc[0]["Reason"], "gap_open_stop_loss_6pct")
+        self.assertEqual(float(sells.iloc[0]["Price"]), 9.0)
 
     def test_blackbox_candidate_is_kept_below_threshold_for_top_n_ranking(self):
         config = PortfolioBacktestConfig(
