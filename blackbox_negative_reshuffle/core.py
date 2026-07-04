@@ -10,12 +10,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
+NEGATIVE_KIND_DROP6 = "drop6"
+NEGATIVE_KIND_NEUTRAL = "neutral"
+
 
 @dataclass(frozen=True)
 class SourceMetadata:
     evaluation_json: Path
     training_dataset_dir: Path
     evaluation_dataset_dir: Path
+
+
+@dataclass(frozen=True)
+class NegativeKindPlan:
+    target_drop6_count: int
+    target_neutral_count: int
+    keep_drop6_count: int
+    keep_neutral_count: int
 
 
 def row_key(row: dict) -> tuple[str, str, int]:
@@ -29,6 +40,28 @@ def row_key(row: dict) -> tuple[str, str, int]:
 
 def row_label(row: dict) -> int:
     return int(row.get("metadata", {}).get("label", 0))
+
+
+def plan_negative_kind_counts(
+    positive_count: int,
+    target_negative_count: int,
+    *,
+    drop6_target_ratio: float = 3.0,
+    drop6_keep_ratio: float = 1.0,
+    neutral_keep_ratio: float = 1.0,
+) -> NegativeKindPlan:
+    positive_count = max(0, int(positive_count))
+    target_negative_count = max(0, int(target_negative_count))
+    target_drop6 = min(target_negative_count, max(0, round(positive_count * max(0.0, drop6_target_ratio))))
+    target_neutral = max(0, target_negative_count - target_drop6)
+    keep_drop6 = min(target_drop6, max(0, round(positive_count * max(0.0, drop6_keep_ratio))))
+    keep_neutral = min(target_neutral, max(0, round(positive_count * max(0.0, neutral_keep_ratio))))
+    return NegativeKindPlan(
+        target_drop6_count=target_drop6,
+        target_neutral_count=target_neutral,
+        keep_drop6_count=keep_drop6,
+        keep_neutral_count=keep_neutral,
+    )
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -195,6 +228,92 @@ def reshuffle_split(
         "negative_count": desired_negatives,
         "retained_hard_negatives": len(retained),
         "random_replacements": len(replacements),
+    }
+    return output_rows, output_keys, stats
+
+
+def _select_kind_rows(
+    source_keys: set[tuple[str, str, int]],
+    scored_rows: list[tuple[float, dict]],
+    replacement_pool: list[dict],
+    *,
+    keep_count: int,
+    target_count: int,
+    rng: random.Random,
+    excluded: set[tuple[str, str, int]],
+) -> tuple[list[dict], set[tuple[str, str, int]], dict]:
+    ranked_source = [
+        (score, row)
+        for score, row in scored_rows
+        if row_key(row) in source_keys and row_key(row) not in excluded
+    ]
+    retained = [row for _, row in ranked_source[: min(max(0, keep_count), max(0, target_count))]]
+    selected_keys = {row_key(row) for row in retained}
+    refill_count = max(0, target_count - len(retained))
+    refill_candidates = [
+        row
+        for row in replacement_pool
+        if row_key(row) not in excluded and row_key(row) not in selected_keys
+    ]
+    if len(refill_candidates) < refill_count:
+        raise RuntimeError(
+            f"negative kind pool is too small: need {refill_count} replacements, "
+            f"have {len(refill_candidates)}"
+        )
+    replacements = rng.sample(refill_candidates, refill_count)
+    output = retained + replacements
+    keys = {row_key(row) for row in output}
+    return output, keys, {
+        "available_current": len(ranked_source),
+        "target_count": target_count,
+        "retained_hard_negatives": len(retained),
+        "random_replacements": len(replacements),
+    }
+
+
+def reshuffle_split_by_negative_kind(
+    source_rows: list[dict],
+    scored_drop6_negatives: list[tuple[float, dict]],
+    scored_neutral_negatives: list[tuple[float, dict]],
+    drop6_replacement_pool: list[dict],
+    neutral_replacement_pool: list[dict],
+    plan: NegativeKindPlan,
+    rng: random.Random,
+    excluded_keys: set[tuple[str, str, int]] | None = None,
+) -> tuple[list[dict], set[tuple[str, str, int]], dict]:
+    positives = [row for row in source_rows if row_label(row) == 1]
+    source_negatives = [row for row in source_rows if row_label(row) == 0]
+    source_negative_keys = {row_key(row) for row in source_negatives}
+    excluded = set(excluded_keys or ())
+    selected_drop6, drop6_keys, drop6_stats = _select_kind_rows(
+        source_negative_keys,
+        scored_drop6_negatives,
+        drop6_replacement_pool,
+        keep_count=plan.keep_drop6_count,
+        target_count=plan.target_drop6_count,
+        rng=rng,
+        excluded=excluded,
+    )
+    selected_neutral, neutral_keys, neutral_stats = _select_kind_rows(
+        source_negative_keys,
+        scored_neutral_negatives,
+        neutral_replacement_pool,
+        keep_count=plan.keep_neutral_count,
+        target_count=plan.target_neutral_count,
+        rng=rng,
+        excluded=excluded | drop6_keys,
+    )
+    selected_negatives = selected_drop6 + selected_neutral
+    rng.shuffle(selected_negatives)
+    output_rows = positives + selected_negatives
+    rng.shuffle(output_rows)
+    output_keys = drop6_keys | neutral_keys
+    stats = {
+        "positive_count": len(positives),
+        "source_negative_count": len(source_negatives),
+        "negative_count": len(selected_negatives),
+        "drop6": drop6_stats,
+        "neutral": neutral_stats,
     }
     return output_rows, output_keys, stats
 

@@ -6,8 +6,12 @@ import unittest
 from pathlib import Path
 
 from blackbox_negative_reshuffle.core import (
+    NEGATIVE_KIND_DROP6,
+    NEGATIVE_KIND_NEUTRAL,
     load_source_metadata,
+    plan_negative_kind_counts,
     reshuffle_split,
+    reshuffle_split_by_negative_kind,
     row_key,
     write_jsonl,
 )
@@ -97,6 +101,59 @@ class BlackboxNegativeReshuffleTests(unittest.TestCase):
         self.assertEqual(stats["negative_count"], 5)
         self.assertEqual(stats["retained_hard_negatives"], 3)
         self.assertEqual(stats["random_replacements"], 2)
+
+    def test_negative_kind_plan_targets_drop6_three_parts_and_keeps_one_part(self):
+        plan = plan_negative_kind_counts(
+            positive_count=10,
+            target_negative_count=90,
+            drop6_target_ratio=3.0,
+            drop6_keep_ratio=1.0,
+            neutral_keep_ratio=1.0,
+        )
+
+        self.assertEqual(plan.target_drop6_count, 30)
+        self.assertEqual(plan.target_neutral_count, 60)
+        self.assertEqual(plan.keep_drop6_count, 10)
+        self.assertEqual(plan.keep_neutral_count, 10)
+
+    def test_reshuffle_by_negative_kind_keeps_top_drop6_and_neutral_then_refills(self):
+        positives = [sample("P1", 1), sample("P2", 1)]
+        drop6_negatives = [sample(f"D{index}", 0) for index in range(4)]
+        neutral_negatives = [sample(f"U{index}", 0) for index in range(8)]
+        drop6_pool = [sample(f"RD{index}", 0) for index in range(10)]
+        neutral_pool = [sample(f"RU{index}", 0) for index in range(20)]
+        for row in drop6_pool:
+            row["metadata"]["negative_kind"] = NEGATIVE_KIND_DROP6
+        for row in neutral_pool:
+            row["metadata"]["negative_kind"] = NEGATIVE_KIND_NEUTRAL
+        source = positives + drop6_negatives + neutral_negatives
+        scored_drop6 = [(1.0 - index / 10.0, row) for index, row in enumerate(drop6_negatives)]
+        scored_neutral = [(1.0 - index / 10.0, row) for index, row in enumerate(neutral_negatives)]
+        plan = plan_negative_kind_counts(2, 18)
+
+        output, selected_keys, stats = reshuffle_split_by_negative_kind(
+            source,
+            scored_drop6,
+            scored_neutral,
+            drop6_pool,
+            neutral_pool,
+            plan,
+            rng=__import__("random").Random(7),
+        )
+
+        output_negative_keys = {row_key(row) for row in output if row["metadata"]["label"] == 0}
+        self.assertEqual(len(output_negative_keys), 18)
+        self.assertEqual(selected_keys, output_negative_keys)
+        self.assertIn(row_key(drop6_negatives[0]), output_negative_keys)
+        self.assertIn(row_key(drop6_negatives[1]), output_negative_keys)
+        self.assertIn(row_key(neutral_negatives[0]), output_negative_keys)
+        self.assertIn(row_key(neutral_negatives[1]), output_negative_keys)
+        self.assertEqual(stats["drop6"]["target_count"], 6)
+        self.assertEqual(stats["drop6"]["retained_hard_negatives"], 2)
+        self.assertEqual(stats["drop6"]["random_replacements"], 4)
+        self.assertEqual(stats["neutral"]["target_count"], 12)
+        self.assertEqual(stats["neutral"]["retained_hard_negatives"], 2)
+        self.assertEqual(stats["neutral"]["random_replacements"], 10)
 
     def test_dataset_settings_are_inferred_from_original_rows(self):
         rows = [

@@ -12,11 +12,15 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from blackbox_negative_reshuffle.core import (
+    NEGATIVE_KIND_DROP6,
+    NEGATIVE_KIND_NEUTRAL,
     copy_dataset,
     copy_model_files,
     load_source_metadata,
+    plan_negative_kind_counts,
     read_jsonl,
     reshuffle_split,
+    reshuffle_split_by_negative_kind,
     row_key,
     row_label,
     score_negative_rows,
@@ -25,10 +29,25 @@ from blackbox_negative_reshuffle.core import (
 
 NEGATIVE_EXCLUSION_TRADING_DAYS = 20
 TRADING_DATE_SYMBOL_BATCH_SIZE = 500
+DROP6_LOOKAHEAD_TRADING_DAYS = 3
+DROP6_THRESHOLD = 0.06
+
+
+def parse_date_value(value) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return date.fromisoformat(text)
 
 
 def infer_dataset_settings(rows: list[dict], sample_mode: str | None) -> tuple[str, object, object]:
-    from blackbox_finetune_recall60.common import parse_date
 
     if not rows:
         raise ValueError("original training dataset is empty")
@@ -40,7 +59,7 @@ def infer_dataset_settings(rows: list[dict], sample_mode: str | None) -> tuple[s
     if not resolved_mode:
         raise ValueError("sample mode is missing; pass --sample-mode")
     dates = [
-        parse_date(metadata["anchor_date"])
+        parse_date_value(metadata["anchor_date"])
         for metadata in metadata_rows
         if metadata.get("anchor_date")
     ]
@@ -142,6 +161,136 @@ def excluded_dates_by_symbol(
     return result
 
 
+def row_symbol_anchor(row: dict) -> tuple[str, date] | None:
+    metadata = row.get("metadata", {})
+    scode = metadata.get("scode")
+    anchor_date = metadata.get("anchor_date")
+    if not scode or not anchor_date:
+        return None
+    return str(scode), parse_date_value(anchor_date)
+
+
+def _to_positive_float(value) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
+
+
+def classify_drop6_anchors(
+    conn,
+    anchors: list[tuple[str, date]],
+    *,
+    drop_threshold: float = DROP6_THRESHOLD,
+    lookahead_days: int = DROP6_LOOKAHEAD_TRADING_DAYS,
+    batch_size: int = TRADING_DATE_SYMBOL_BATCH_SIZE,
+) -> dict[tuple[str, str], bool]:
+    from blackbox_finetune_recall60.common import parse_date
+
+    if not anchors:
+        return {}
+    anchors_by_symbol: dict[str, set[date]] = {}
+    for scode, anchor_date in anchors:
+        anchors_by_symbol.setdefault(str(scode), set()).add(anchor_date)
+    min_date = min(anchor_date for _, anchor_date in anchors)
+    max_date = max(anchor_date for _, anchor_date in anchors)
+    result: dict[tuple[str, str], bool] = {
+        (str(scode), anchor_date.isoformat()): False for scode, anchor_date in anchors
+    }
+    symbols = sorted(anchors_by_symbol)
+    query_end = max_date + timedelta(days=max(20, lookahead_days * 7 + 7))
+    for start in range(0, len(symbols), max(1, batch_size)):
+        batch = symbols[start : start + max(1, batch_size)]
+        placeholders = ",".join(["%s"] * len(batch))
+        sql = f"""
+            SELECT SCode, DATE(KTime), Close, Low
+            FROM dkandles
+            WHERE KType = 'D'
+              AND SCode IN ({placeholders})
+              AND KTime >= %s
+              AND KTime < %s
+              AND Close IS NOT NULL
+              AND Low IS NOT NULL
+            ORDER BY SCode, KTime
+        """
+        with conn.cursor() as cur:
+            cur.execute(sql, [*batch, min_date, query_end + timedelta(days=1)])
+            rows = cur.fetchall()
+        rows_by_symbol: dict[str, list[tuple[date, float, float]]] = {}
+        for scode, trade_date, close_value, low_value in rows:
+            close = _to_positive_float(close_value)
+            low = _to_positive_float(low_value)
+            if close is None or low is None:
+                continue
+            rows_by_symbol.setdefault(str(scode), []).append((parse_date(trade_date), close, low))
+        for scode, bars in rows_by_symbol.items():
+            index_by_date = {trade_date: index for index, (trade_date, _, _) in enumerate(bars)}
+            for anchor_date in anchors_by_symbol.get(scode, set()):
+                index = index_by_date.get(anchor_date)
+                if index is None:
+                    continue
+                future = bars[index + 1 : index + 1 + lookahead_days]
+                if len(future) < lookahead_days:
+                    continue
+                anchor_close = bars[index][1]
+                min_future_low = min(low for _, _, low in future)
+                result[(scode, anchor_date.isoformat())] = min_future_low <= anchor_close * (1.0 - drop_threshold)
+    return result
+
+
+def classify_negative_rows_by_kind(
+    conn,
+    rows: list[dict],
+    *,
+    drop_threshold: float = DROP6_THRESHOLD,
+    lookahead_days: int = DROP6_LOOKAHEAD_TRADING_DAYS,
+    batch_size: int = TRADING_DATE_SYMBOL_BATCH_SIZE,
+) -> dict[tuple[str, str, int], str]:
+    anchors = [anchor for row in rows if (anchor := row_symbol_anchor(row)) is not None]
+    flags = classify_drop6_anchors(
+        conn,
+        anchors,
+        drop_threshold=drop_threshold,
+        lookahead_days=lookahead_days,
+        batch_size=batch_size,
+    )
+    return {
+        row_key(row): NEGATIVE_KIND_DROP6
+        if (anchor := row_symbol_anchor(row)) is not None
+        and flags.get((anchor[0], anchor[1].isoformat()), False)
+        else NEGATIVE_KIND_NEUTRAL
+        for row in rows
+    }
+
+
+def filter_events_by_negative_kind(
+    conn,
+    events,
+    negative_kind: str,
+    *,
+    drop_threshold: float,
+    lookahead_days: int,
+    batch_size: int,
+):
+    if negative_kind not in {NEGATIVE_KIND_DROP6, NEGATIVE_KIND_NEUTRAL}:
+        return list(events)
+    anchors = [(str(event.scode), event.anchor_date) for event in events]
+    flags = classify_drop6_anchors(
+        conn,
+        anchors,
+        drop_threshold=drop_threshold,
+        lookahead_days=lookahead_days,
+        batch_size=batch_size,
+    )
+    want_drop6 = negative_kind == NEGATIVE_KIND_DROP6
+    return [
+        event
+        for event in events
+        if flags.get((str(event.scode), event.anchor_date.isoformat()), False) == want_drop6
+    ]
+
+
 def load_random_negative_events_without_akshare_dependency(
     conn,
     stat_type: str,
@@ -150,6 +299,9 @@ def load_random_negative_events_without_akshare_dependency(
     limit: int,
     seed: int,
     batch_size: int,
+    negative_kind: str = "any",
+    drop_threshold: float = DROP6_THRESHOLD,
+    lookahead_days: int = DROP6_LOOKAHEAD_TRADING_DAYS,
 ):
     from blackbox_finetune_recall60.common import SampleEvent, parse_date
 
@@ -185,6 +337,7 @@ def load_random_negative_events_without_akshare_dependency(
         with conn.cursor() as cur:
             cur.execute(sql, (start_date, end_date + timedelta(days=1), seed + attempt, scan_limit))
             rows = cur.fetchall()
+        batch_candidates = []
         for scode, trade_date_value in rows:
             scode = str(scode)
             trade_date = parse_date(trade_date_value)
@@ -192,9 +345,16 @@ def load_random_negative_events_without_akshare_dependency(
             if key in seen or trade_date in excluded.get(scode, set()):
                 continue
             seen.add(key)
-            candidates.append(SampleEvent(scode, trade_date, 0, "negative", None))
-            if len(candidates) >= limit:
-                break
+            batch_candidates.append(SampleEvent(scode, trade_date, 0, "negative", None))
+        batch_candidates = filter_events_by_negative_kind(
+            conn,
+            batch_candidates,
+            negative_kind,
+            drop_threshold=drop_threshold,
+            lookahead_days=lookahead_days,
+            batch_size=batch_size,
+        )
+        candidates.extend(batch_candidates[: max(0, limit - len(candidates))])
         attempt += 1
         scan_limit *= 2
     return candidates[:limit]
@@ -211,6 +371,9 @@ def load_database_replacement_pool(
     batch_size: int,
     max_attempts: int,
     cache_path: Path | None = None,
+    negative_kind: str = "any",
+    drop_threshold: float = DROP6_THRESHOLD,
+    lookahead_days: int = DROP6_LOOKAHEAD_TRADING_DAYS,
 ) -> list[dict]:
     from blackbox_finetune_recall60.common import materialize_events, mysql_connect
 
@@ -218,7 +381,9 @@ def load_database_replacement_pool(
     if cache_path is not None and cache_path.is_file():
         for row in read_jsonl(cache_path):
             key = row_key(row)
-            if row_label(row) == 0 and key not in current_negative_keys:
+            row_kind = row.get("metadata", {}).get("negative_kind")
+            kind_matches = negative_kind == "any" or row_kind in (None, negative_kind)
+            if row_label(row) == 0 and key not in current_negative_keys and kind_matches:
                 replacements[key] = row
         print(
             f"loaded cached database replacement pool usable={len(replacements)} "
@@ -241,6 +406,9 @@ def load_database_replacement_pool(
                 requested_events,
                 seed + attempt * 100003,
                 batch_size,
+                negative_kind=negative_kind,
+                drop_threshold=drop_threshold,
+                lookahead_days=lookahead_days,
             )
             filtered_events = [
                 event
@@ -260,6 +428,8 @@ def load_database_replacement_pool(
                 monthly_window=None,
             )
             for row in materialized:
+                if negative_kind != "any":
+                    row.setdefault("metadata", {})["negative_kind"] = negative_kind
                 key = row_key(row)
                 if key in current_negative_keys or key in replacements:
                     continue
@@ -308,6 +478,45 @@ def build_model_scorer(model_dir: Path, base_model: str | None, max_seq_length: 
     return scorer, resolved_base_model
 
 
+def load_cached_negative_scores(score_path: Path, current_negatives: list[dict]) -> list[tuple[float, dict]]:
+    score_by_anchor: dict[tuple[str, str], float] = {}
+    for row in read_jsonl(score_path):
+        scode = str(row.get("scode", ""))
+        anchor_date = str(row.get("anchor_date", ""))
+        if not scode or not anchor_date:
+            continue
+        score_by_anchor[(scode, anchor_date)] = float(row.get("score", float("-inf")))
+    scored = []
+    for row in current_negatives:
+        metadata = row.get("metadata", {})
+        key = (str(metadata.get("scode", "")), str(metadata.get("anchor_date", "")))
+        scored.append((score_by_anchor.get(key, float("-inf")), row))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return scored
+
+
+def split_scored_negatives_by_kind(
+    scored_current_negatives: list[tuple[float, dict]],
+    kind_by_key: dict[tuple[str, str, int], str],
+) -> tuple[list[tuple[float, dict]], list[tuple[float, dict]]]:
+    drop6 = []
+    neutral = []
+    for score, row in scored_current_negatives:
+        if kind_by_key.get(row_key(row)) == NEGATIVE_KIND_DROP6:
+            drop6.append((score, row))
+        else:
+            neutral.append((score, row))
+    return drop6, neutral
+
+
+def count_split_kind_available(
+    rows: list[dict],
+    kind_by_key: dict[tuple[str, str, int], str],
+    kind: str,
+) -> int:
+    return sum(1 for row in rows if row_label(row) == 0 and kind_by_key.get(row_key(row)) == kind)
+
+
 def run_reshuffle(
     model_dir: Path,
     evaluation_json: Path | None,
@@ -323,6 +532,12 @@ def run_reshuffle(
     sample_mode: str | None,
     database_batch_size: int,
     database_max_attempts: int,
+    target_negative_ratio: float,
+    drop6_target_ratio: float,
+    drop6_keep_ratio: float,
+    neutral_keep_ratio: float,
+    drop6_threshold: float,
+    drop6_lookahead_days: int,
 ) -> Path:
     model_dir = model_dir.resolve()
     run_dir = model_dir / "negative_reshuffle" / output_name
@@ -339,6 +554,23 @@ def run_reshuffle(
     current_negatives = list(current_negative_by_key.values())
     if not current_negatives:
         raise RuntimeError("original training dataset contains no negative samples")
+    from blackbox_finetune_recall60.common import mysql_connect
+
+    with mysql_connect() as conn:
+        negative_kind_by_key = classify_negative_rows_by_kind(
+            conn,
+            current_negatives,
+            drop_threshold=drop6_threshold,
+            lookahead_days=drop6_lookahead_days,
+            batch_size=database_batch_size,
+        )
+    current_drop6_count = sum(1 for kind in negative_kind_by_key.values() if kind == NEGATIVE_KIND_DROP6)
+    current_neutral_count = len(current_negatives) - current_drop6_count
+    print(
+        f"classified current negatives drop6={current_drop6_count} neutral={current_neutral_count} "
+        f"drop6_threshold={drop6_threshold} lookahead_days={drop6_lookahead_days}",
+        flush=True,
+    )
     scorer, resolved_base_model = build_model_scorer(
         model_dir,
         base_model,
@@ -346,32 +578,48 @@ def run_reshuffle(
         cuda_device,
     )
     scored_current_negatives = score_negative_rows(current_negatives, scorer, progress_every)
+    scored_drop6_negatives, scored_neutral_negatives = split_scored_negatives_by_kind(
+        scored_current_negatives,
+        negative_kind_by_key,
+    )
     rng = random.Random(seed)
-    train_negative_count = sum(row_label(row) == 0 for row in train_rows)
-    test_negative_count = sum(row_label(row) == 0 for row in test_rows)
-    train_keep_count = (
-        min(max(0, keep_count), train_negative_count)
-        if keep_count is not None
-        else round(train_negative_count * min(max(keep_ratio, 0.0), 1.0))
+    train_positive_count = sum(row_label(row) == 1 for row in train_rows)
+    test_positive_count = sum(row_label(row) == 1 for row in test_rows)
+    train_target_negative_count = round(train_positive_count * max(0.0, target_negative_ratio))
+    test_target_negative_count = round(test_positive_count * max(0.0, target_negative_ratio))
+    train_plan = plan_negative_kind_counts(
+        train_positive_count,
+        train_target_negative_count,
+        drop6_target_ratio=drop6_target_ratio,
+        drop6_keep_ratio=drop6_keep_ratio,
+        neutral_keep_ratio=neutral_keep_ratio,
     )
-    test_keep_count = (
-        min(max(0, keep_count), test_negative_count)
-        if keep_count is not None
-        else round(test_negative_count * min(max(keep_ratio, 0.0), 1.0))
+    test_plan = plan_negative_kind_counts(
+        test_positive_count,
+        test_target_negative_count,
+        drop6_target_ratio=drop6_target_ratio,
+        drop6_keep_ratio=drop6_keep_ratio,
+        neutral_keep_ratio=neutral_keep_ratio,
     )
-    replacement_count = (
-        train_negative_count
-        - train_keep_count
-        + test_negative_count
-        - test_keep_count
+    train_available_drop6 = count_split_kind_available(train_rows, negative_kind_by_key, NEGATIVE_KIND_DROP6)
+    test_available_drop6 = count_split_kind_available(test_rows, negative_kind_by_key, NEGATIVE_KIND_DROP6)
+    train_available_neutral = count_split_kind_available(train_rows, negative_kind_by_key, NEGATIVE_KIND_NEUTRAL)
+    test_available_neutral = count_split_kind_available(test_rows, negative_kind_by_key, NEGATIVE_KIND_NEUTRAL)
+    drop6_replacement_count = (
+        max(0, train_plan.target_drop6_count - min(train_plan.keep_drop6_count, train_available_drop6))
+        + max(0, test_plan.target_drop6_count - min(test_plan.keep_drop6_count, test_available_drop6))
+    )
+    neutral_replacement_count = (
+        max(0, train_plan.target_neutral_count - min(train_plan.keep_neutral_count, train_available_neutral))
+        + max(0, test_plan.target_neutral_count - min(test_plan.keep_neutral_count, test_available_neutral))
     )
     resolved_sample_mode, start_date, end_date = infer_dataset_settings(
         all_source_rows,
         sample_mode,
     )
-    replacement_pool = load_database_replacement_pool(
+    drop6_replacement_pool = load_database_replacement_pool(
         current_negative_keys=set(current_negative_by_key),
-        required_count=replacement_count,
+        required_count=drop6_replacement_count,
         stat_type=stat_type,
         start_date=start_date,
         end_date=end_date,
@@ -379,20 +627,43 @@ def run_reshuffle(
         seed=seed,
         batch_size=database_batch_size,
         max_attempts=database_max_attempts,
-        cache_path=run_dir / "database_replacement_pool.jsonl",
+        cache_path=run_dir / "database_replacement_pool_drop6.jsonl",
+        negative_kind=NEGATIVE_KIND_DROP6,
+        drop_threshold=drop6_threshold,
+        lookahead_days=drop6_lookahead_days,
     )
-    new_train_rows, train_keys, train_stats = reshuffle_split(
+    neutral_excluded_keys = set(current_negative_by_key) | {row_key(row) for row in drop6_replacement_pool}
+    neutral_replacement_pool = load_database_replacement_pool(
+        current_negative_keys=neutral_excluded_keys,
+        required_count=neutral_replacement_count,
+        stat_type=stat_type,
+        start_date=start_date,
+        end_date=end_date,
+        sample_mode=resolved_sample_mode,
+        seed=seed + 700001,
+        batch_size=database_batch_size,
+        max_attempts=database_max_attempts,
+        cache_path=run_dir / "database_replacement_pool_neutral.jsonl",
+        negative_kind=NEGATIVE_KIND_NEUTRAL,
+        drop_threshold=drop6_threshold,
+        lookahead_days=drop6_lookahead_days,
+    )
+    new_train_rows, train_keys, train_stats = reshuffle_split_by_negative_kind(
         train_rows,
-        scored_current_negatives,
-        replacement_pool,
-        train_keep_count,
+        scored_drop6_negatives,
+        scored_neutral_negatives,
+        drop6_replacement_pool,
+        neutral_replacement_pool,
+        train_plan,
         rng,
     )
-    new_test_rows, test_keys, test_stats = reshuffle_split(
+    new_test_rows, test_keys, test_stats = reshuffle_split_by_negative_kind(
         test_rows,
-        scored_current_negatives,
-        replacement_pool,
-        test_keep_count,
+        scored_drop6_negatives,
+        scored_neutral_negatives,
+        drop6_replacement_pool,
+        neutral_replacement_pool,
+        test_plan,
         rng,
         excluded_keys=train_keys,
     )
@@ -412,6 +683,7 @@ def run_reshuffle(
                 "scode": row.get("metadata", {}).get("scode"),
                 "anchor_date": row.get("metadata", {}).get("anchor_date"),
                 "score": score,
+                "negative_kind": negative_kind_by_key.get(row_key(row), NEGATIVE_KIND_NEUTRAL),
             }
             for score, row in scored_current_negatives
         ),
@@ -434,8 +706,17 @@ def run_reshuffle(
         "seed": seed,
         "keep_ratio": keep_ratio,
         "keep_count": keep_count,
+        "target_negative_ratio": target_negative_ratio,
+        "drop6_target_ratio": drop6_target_ratio,
+        "drop6_keep_ratio": drop6_keep_ratio,
+        "neutral_keep_ratio": neutral_keep_ratio,
+        "drop6_threshold": drop6_threshold,
+        "drop6_lookahead_days": drop6_lookahead_days,
         "scored_current_negative_count": len(current_negatives),
-        "database_replacement_pool_count": len(replacement_pool),
+        "current_drop6_negative_count": current_drop6_count,
+        "current_neutral_negative_count": current_neutral_count,
+        "database_drop6_replacement_pool_count": len(drop6_replacement_pool),
+        "database_neutral_replacement_pool_count": len(neutral_replacement_pool),
         "train": train_stats,
         "test": test_stats,
         "train_test_negative_overlap": len(train_keys & test_keys),
@@ -477,7 +758,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--evaluation-json", type=Path)
     parser.add_argument("--output-name", default=datetime.now().strftime("run-%Y%m%d-%H%M%S"))
-    parser.add_argument("--keep-ratio", type=float, default=0.20)
+    parser.add_argument("--keep-ratio", type=float, default=0.30)
     parser.add_argument("--keep-count", type=int)
     parser.add_argument("--seed", type=int, default=937498347)
     parser.add_argument("--base-model")
@@ -487,6 +768,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stat-type", default="short_term_surge_3d_20pct")
     parser.add_argument("--sample-mode", choices=["short", "long", "xlong", "xxlong"])
     parser.add_argument("--database-batch-size", type=int, default=80)
+    parser.add_argument("--target-negative-ratio", type=float, default=9.0)
+    parser.add_argument("--drop6-target-ratio", type=float, default=3.0)
+    parser.add_argument("--drop6-keep-ratio", type=float, default=1.0)
+    parser.add_argument("--neutral-keep-ratio", type=float, default=1.0)
+    parser.add_argument("--drop6-threshold", type=float, default=DROP6_THRESHOLD)
+    parser.add_argument("--drop6-lookahead-days", type=int, default=DROP6_LOOKAHEAD_TRADING_DAYS)
     parser.add_argument(
         "--database-max-attempts",
         type=int,
@@ -513,6 +800,12 @@ def main() -> None:
         sample_mode=args.sample_mode,
         database_batch_size=max(1, args.database_batch_size),
         database_max_attempts=max(1, args.database_max_attempts),
+        target_negative_ratio=max(0.0, args.target_negative_ratio),
+        drop6_target_ratio=min(max(0.0, args.drop6_target_ratio), max(0.0, args.target_negative_ratio)),
+        drop6_keep_ratio=max(0.0, args.drop6_keep_ratio),
+        neutral_keep_ratio=max(0.0, args.neutral_keep_ratio),
+        drop6_threshold=min(max(0.0, args.drop6_threshold), 1.0),
+        drop6_lookahead_days=max(1, args.drop6_lookahead_days),
     )
 
 
