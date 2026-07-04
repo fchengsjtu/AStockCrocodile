@@ -16,6 +16,7 @@ from blackbox_negative_reshuffle.core import (
     NEGATIVE_KIND_NEUTRAL,
     copy_dataset,
     copy_model_files,
+    load_source_metadata_from_paths,
     load_source_metadata,
     plan_negative_kind_counts,
     read_jsonl,
@@ -520,6 +521,8 @@ def count_split_kind_available(
 def run_reshuffle(
     model_dir: Path,
     evaluation_json: Path | None,
+    train_dataset_dir: Path | None,
+    eval_dataset_dir: Path | None,
     output_name: str,
     keep_ratio: float,
     keep_count: int | None,
@@ -542,7 +545,17 @@ def run_reshuffle(
     model_dir = model_dir.resolve()
     run_dir = model_dir / "negative_reshuffle" / output_name
     run_dir.mkdir(parents=True, exist_ok=True)
-    metadata = load_source_metadata(model_dir, evaluation_json)
+    if (train_dataset_dir is None) != (eval_dataset_dir is None):
+        raise ValueError("--train-dataset-dir and --eval-dataset-dir must be provided together")
+    if train_dataset_dir is not None and eval_dataset_dir is not None:
+        metadata = load_source_metadata_from_paths(
+            model_dir,
+            train_dataset_dir,
+            eval_dataset_dir,
+            evaluation_json,
+        )
+    else:
+        metadata = load_source_metadata(model_dir, evaluation_json)
     train_rows = read_jsonl(metadata.training_dataset_dir / "train.jsonl")
     test_rows = read_jsonl(metadata.training_dataset_dir / "test.jsonl")
     all_source_rows = train_rows + test_rows
@@ -757,6 +770,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model-dir", type=Path, required=True)
     parser.add_argument("--evaluation-json", type=Path)
+    parser.add_argument("--train-dataset-dir", type=Path, help="Training dataset directory containing train.jsonl/test.jsonl/all.jsonl. Overrides eval JSON dataset paths when paired with --eval-dataset-dir.")
+    parser.add_argument("--eval-dataset-dir", type=Path, help="Evaluation dataset directory copied into the generated reshuffle run. Overrides eval JSON dataset paths when paired with --train-dataset-dir.")
     parser.add_argument("--output-name", default=datetime.now().strftime("run-%Y%m%d-%H%M%S"))
     parser.add_argument("--keep-ratio", type=float, default=0.30)
     parser.add_argument("--keep-count", type=int)
@@ -788,6 +803,8 @@ def main() -> None:
     run_reshuffle(
         model_dir=args.model_dir,
         evaluation_json=args.evaluation_json,
+        train_dataset_dir=args.train_dataset_dir,
+        eval_dataset_dir=args.eval_dataset_dir,
         output_name=args.output_name,
         keep_ratio=args.keep_ratio,
         keep_count=args.keep_count,

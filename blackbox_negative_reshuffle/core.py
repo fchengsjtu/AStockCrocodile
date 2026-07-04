@@ -152,6 +152,27 @@ def load_source_metadata(model_dir: Path, evaluation_json: Path | None = None) -
     return SourceMetadata(eval_path, training_dir, evaluation_dir)
 
 
+def load_source_metadata_from_paths(
+    model_dir: Path,
+    training_dataset_dir: Path | str,
+    evaluation_dataset_dir: Path | str,
+    evaluation_json: Path | None = None,
+) -> SourceMetadata:
+    base_dir = model_dir.resolve()
+    if evaluation_json is not None:
+        eval_path = evaluation_json.resolve()
+    else:
+        try:
+            eval_path = find_evaluation_json(model_dir, None)
+        except FileNotFoundError:
+            eval_path = base_dir / "eval-explicit-datasets.json"
+    training_dir = resolve_cross_platform_path(str(training_dataset_dir), base_dir)
+    evaluation_dir = resolve_cross_platform_path(str(evaluation_dataset_dir), base_dir)
+    validate_training_dataset(training_dir)
+    validate_evaluation_dataset(evaluation_dir)
+    return SourceMetadata(eval_path, training_dir, evaluation_dir)
+
+
 def validate_training_dataset(path: Path) -> None:
     missing = [name for name in ("train.jsonl", "test.jsonl", "all.jsonl") if not (path / name).is_file()]
     if missing:

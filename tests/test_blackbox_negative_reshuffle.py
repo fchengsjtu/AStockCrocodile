@@ -8,6 +8,7 @@ from pathlib import Path
 from blackbox_negative_reshuffle.core import (
     NEGATIVE_KIND_DROP6,
     NEGATIVE_KIND_NEUTRAL,
+    load_source_metadata_from_paths,
     load_source_metadata,
     plan_negative_kind_counts,
     reshuffle_split,
@@ -54,6 +55,37 @@ class BlackboxNegativeReshuffleTests(unittest.TestCase):
 
             metadata = load_source_metadata(model_dir)
 
+            self.assertEqual(metadata.training_dataset_dir, train_dir.resolve())
+            self.assertEqual(metadata.evaluation_dataset_dir, eval_dir.resolve())
+
+    def test_explicit_dataset_dirs_override_eval_json_dataset_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            model_dir = root / "model"
+            old_train_dir = root / "old_train"
+            old_eval_dir = root / "old_eval"
+            train_dir = root / "train"
+            eval_dir = root / "eval"
+            model_dir.mkdir()
+            for directory in (old_train_dir, train_dir):
+                for name in ("train.jsonl", "test.jsonl", "all.jsonl"):
+                    write_jsonl(directory / name, [sample("000001", 1)])
+            for directory in (old_eval_dir, eval_dir):
+                write_jsonl(directory / "test.jsonl", [sample("000002", 0)])
+            eval_json = model_dir / "eval-1.json"
+            eval_json.write_text(
+                json.dumps(
+                    {
+                        "original_train_dataset_path": str(old_train_dir),
+                        "original_eval_dataset_path": str(old_eval_dir),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            metadata = load_source_metadata_from_paths(model_dir, train_dir, eval_dir, eval_json)
+
+            self.assertEqual(metadata.evaluation_json, eval_json.resolve())
             self.assertEqual(metadata.training_dataset_dir, train_dir.resolve())
             self.assertEqual(metadata.evaluation_dataset_dir, eval_dir.resolve())
 
@@ -187,6 +219,21 @@ class BlackboxNegativeReshuffleTests(unittest.TestCase):
         self.assertEqual(args.database_max_attempts, 20)
         self.assertEqual(args.keep_ratio, 0.30)
         self.assertEqual(args.target_negative_ratio, 5.0)
+
+    def test_parser_accepts_explicit_dataset_dirs(self):
+        args = build_parser().parse_args(
+            [
+                "--model-dir",
+                "model",
+                "--train-dataset-dir",
+                "training",
+                "--eval-dataset-dir",
+                "evaluation",
+            ]
+        )
+
+        self.assertEqual(str(args.train_dataset_dir), "training")
+        self.assertEqual(str(args.eval_dataset_dir), "evaluation")
 
     def test_cached_negative_scores_are_reused_in_rank_order(self):
         with tempfile.TemporaryDirectory() as temp:
