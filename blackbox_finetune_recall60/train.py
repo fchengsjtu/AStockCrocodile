@@ -64,6 +64,8 @@ def default_checkpoint_every() -> int:
 
 TOKEN_CACHE_VERSION = "v7_csv11_21d13w_no_partial_2020_2025"
 TRAINING_STATE_FILE = "training_state.pt"
+NEGATIVE_KIND_DROP6 = "drop6"
+NEGATIVE_KIND_NEUTRAL = "neutral"
 
 
 def _missing_dataset_error(data_dir: Path) -> FileNotFoundError:
@@ -108,6 +110,7 @@ def _training_run_summary(**kwargs) -> str:
         f"train_seed={kwargs['train_seed']} lr={kwargs['learning_rate']} weight_decay={kwargs['weight_decay']} max_grad_norm={kwargs['max_grad_norm']} lora_rank={kwargs['lora_rank']} lora_dropout={kwargs['lora_dropout']} "
         f"max_seq_length={kwargs['max_seq_length']} on_the_fly_tokenize={kwargs['on_the_fly_tokenize']} "
         f"positive_loss_weight={kwargs['positive_loss_weight']} negative_loss_weight={kwargs['negative_loss_weight']} "
+        f"drop6_negative_loss_weight={kwargs['drop6_negative_loss_weight']} neutral_negative_loss_weight={kwargs['neutral_negative_loss_weight']} "
         f"high_score_positive_bonus={kwargs['high_score_positive_bonus']} high_score_positive_position={kwargs['high_score_positive_position']} "
         f"high_score_positive_cutoff={kwargs['high_score_positive_cutoff']} "
         f"checkpoint_every={kwargs['checkpoint_every']} checkpoint_evaluate=True eval_threshold={kwargs['evaluation_threshold']} "
@@ -245,6 +248,33 @@ def _label_from_training_row(row: dict) -> int | None:
     return None
 
 
+def _negative_kind_from_training_row(row: dict) -> str:
+    metadata = row.get("metadata") if isinstance(row, dict) else None
+    value = ""
+    if isinstance(metadata, dict):
+        value = str(metadata.get("negative_kind", "")).strip().lower()
+    return value if value in {NEGATIVE_KIND_DROP6, NEGATIVE_KIND_NEUTRAL} else NEGATIVE_KIND_NEUTRAL
+
+
+def _loss_weight_for_training_row(
+    row: dict,
+    label: int,
+    *,
+    positive_loss_weight: float,
+    negative_loss_weight: float,
+    drop6_negative_loss_weight: float,
+    neutral_negative_loss_weight: float,
+) -> tuple[float, str]:
+    if int(label) == 1:
+        return float(positive_loss_weight), "positive"
+    negative_kind = _negative_kind_from_training_row(row)
+    if negative_kind == NEGATIVE_KIND_DROP6:
+        return float(drop6_negative_loss_weight), NEGATIVE_KIND_DROP6
+    if negative_kind == NEGATIVE_KIND_NEUTRAL:
+        return float(neutral_negative_loss_weight), NEGATIVE_KIND_NEUTRAL
+    return float(negative_loss_weight), "negative"
+
+
 def _differentiable_answer_loss(model, tokenizer, row: dict, label: int, max_seq_length: int, device: str):
     import torch
 
@@ -309,6 +339,8 @@ def _compute_training_loss(
     fp_penalty_cutoff: float = 0.5,
     positive_loss_weight: float = 1.0,
     negative_loss_weight: float = 1.0,
+    drop6_negative_loss_weight: float = 1.2,
+    neutral_negative_loss_weight: float = 1.0,
     high_score_positive_bonus: float = 0.0,
     high_score_positive_cutoff: float = 1.0,
     micro_step: int | None = None,
@@ -321,6 +353,8 @@ def _compute_training_loss(
     use_weighted_ce = (
         float(positive_loss_weight) != 1.0
         or float(negative_loss_weight) != 1.0
+        or float(drop6_negative_loss_weight) != 1.0
+        or float(neutral_negative_loss_weight) != 1.0
         or positive_bonus > 0.0
     )
     if raw_batch and use_weighted_ce:
@@ -330,6 +364,8 @@ def _compute_training_loss(
             torch = None
         if torch is not None:
             weighted_losses = []
+            weight_sums = {"positive": 0.0, NEGATIVE_KIND_DROP6: 0.0, NEGATIVE_KIND_NEUTRAL: 0.0}
+            weight_counts = {"positive": 0, NEGATIVE_KIND_DROP6: 0, NEGATIVE_KIND_NEUTRAL: 0}
             high_score_positive_count = 0
             high_score_positive_probabilities = []
             positive_cutoff = min(max(float(high_score_positive_cutoff), 0.0), 1.0)
@@ -338,7 +374,14 @@ def _compute_training_loss(
                 if label is None:
                     continue
                 label = 1 if int(label) == 1 else 0
-                weight = float(positive_loss_weight) if label == 1 else float(negative_loss_weight)
+                weight, weight_key = _loss_weight_for_training_row(
+                    row,
+                    label,
+                    positive_loss_weight=positive_loss_weight,
+                    negative_loss_weight=negative_loss_weight,
+                    drop6_negative_loss_weight=drop6_negative_loss_weight,
+                    neutral_negative_loss_weight=neutral_negative_loss_weight,
+                )
                 label_loss = _differentiable_answer_loss(
                     model,
                     tokenizer,
@@ -361,10 +404,16 @@ def _compute_training_loss(
                     if float(positive_probability.detach().cpu()) >= positive_cutoff:
                         high_score_positive_count += 1
                         weight *= 1.0 + positive_bonus
+                if weight_key in weight_sums:
+                    weight_sums[weight_key] += max(0.0, weight)
+                    weight_counts[weight_key] += 1
                 weighted_losses.append(label_loss * max(0.0, weight))
             if weighted_losses:
                 base_loss = torch.stack(weighted_losses).mean()
                 metrics["weighted_ce"] = float(base_loss.detach().cpu())
+                for key, count in weight_counts.items():
+                    if count:
+                        metrics[f"{key}_loss_weight"] = weight_sums[key] / count
                 if positive_bonus > 0.0:
                     metrics["high_pos_cutoff"] = positive_cutoff
                     metrics["high_pos_hits"] = float(high_score_positive_count)
@@ -691,6 +740,8 @@ def train_recall60_lora(
     fp_threshold_ema_alpha: float,
     fp_threshold_min: float,
     fp_threshold_max: float,
+    drop6_negative_loss_weight: float = 1.2,
+    neutral_negative_loss_weight: float = 1.0,
 ) -> None:
     train_path = data_dir / "train.jsonl"
     if not train_path.exists():
@@ -858,6 +909,8 @@ def train_recall60_lora(
             on_the_fly_tokenize=on_the_fly_tokenize,
             positive_loss_weight=positive_loss_weight,
             negative_loss_weight=negative_loss_weight,
+            drop6_negative_loss_weight=drop6_negative_loss_weight,
+            neutral_negative_loss_weight=neutral_negative_loss_weight,
             high_score_positive_bonus=high_score_positive_bonus,
             high_score_positive_position=high_score_positive_position,
             high_score_positive_cutoff=high_score_positive_cutoff,
@@ -920,6 +973,8 @@ def train_recall60_lora(
                 fp_penalty_cutoff=fp_penalty_cutoff,
                 positive_loss_weight=positive_loss_weight,
                 negative_loss_weight=negative_loss_weight,
+                drop6_negative_loss_weight=drop6_negative_loss_weight,
+                neutral_negative_loss_weight=neutral_negative_loss_weight,
                 high_score_positive_bonus=high_score_positive_bonus,
                 high_score_positive_cutoff=high_score_positive_cutoff,
                 micro_step=micro_step,
@@ -1171,8 +1226,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-precision-threshold", type=float, default=_env_float("EVAL_PRECISION_THRESHOLD", 0.40), help="Required precision@K value for an evaluation checkpoint to pass.")
     parser.add_argument("--eval-max-samples", type=int, default=_env_int("EVAL_MAX_SAMPLES", 0), help="Max test samples for in-training evaluation; 0 means all.")
     parser.add_argument("--eval-output-dir", type=Path, default=None, help="Directory for in-training evaluation JSON files; default is output-dir/evaluations.")
-    parser.add_argument("--positive-loss-weight", type=float, default=_env_float("POSITIVE_LOSS_WEIGHT", 1.0), help="Multiplier applied to positive-sample CE loss during on-the-fly training.")
-    parser.add_argument("--negative-loss-weight", type=float, default=_env_float("NEGATIVE_LOSS_WEIGHT", 1.0), help="Multiplier applied to negative-sample CE loss during on-the-fly training.")
+    parser.add_argument("--positive-loss-weight", type=float, default=_env_float("POSITIVE_LOSS_WEIGHT", 1.2), help="Multiplier applied to positive-sample CE loss during on-the-fly training.")
+    parser.add_argument("--negative-loss-weight", type=float, default=_env_float("NEGATIVE_LOSS_WEIGHT", 1.0), help="Compatibility fallback multiplier for negative-sample CE loss during on-the-fly training.")
+    parser.add_argument("--drop6-negative-loss-weight", type=float, default=_env_float("DROP6_NEGATIVE_LOSS_WEIGHT", 1.2), help="Multiplier applied to drop6 negative-sample CE loss when metadata.negative_kind=drop6.")
+    parser.add_argument("--neutral-negative-loss-weight", type=float, default=_env_float("NEUTRAL_NEGATIVE_LOSS_WEIGHT", 1.0), help="Multiplier applied to neutral or untagged negative-sample CE loss.")
     parser.add_argument("--high-score-positive-bonus", type=float, default=_env_float("HIGH_SCORE_POSITIVE_BONUS", 0.0), help="Extra bonus for positive samples whose score is at or above the high-score positive cutoff. 1.0 doubles the positive-sample weight.")
     parser.add_argument("--high-score-positive-position", type=float, default=_env_float("HIGH_SCORE_POSITIVE_POSITION", 0.8), help="Position between last avg_p and max_p used as the high-score positive cutoff after checkpoint evaluation.")
     parser.add_argument("--fp-dynamic-penalty", action="store_true", default=_env_bool("FP_DYNAMIC_PENALTY", False), help="Enable extra loss for negative samples whose positive probability exceeds the dynamic FP cutoff.")
@@ -1235,6 +1292,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         on_the_fly_tokenize=args.on_the_fly_tokenize,
         positive_loss_weight=args.positive_loss_weight,
         negative_loss_weight=args.negative_loss_weight,
+        drop6_negative_loss_weight=args.drop6_negative_loss_weight,
+        neutral_negative_loss_weight=args.neutral_negative_loss_weight,
         high_score_positive_bonus=args.high_score_positive_bonus,
         high_score_positive_position=args.high_score_positive_position,
         fp_dynamic_penalty=args.fp_dynamic_penalty,

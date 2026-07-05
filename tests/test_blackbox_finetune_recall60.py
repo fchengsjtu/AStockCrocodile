@@ -235,6 +235,8 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
                 "EVAL_MAX_SAMPLES": "17",
                 "POSITIVE_LOSS_WEIGHT": "2.5",
                 "NEGATIVE_LOSS_WEIGHT": "0.8",
+                "DROP6_NEGATIVE_LOSS_WEIGHT": "1.7",
+                "NEUTRAL_NEGATIVE_LOSS_WEIGHT": "0.9",
                 "HIGH_SCORE_POSITIVE_BONUS": "1.5",
                 "HIGH_SCORE_POSITIVE_POSITION": "0.75",
                 "FP_DYNAMIC_PENALTY": "1",
@@ -262,6 +264,8 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.eval_max_samples, 17)
         self.assertEqual(args.positive_loss_weight, 2.5)
         self.assertEqual(args.negative_loss_weight, 0.8)
+        self.assertEqual(args.drop6_negative_loss_weight, 1.7)
+        self.assertEqual(args.neutral_negative_loss_weight, 0.9)
         self.assertEqual(args.high_score_positive_bonus, 1.5)
         self.assertEqual(args.high_score_positive_position, 0.75)
         self.assertTrue(args.fp_dynamic_penalty)
@@ -274,6 +278,57 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(eval_args.precision_top_k, 20)
         self.assertEqual(eval_args.precision_threshold, 0.30)
         self.assertIn("recall80", str(args.output_dir))
+
+    def test_weighted_ce_uses_drop6_and_neutral_negative_weights(self):
+        positive = {"metadata": {"label": 1}}
+        drop6 = {"metadata": {"label": 0, "negative_kind": "drop6"}}
+        neutral = {"metadata": {"label": 0, "negative_kind": "neutral"}}
+        untagged = {"metadata": {"label": 0}}
+
+        self.assertEqual(
+            train._loss_weight_for_training_row(
+                positive,
+                1,
+                positive_loss_weight=1.2,
+                negative_loss_weight=0.5,
+                drop6_negative_loss_weight=1.7,
+                neutral_negative_loss_weight=0.9,
+            ),
+            (1.2, "positive"),
+        )
+        self.assertEqual(
+            train._loss_weight_for_training_row(
+                drop6,
+                0,
+                positive_loss_weight=1.2,
+                negative_loss_weight=0.5,
+                drop6_negative_loss_weight=1.7,
+                neutral_negative_loss_weight=0.9,
+            ),
+            (1.7, "drop6"),
+        )
+        self.assertEqual(
+            train._loss_weight_for_training_row(
+                neutral,
+                0,
+                positive_loss_weight=1.2,
+                negative_loss_weight=0.5,
+                drop6_negative_loss_weight=1.7,
+                neutral_negative_loss_weight=0.9,
+            ),
+            (0.9, "neutral"),
+        )
+        self.assertEqual(
+            train._loss_weight_for_training_row(
+                untagged,
+                0,
+                positive_loss_weight=1.2,
+                negative_loss_weight=0.5,
+                drop6_negative_loss_weight=1.7,
+                neutral_negative_loss_weight=0.9,
+            ),
+            (0.9, "neutral"),
+        )
 
     def test_initial_adapter_dir_is_supported(self):
         args = train.build_parser().parse_args(["--initial-adapter-dir", "seed-adapter"])
