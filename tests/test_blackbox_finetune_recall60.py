@@ -632,10 +632,10 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertIn("2,1,1.5,0.5,1,1.5,1.5", prompt)
 
     def test_sample_modes_require_weekly_ma13_or_monthly_rows(self):
-        weekly_without_ma13 = [daily(f"202512{day:02d}", 1, 1, 1, 1) for day in range(1, 6)]
+        weekly_without_ma13 = [daily(f"202512{day:02d}", 1, 1, 1, 1) for day in range(1, 9)]
         weekly_with_ma13 = [dict(row, ma13=1.0) for row in weekly_without_ma13]
         monthly_rows = [daily(f"2025{month:02d}28", 1, 1, 1, 1) for month in range(1, 6)]
-        anchor_daily = [daily("20260101", 1, 1, 1, 1)]
+        anchor_daily = [daily(f"202512{day:02d}", 1, 1, 1, 1) for day in range(20, 32)] + [daily("20260101", 1, 1, 1, 1)]
 
         self.assertFalse(common._sample_windows_are_valid("short", weekly_without_ma13, [], anchor_daily))
         self.assertTrue(common._sample_windows_are_valid("short", weekly_with_ma13, [], anchor_daily))
@@ -645,8 +645,8 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
     def test_sample_modes_do_not_filter_by_bottom_band(self):
         weekly_rows = [dict(daily(f"202512{day:02d}", 10, 100, 10, 50), ma13=1.0) for day in range(1, 22)]
         monthly_rows = [daily(f"2025{month:02d}28", 10, 100, 10, 50) for month in range(1, 14)]
-        low_daily = [daily("20260101", 18, 19, 17, 19)]
-        high_daily = [daily("20260101", 30, 31, 29, 30)]
+        low_daily = [daily(f"202511{day:02d}", 18, 19, 17, 19) for day in range(1, 31)] + [daily(f"202512{day:02d}", 18, 19, 17, 19) for day in range(1, 5)] + [daily("20260101", 18, 19, 17, 19)]
+        high_daily = [daily(f"202511{day:02d}", 30, 31, 29, 30) for day in range(1, 31)] + [daily(f"202512{day:02d}", 30, 31, 29, 30) for day in range(1, 5)] + [daily("20260101", 30, 31, 29, 30)]
 
         with patch.dict("os.environ", {"SAMPLE_BOTTOM_BAND_RATIO": "0.10"}):
             self.assertTrue(common._sample_windows_are_valid("short", weekly_rows, [], low_daily))

@@ -5,6 +5,7 @@ from datetime import date
 import pandas as pd
 
 PREDICTION_TABLE = "blackbox_predictions"
+PREDICTION_SUMMARY_TABLE = "blackbox_prediction_summary"
 
 
 def ensure_prediction_table(conn) -> None:
@@ -30,6 +31,96 @@ def ensure_prediction_table(conn) -> None:
                 KEY idx_blackbox_prediction_strategy_date (StrategyName, TradeDate)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """
+        )
+    conn.commit()
+
+
+def ensure_prediction_summary_table(conn) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {PREDICTION_SUMMARY_TABLE} (
+                Id BIGINT NOT NULL AUTO_INCREMENT,
+                TradeDate DATE NOT NULL,
+                StrategyName VARCHAR(64) NOT NULL,
+                Threshold DECIMAL(10,6) NOT NULL,
+                MaxSeqLength INT NOT NULL,
+                ScannedSymbols INT NOT NULL,
+                RemainingSymbols INT NOT NULL,
+                FilteredAbnormal INT NOT NULL,
+                SampleRuleSkipped INT NOT NULL,
+                ThresholdSelectedCount INT NOT NULL,
+                OutputTopN INT NOT NULL,
+                SavedPredictions INT NOT NULL,
+                CreatedOn DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UpdatedOn DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (Id),
+                UNIQUE KEY ux_blackbox_prediction_summary (TradeDate, StrategyName),
+                KEY idx_blackbox_prediction_summary_strategy_date (StrategyName, TradeDate)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
+        )
+    conn.commit()
+
+
+def save_prediction_summary(
+    conn,
+    trade_date: date,
+    strategy_name: str,
+    threshold: float,
+    max_seq_length: int,
+    scanned_symbols: int,
+    remaining_symbols: int,
+    filtered_abnormal: int,
+    sample_rule_skipped: int,
+    threshold_selected_count: int,
+    output_top_n: int,
+    saved_predictions: int,
+) -> None:
+    ensure_prediction_summary_table(conn)
+    row = (
+        trade_date,
+        strategy_name,
+        float(threshold),
+        int(max_seq_length),
+        int(scanned_symbols),
+        int(remaining_symbols),
+        int(filtered_abnormal),
+        int(sample_rule_skipped),
+        int(threshold_selected_count),
+        int(output_top_n),
+        int(saved_predictions),
+    )
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {PREDICTION_SUMMARY_TABLE}
+                (
+                    TradeDate,
+                    StrategyName,
+                    Threshold,
+                    MaxSeqLength,
+                    ScannedSymbols,
+                    RemainingSymbols,
+                    FilteredAbnormal,
+                    SampleRuleSkipped,
+                    ThresholdSelectedCount,
+                    OutputTopN,
+                    SavedPredictions
+                )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                Threshold = VALUES(Threshold),
+                MaxSeqLength = VALUES(MaxSeqLength),
+                ScannedSymbols = VALUES(ScannedSymbols),
+                RemainingSymbols = VALUES(RemainingSymbols),
+                FilteredAbnormal = VALUES(FilteredAbnormal),
+                SampleRuleSkipped = VALUES(SampleRuleSkipped),
+                ThresholdSelectedCount = VALUES(ThresholdSelectedCount),
+                OutputTopN = VALUES(OutputTopN),
+                SavedPredictions = VALUES(SavedPredictions)
+            """,
+            row,
         )
     conn.commit()
 

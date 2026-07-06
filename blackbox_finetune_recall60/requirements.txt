@@ -9,3 +9,6 @@ bitsandbytes>=0.43.0; platform_system != "Windows"
 safetensors>=0.4.3
 pandas>=2.0.0
 akshare>=1.16.0
+requests>=2.32.0
+APScheduler>=3.10.4
+tqdm>=4.66.0
