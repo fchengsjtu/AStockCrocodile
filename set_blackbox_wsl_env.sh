@@ -58,7 +58,7 @@ case "$SAMPLE_MODE" in
     ;;
   *)
     echo "Unsupported SAMPLE_MODE: $SAMPLE_MODE" >&2
-    return 2 2>/dev/null || exit 2
+    retun 2 2>/dev/null || exit 2
     ;;
 esac
 
@@ -73,7 +73,7 @@ export SAMPLE_MODE
 export BLACKBOX_RECALL_DIR
 export PYTHON_BIN="${PYTHON_BIN:-python3}"
 export VENV_DIR="${VENV_DIR:-$HOME/.venvs/astock-blackbox-finetune-${MODEL_TAG}}"
-export BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
+export BASE_MODEL="${BASE_MODEL:-/mnt/d/Models/precision10@0.4-c2-900}"
 export HF_LOCAL_FILES_ONLY="${HF_LOCAL_FILES_ONLY:-1}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
@@ -84,7 +84,7 @@ export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-$CUDA_DEVICE}"
 export USE_4BIT="${USE_4BIT:-1}"
 export ON_THE_FLY_TOKENIZE="${ON_THE_FLY_TOKENIZE:-1}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
-export RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-}"
+export RESUME_ADAPTER_DIR="${RESUME_ADAPTER_DIR:-/mnt/d/Models/precision10@0.4-c2-900/sub-drop6}"
 export INITIAL_ADAPTER_DIR="${INITIAL_ADAPTER_DIR:-}"
 if [[ -n "$INITIAL_ADAPTER_DIR" && "$INITIAL_ADAPTER_DIR" == *\\* ]] && command -v wslpath >/dev/null 2>&1; then
   export INITIAL_ADAPTER_DIR="$(wslpath -u "$INITIAL_ADAPTER_DIR")"
@@ -94,9 +94,9 @@ export TRAIN_START_DATE="${TRAIN_START_DATE:-20230101}"
 export TRAIN_END_DATE="${TRAIN_END_DATE:-20241231}"
 export VALIDATION_START_DATE="${VALIDATION_START_DATE:-20260101}"
 export VALIDATION_END_DATE="${VALIDATION_END_DATE:-20260530}"
-export TRAIN_DATASET_PATH="${TRAIN_DATASET_PATH:-}"
-export TEST_DATASET_PATH="${TEST_DATASET_PATH:-}"
-export VALIDATION_DATASET_PATH="${VALIDATION_DATASET_PATH:-}"
+export TRAIN_DATASET_PATH="${TRAIN_DATASET_PATH:-/mnt/d/Models/precision10@0.4-c2-900/negative_reshuffle/cycle-01/datasets/training/all.jsonl}"
+export TEST_DATASET_PATH="${TEST_DATASET_PATH:-/mnt/d/Models/precision10@0.4-c2-900/negative_reshuffle/cycle-01/datasets/evaluation/all.jsonl}"
+export VALIDATION_DATASET_PATH="${VALIDATION_DATASET_PATH:-/mnt/d/Models/precision10@0.4-c2-900/negative_reshuffle/cycle-01/datasets/evaluation/all.jsonl}"
 export EXPLICIT_DATASET_WORK_DIR="${EXPLICIT_DATASET_WORK_DIR:-}"
 
 # MAX_SEQ_LENGTH should follow SAMPLE_MODE by default. This avoids carrying a
