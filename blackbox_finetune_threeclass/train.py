@@ -1504,13 +1504,6 @@ def main(argv: Iterable[str] | None = None) -> None:
         on_the_fly_tokenize=args.on_the_fly_tokenize,
         positive_loss_weight=1.0,
         negative_loss_weight=1.0,
-        high_score_positive_bonus=0.0,
-        high_score_positive_position=0.0,
-        fp_dynamic_penalty=False,
-        fp_penalty_weight=0.0,
-        fp_threshold_ema_alpha=0.0,
-        fp_threshold_min=0.0,
-        fp_threshold_max=1.0,
     )
 
 

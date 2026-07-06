@@ -111,15 +111,10 @@ def _training_run_summary(**kwargs) -> str:
         f"max_seq_length={kwargs['max_seq_length']} on_the_fly_tokenize={kwargs['on_the_fly_tokenize']} "
         f"positive_loss_weight={kwargs['positive_loss_weight']} negative_loss_weight={kwargs['negative_loss_weight']} "
         f"drop6_negative_loss_weight={kwargs['drop6_negative_loss_weight']} neutral_negative_loss_weight={kwargs['neutral_negative_loss_weight']} "
-        f"high_score_positive_bonus={kwargs['high_score_positive_bonus']} high_score_positive_position={kwargs['high_score_positive_position']} "
-        f"high_score_positive_cutoff={kwargs['high_score_positive_cutoff']} "
         f"checkpoint_every={kwargs['checkpoint_every']} checkpoint_evaluate=True eval_threshold={kwargs['evaluation_threshold']} "
         f"eval_threshold_position={kwargs['evaluation_threshold_position']} "
         f"eval_precision_top_k={kwargs['evaluation_precision_top_k']} "
-        f"eval_precision_threshold={kwargs['evaluation_precision_threshold']} eval_max_samples={kwargs['evaluation_max_samples']} "
-        f"fp_dynamic_penalty={kwargs['fp_dynamic_penalty']} fp_penalty_weight={kwargs['fp_penalty_weight']} "
-        f"fp_threshold_ema_alpha={kwargs['fp_threshold_ema_alpha']} fp_threshold_min={kwargs['fp_threshold_min']} "
-        f"fp_threshold_max={kwargs['fp_threshold_max']} fp_penalty_cutoff={kwargs['fp_penalty_cutoff']}"
+        f"eval_precision_threshold={kwargs['evaluation_precision_threshold']} eval_max_samples={kwargs['evaluation_max_samples']}"
     )
 
 
@@ -166,8 +161,6 @@ def _save_training_state(
     train_order: list[int],
     rng,
     evaluation_threshold: float,
-    high_score_positive_cutoff: float,
-    fp_penalty_cutoff: float,
     total_nonfinite_skips: int,
 ) -> None:
     import torch
@@ -185,8 +178,6 @@ def _save_training_state(
         "torch_cuda_rng_state_all": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
         "evaluation_threshold": float(evaluation_threshold),
         "next_threshold": float(evaluation_threshold),
-        "high_score_positive_cutoff": float(high_score_positive_cutoff),
-        "fp_penalty_cutoff": float(fp_penalty_cutoff),
         "total_nonfinite_skips": int(total_nonfinite_skips),
         "extra": _extra_training_state(),
     }
@@ -298,35 +289,6 @@ def _differentiable_answer_loss(model, tokenizer, row: dict, label: int, max_seq
     return model(input_ids=input_ids, labels=labels).loss
 
 
-def _clamp_fp_penalty_cutoff(value: float, minimum: float, maximum: float) -> float:
-    low = min(max(float(minimum), 0.0), 1.0)
-    high = min(max(float(maximum), 0.0), 1.0)
-    if high < low:
-        low, high = high, low
-    return min(max(float(value), low), high)
-
-
-def _update_fp_penalty_cutoff(
-    current_cutoff: float,
-    next_threshold: float,
-    max_probability: float,
-    ema_alpha: float,
-    minimum: float,
-    maximum: float,
-) -> float:
-    alpha = min(max(float(ema_alpha), 0.0), 1.0)
-    raw_cutoff = 0.5 * (float(next_threshold) + float(max_probability))
-    smoothed = (1.0 - alpha) * float(current_cutoff) + alpha * raw_cutoff
-    return _clamp_fp_penalty_cutoff(smoothed, minimum, maximum)
-
-
-def _score_between_average_and_max(average_probability: float, max_probability: float, position: float) -> float:
-    position = min(max(float(position), 0.0), 1.0)
-    average_probability = float(average_probability)
-    max_probability = float(max_probability)
-    return min(max(average_probability + position * (max_probability - average_probability), 0.0), 1.0)
-
-
 def _compute_training_loss(
     model,
     tokenizer,
@@ -334,28 +296,21 @@ def _compute_training_loss(
     batch: list[dict],
     raw_batch: list[dict] | None,
     max_seq_length: int,
-    fp_dynamic_penalty: bool = False,
-    fp_penalty_weight: float = 0.0,
-    fp_penalty_cutoff: float = 0.5,
     positive_loss_weight: float = 1.0,
     negative_loss_weight: float = 1.0,
     drop6_negative_loss_weight: float = 1.2,
     neutral_negative_loss_weight: float = 1.0,
-    high_score_positive_bonus: float = 0.0,
-    high_score_positive_cutoff: float = 1.0,
     micro_step: int | None = None,
     gradient_accumulation_steps: int | None = None,
 ):
     output = model(**tensors)
     metrics = {}
     base_loss = output.loss
-    positive_bonus = max(0.0, float(high_score_positive_bonus))
     use_weighted_ce = (
         float(positive_loss_weight) != 1.0
         or float(negative_loss_weight) != 1.0
         or float(drop6_negative_loss_weight) != 1.0
         or float(neutral_negative_loss_weight) != 1.0
-        or positive_bonus > 0.0
     )
     if raw_batch and use_weighted_ce:
         try:
@@ -366,9 +321,6 @@ def _compute_training_loss(
             weighted_losses = []
             weight_sums = {"positive": 0.0, NEGATIVE_KIND_DROP6: 0.0, NEGATIVE_KIND_NEUTRAL: 0.0}
             weight_counts = {"positive": 0, NEGATIVE_KIND_DROP6: 0, NEGATIVE_KIND_NEUTRAL: 0}
-            high_score_positive_count = 0
-            high_score_positive_probabilities = []
-            positive_cutoff = min(max(float(high_score_positive_cutoff), 0.0), 1.0)
             for row in raw_batch:
                 label = _label_from_training_row(row)
                 if label is None:
@@ -390,20 +342,6 @@ def _compute_training_loss(
                     max_seq_length,
                     tensors["input_ids"].device,
                 )
-                if label == 1 and positive_bonus > 0.0:
-                    negative_loss = _differentiable_answer_loss(
-                        model,
-                        tokenizer,
-                        row,
-                        0,
-                        max_seq_length,
-                        tensors["input_ids"].device,
-                    )
-                    positive_probability = torch.sigmoid(negative_loss - label_loss)
-                    high_score_positive_probabilities.append(positive_probability.detach())
-                    if float(positive_probability.detach().cpu()) >= positive_cutoff:
-                        high_score_positive_count += 1
-                        weight *= 1.0 + positive_bonus
                 if weight_key in weight_sums:
                     weight_sums[weight_key] += max(0.0, weight)
                     weight_counts[weight_key] += 1
@@ -414,42 +352,7 @@ def _compute_training_loss(
                 for key, count in weight_counts.items():
                     if count:
                         metrics[f"{key}_loss_weight"] = weight_sums[key] / count
-                if positive_bonus > 0.0:
-                    metrics["high_pos_cutoff"] = positive_cutoff
-                    metrics["high_pos_hits"] = float(high_score_positive_count)
-                    if high_score_positive_probabilities:
-                        metrics["high_pos_p"] = float(torch.stack(high_score_positive_probabilities).mean().cpu())
-    if not fp_dynamic_penalty or fp_penalty_weight <= 0 or not raw_batch:
-        return base_loss, metrics
-    try:
-        import torch
-    except Exception:
-        return base_loss, metrics
-
-    penalties = []
-    probabilities = []
-    cutoff = min(max(float(fp_penalty_cutoff), 0.0), 1.0)
-    for row in raw_batch:
-        if _label_from_training_row(row) != 0:
-            continue
-        positive_loss = _differentiable_answer_loss(model, tokenizer, row, 1, max_seq_length, tensors["input_ids"].device)
-        negative_loss = _differentiable_answer_loss(model, tokenizer, row, 0, max_seq_length, tensors["input_ids"].device)
-        positive_probability = torch.sigmoid(negative_loss - positive_loss)
-        probabilities.append(positive_probability.detach())
-        penalties.append(_high_scoring_negative_penalty(positive_probability, cutoff))
-    if not penalties:
-        return base_loss, metrics
-    fp_penalty = torch.stack(penalties).mean()
-    loss = base_loss + float(fp_penalty_weight) * fp_penalty
-    metrics["fp_penalty"] = float(fp_penalty.detach().cpu())
-    metrics["fp_cutoff"] = cutoff
-    if probabilities:
-        metrics["fp_neg_p"] = float(torch.stack(probabilities).mean().cpu())
-    return loss, metrics
-
-
-def _high_scoring_negative_penalty(positive_probability, cutoff: float):
-    return positive_probability.sub(float(cutoff)).relu()
+    return base_loss, metrics
 
 
 def _format_duration(seconds: float) -> str:
@@ -733,13 +636,6 @@ def train_recall60_lora(
     on_the_fly_tokenize: bool,
     positive_loss_weight: float,
     negative_loss_weight: float,
-    high_score_positive_bonus: float,
-    high_score_positive_position: float,
-    fp_dynamic_penalty: bool,
-    fp_penalty_weight: float,
-    fp_threshold_ema_alpha: float,
-    fp_threshold_min: float,
-    fp_threshold_max: float,
     drop6_negative_loss_weight: float = 1.2,
     neutral_negative_loss_weight: float = 1.0,
 ) -> None:
@@ -837,8 +733,6 @@ def train_recall60_lora(
     torch.manual_seed(train_seed)
     torch.cuda.manual_seed_all(train_seed)
     rng = random.Random(train_seed)
-    fp_penalty_cutoff = _clamp_fp_penalty_cutoff(evaluation_threshold, fp_threshold_min, fp_threshold_max)
-    high_score_positive_cutoff = min(max(float(evaluation_threshold), 0.0), 1.0)
     train_order = list(range(len(train_items)))
     restored_total_nonfinite_skips = 0
     restored_training_state = False
@@ -863,17 +757,13 @@ def train_recall60_lora(
             if torch.cuda.is_available() and state.get("torch_cuda_rng_state_all") is not None:
                 torch.cuda.set_rng_state_all(state["torch_cuda_rng_state_all"])
             evaluation_threshold = float(state.get("evaluation_threshold", evaluation_threshold))
-            high_score_positive_cutoff = float(state.get("high_score_positive_cutoff", high_score_positive_cutoff))
-            fp_penalty_cutoff = float(state.get("fp_penalty_cutoff", fp_penalty_cutoff))
             restored_total_nonfinite_skips = int(state.get("total_nonfinite_skips", 0))
             _load_extra_training_state(state.get("extra") or {})
             restored_training_state = True
             print(
                 f"training state restored: {_training_state_path(resume_adapter_dir)} "
                 f"next_micro_step={start_micro_step} update={start_update} "
-                f"eval_threshold={evaluation_threshold:.6f} "
-                f"high_score_positive_cutoff={high_score_positive_cutoff:.6f} "
-                f"fp_penalty_cutoff={fp_penalty_cutoff:.6f}",
+                f"eval_threshold={evaluation_threshold:.6f}",
                 flush=True,
             )
         except Exception as exc:
@@ -911,21 +801,12 @@ def train_recall60_lora(
             negative_loss_weight=negative_loss_weight,
             drop6_negative_loss_weight=drop6_negative_loss_weight,
             neutral_negative_loss_weight=neutral_negative_loss_weight,
-            high_score_positive_bonus=high_score_positive_bonus,
-            high_score_positive_position=high_score_positive_position,
-            high_score_positive_cutoff=high_score_positive_cutoff,
             checkpoint_every=checkpoint_every,
             evaluation_threshold=evaluation_threshold,
             evaluation_threshold_position=evaluation_threshold_position,
             evaluation_precision_top_k=evaluation_precision_top_k,
             evaluation_precision_threshold=evaluation_precision_threshold,
             evaluation_max_samples=evaluation_max_samples,
-            fp_dynamic_penalty=fp_dynamic_penalty,
-            fp_penalty_weight=fp_penalty_weight,
-            fp_threshold_ema_alpha=fp_threshold_ema_alpha,
-            fp_threshold_min=fp_threshold_min,
-            fp_threshold_max=fp_threshold_max,
-            fp_penalty_cutoff=fp_penalty_cutoff,
         ),
         flush=True,
     )
@@ -968,15 +849,10 @@ def train_recall60_lora(
                 batch,
                 penalty_rows,
                 max_seq_length,
-                fp_dynamic_penalty=fp_dynamic_penalty,
-                fp_penalty_weight=fp_penalty_weight,
-                fp_penalty_cutoff=fp_penalty_cutoff,
                 positive_loss_weight=positive_loss_weight,
                 negative_loss_weight=negative_loss_weight,
                 drop6_negative_loss_weight=drop6_negative_loss_weight,
                 neutral_negative_loss_weight=neutral_negative_loss_weight,
-                high_score_positive_bonus=high_score_positive_bonus,
-                high_score_positive_cutoff=high_score_positive_cutoff,
                 micro_step=micro_step,
                 gradient_accumulation_steps=gradient_accumulation_steps,
             )
@@ -1116,8 +992,6 @@ def train_recall60_lora(
                     train_order=train_order,
                     rng=rng,
                     evaluation_threshold=evaluation_threshold,
-                    high_score_positive_cutoff=high_score_positive_cutoff,
-                    fp_penalty_cutoff=fp_penalty_cutoff,
                     total_nonfinite_skips=total_nonfinite_skips,
                 )
                 evaluation_result = _evaluate_training_checkpoint(
@@ -1137,20 +1011,6 @@ def train_recall60_lora(
                     precision_threshold=evaluation_precision_threshold,
                 )
                 evaluation_threshold = float(evaluation_result["next_threshold"])
-                high_score_positive_cutoff = _score_between_average_and_max(
-                    evaluation_result["average_positive_probability"],
-                    evaluation_result["max_positive_probability"],
-                    high_score_positive_position,
-                )
-                if fp_dynamic_penalty:
-                    fp_penalty_cutoff = _update_fp_penalty_cutoff(
-                        current_cutoff=fp_penalty_cutoff,
-                        next_threshold=float(evaluation_result["next_threshold"]),
-                        max_probability=float(evaluation_result["max_positive_probability"]),
-                        ema_alpha=fp_threshold_ema_alpha,
-                        minimum=fp_threshold_min,
-                        maximum=fp_threshold_max,
-                    )
                 checkpoint_hook_result = _after_checkpoint_evaluation(
                     model=model,
                     tokenizer=tokenizer,
@@ -1171,9 +1031,7 @@ def train_recall60_lora(
                     )
                     print(f"checkpoint post-evaluation hook: {hook_text}", flush=True)
                 print(
-                    f"evaluation threshold updated for next checkpoint: {evaluation_threshold:.6f} "
-                    f"high_score_positive_cutoff={high_score_positive_cutoff:.6f} "
-                    f"fp_penalty_cutoff={fp_penalty_cutoff:.6f}",
+                    f"evaluation threshold updated for next checkpoint: {evaluation_threshold:.6f}",
                     flush=True,
                 )
                 _save_training_state(
@@ -1185,8 +1043,6 @@ def train_recall60_lora(
                     train_order=train_order,
                     rng=rng,
                     evaluation_threshold=evaluation_threshold,
-                    high_score_positive_cutoff=high_score_positive_cutoff,
-                    fp_penalty_cutoff=fp_penalty_cutoff,
                     total_nonfinite_skips=total_nonfinite_skips,
                 )
 
@@ -1230,13 +1086,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--negative-loss-weight", type=float, default=_env_float("NEGATIVE_LOSS_WEIGHT", 1.0), help="Compatibility fallback multiplier for negative-sample CE loss during on-the-fly training.")
     parser.add_argument("--drop6-negative-loss-weight", type=float, default=_env_float("DROP6_NEGATIVE_LOSS_WEIGHT", 1.2), help="Multiplier applied to drop6 negative-sample CE loss when metadata.negative_kind=drop6.")
     parser.add_argument("--neutral-negative-loss-weight", type=float, default=_env_float("NEUTRAL_NEGATIVE_LOSS_WEIGHT", 1.0), help="Multiplier applied to neutral or untagged negative-sample CE loss.")
-    parser.add_argument("--high-score-positive-bonus", type=float, default=_env_float("HIGH_SCORE_POSITIVE_BONUS", 0.0), help="Extra bonus for positive samples whose score is at or above the high-score positive cutoff. 1.0 doubles the positive-sample weight.")
-    parser.add_argument("--high-score-positive-position", type=float, default=_env_float("HIGH_SCORE_POSITIVE_POSITION", 0.8), help="Position between last avg_p and max_p used as the high-score positive cutoff after checkpoint evaluation.")
-    parser.add_argument("--fp-dynamic-penalty", action="store_true", default=_env_bool("FP_DYNAMIC_PENALTY", False), help="Enable extra loss for negative samples whose positive probability exceeds the dynamic FP cutoff.")
-    parser.add_argument("--fp-penalty-weight", type=float, default=_env_float("FP_PENALTY_WEIGHT", 1.0), help="Weight of the high-scoring negative-sample penalty.")
-    parser.add_argument("--fp-threshold-ema-alpha", type=float, default=_env_float("FP_THRESHOLD_EMA_ALPHA", 0.2), help="EMA alpha used when updating the dynamic FP cutoff after checkpoint evaluation.")
-    parser.add_argument("--fp-threshold-min", type=float, default=_env_float("FP_THRESHOLD_MIN", 0.40), help="Lower bound for the dynamic FP penalty cutoff.")
-    parser.add_argument("--fp-threshold-max", type=float, default=_env_float("FP_THRESHOLD_MAX", 0.65), help="Upper bound for the dynamic FP penalty cutoff.")
     parser.add_argument("--resume-adapter-dir", type=Path, default=None, help="Resume LoRA training from an adapter checkpoint directory.")
     parser.add_argument("--initial-adapter-dir", type=Path, default=None, help="Initialize LoRA weights from an adapter directory but start training at update 0.")
     parser.add_argument("--nonfinite-patience", type=int, default=20, help="Abort after this many consecutive non-finite losses.")
@@ -1294,13 +1143,6 @@ def main(argv: Iterable[str] | None = None) -> None:
         negative_loss_weight=args.negative_loss_weight,
         drop6_negative_loss_weight=args.drop6_negative_loss_weight,
         neutral_negative_loss_weight=args.neutral_negative_loss_weight,
-        high_score_positive_bonus=args.high_score_positive_bonus,
-        high_score_positive_position=args.high_score_positive_position,
-        fp_dynamic_penalty=args.fp_dynamic_penalty,
-        fp_penalty_weight=args.fp_penalty_weight,
-        fp_threshold_ema_alpha=args.fp_threshold_ema_alpha,
-        fp_threshold_min=args.fp_threshold_min,
-        fp_threshold_max=args.fp_threshold_max,
     )
 
 

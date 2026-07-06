@@ -218,13 +218,6 @@ POSITIVE_LOSS_WEIGHT="${POSITIVE_LOSS_WEIGHT:-1.2}"
 NEGATIVE_LOSS_WEIGHT="${NEGATIVE_LOSS_WEIGHT:-1.0}"
 DROP6_NEGATIVE_LOSS_WEIGHT="${DROP6_NEGATIVE_LOSS_WEIGHT:-1.2}"
 NEUTRAL_NEGATIVE_LOSS_WEIGHT="${NEUTRAL_NEGATIVE_LOSS_WEIGHT:-1.0}"
-HIGH_SCORE_POSITIVE_BONUS="${HIGH_SCORE_POSITIVE_BONUS:-0.0}"
-HIGH_SCORE_POSITIVE_POSITION="${HIGH_SCORE_POSITIVE_POSITION:-0.8}"
-FP_DYNAMIC_PENALTY="${FP_DYNAMIC_PENALTY:-0}"
-FP_PENALTY_WEIGHT="${FP_PENALTY_WEIGHT:-1.0}"
-FP_THRESHOLD_EMA_ALPHA="${FP_THRESHOLD_EMA_ALPHA:-0.2}"
-FP_THRESHOLD_MIN="${FP_THRESHOLD_MIN:-0.40}"
-FP_THRESHOLD_MAX="${FP_THRESHOLD_MAX:-0.65}"
 PRECISION_TAG="$(python - "$EVAL_PRECISION_TOP_K" "$EVAL_PRECISION_THRESHOLD" <<'PY'
 import sys
 k = max(1, int(float(sys.argv[1])))
@@ -314,13 +307,6 @@ Project blackbox environment:
   NEGATIVE_LOSS_WEIGHT=$NEGATIVE_LOSS_WEIGHT
   DROP6_NEGATIVE_LOSS_WEIGHT=$DROP6_NEGATIVE_LOSS_WEIGHT
   NEUTRAL_NEGATIVE_LOSS_WEIGHT=$NEUTRAL_NEGATIVE_LOSS_WEIGHT
-  HIGH_SCORE_POSITIVE_BONUS=$HIGH_SCORE_POSITIVE_BONUS
-  HIGH_SCORE_POSITIVE_POSITION=$HIGH_SCORE_POSITIVE_POSITION
-  FP_DYNAMIC_PENALTY=$FP_DYNAMIC_PENALTY
-  FP_PENALTY_WEIGHT=$FP_PENALTY_WEIGHT
-  FP_THRESHOLD_EMA_ALPHA=$FP_THRESHOLD_EMA_ALPHA
-  FP_THRESHOLD_MIN=$FP_THRESHOLD_MIN
-  FP_THRESHOLD_MAX=$FP_THRESHOLD_MAX
   RESUME_ADAPTER_DIR=${RESUME_ADAPTER_DIR:-<unset>}
   INITIAL_ADAPTER_DIR=${INITIAL_ADAPTER_DIR:-<unset>}
   USE_4BIT=$USE_4BIT
@@ -380,31 +366,6 @@ if train_supports_arg "--drop6-negative-loss-weight"; then
 fi
 if train_supports_arg "--neutral-negative-loss-weight"; then
   TRAIN_ARGS+=(--neutral-negative-loss-weight "$NEUTRAL_NEGATIVE_LOSS_WEIGHT")
-fi
-if train_supports_arg "--high-score-positive-bonus"; then
-  TRAIN_ARGS+=(--high-score-positive-bonus "$HIGH_SCORE_POSITIVE_BONUS")
-fi
-if train_supports_arg "--high-score-positive-position"; then
-  TRAIN_ARGS+=(--high-score-positive-position "$HIGH_SCORE_POSITIVE_POSITION")
-fi
-if env_flag "$FP_DYNAMIC_PENALTY"; then
-  if train_supports_arg "--fp-dynamic-penalty"; then
-    TRAIN_ARGS+=(--fp-dynamic-penalty)
-  else
-    echo "Current train.py does not support --fp-dynamic-penalty; skipping it."
-  fi
-fi
-if train_supports_arg "--fp-penalty-weight"; then
-  TRAIN_ARGS+=(--fp-penalty-weight "$FP_PENALTY_WEIGHT")
-fi
-if train_supports_arg "--fp-threshold-ema-alpha"; then
-  TRAIN_ARGS+=(--fp-threshold-ema-alpha "$FP_THRESHOLD_EMA_ALPHA")
-fi
-if train_supports_arg "--fp-threshold-min"; then
-  TRAIN_ARGS+=(--fp-threshold-min "$FP_THRESHOLD_MIN")
-fi
-if train_supports_arg "--fp-threshold-max"; then
-  TRAIN_ARGS+=(--fp-threshold-max "$FP_THRESHOLD_MAX")
 fi
 if [[ -n "$EVAL_OUTPUT_DIR" ]]; then
   TRAIN_ARGS+=(--eval-output-dir "$EVAL_OUTPUT_DIR")

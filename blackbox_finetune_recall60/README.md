@@ -82,22 +82,15 @@ WSL/Linux defaults to `ON_THE_FLY_TOKENIZE=1`, so training tokenizes each batch 
 
 Training dataset builds write every materialized row in the training date range to `train.jsonl`; checkpoint evaluation uses the separate evaluation dataset, typically `data_evaluation_*/test.jsonl`.
 
-Optional high-scoring negative penalty is disabled by default. Enable it only when you want training to softly penalize negative samples whose current positive probability exceeds the dynamic false-positive cutoff. The penalty is linear, `max(p_positive - cutoff, 0)`, so small cutoff violations still contribute useful gradient. After every checkpoint evaluation, the cutoff is updated from `0.5 * (next_threshold + max_p)` with EMA smoothing and then clamped by the configured bounds:
+The training loss supports static class weighting. `POSITIVE_LOSS_WEIGHT` applies to positive rows, while reshuffled negative rows can use `DROP6_NEGATIVE_LOSS_WEIGHT` or `NEUTRAL_NEGATIVE_LOSS_WEIGHT` according to `metadata.negative_kind`:
 
 ```bash
 export EVAL_THRESHOLD_POSITION=0.2
 export POSITIVE_LOSS_WEIGHT=2.0
 export NEGATIVE_LOSS_WEIGHT=1.0
-export HIGH_SCORE_POSITIVE_BONUS=1.0
-export HIGH_SCORE_POSITIVE_POSITION=0.8
-export FP_DYNAMIC_PENALTY=1
-export FP_PENALTY_WEIGHT=1.0
-export FP_THRESHOLD_EMA_ALPHA=0.2
-export FP_THRESHOLD_MIN=0.40
-export FP_THRESHOLD_MAX=0.65
+export DROP6_NEGATIVE_LOSS_WEIGHT=1.2
+export NEUTRAL_NEGATIVE_LOSS_WEIGHT=1.0
 ```
-
-With the switch off, training loss is unchanged. The penalty requires on-the-fly raw samples, so keep `ON_THE_FLY_TOKENIZE=1` when using it.
 
 ```powershell
 $env:NO_AUTO_RESUME='1'

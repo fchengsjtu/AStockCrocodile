@@ -31,13 +31,6 @@ PROJECT_ENV_KEYS = [
     "EVAL_THRESHOLD_POSITION",
     "POSITIVE_LOSS_WEIGHT",
     "NEGATIVE_LOSS_WEIGHT",
-    "HIGH_SCORE_POSITIVE_BONUS",
-    "HIGH_SCORE_POSITIVE_POSITION",
-    "FP_DYNAMIC_PENALTY",
-    "FP_PENALTY_WEIGHT",
-    "FP_THRESHOLD_EMA_ALPHA",
-    "FP_THRESHOLD_MIN",
-    "FP_THRESHOLD_MAX",
 ]
 
 
@@ -87,37 +80,6 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(next_threshold, 0.56)
-
-    def test_dynamic_fp_penalty_cutoff_uses_ema_and_bounds(self):
-        updated = train._update_fp_penalty_cutoff(
-            current_cutoff=0.50,
-            next_threshold=0.60,
-            max_probability=0.80,
-            ema_alpha=0.2,
-            minimum=0.45,
-            maximum=0.65,
-        )
-
-        self.assertAlmostEqual(updated, 0.54)
-        self.assertEqual(train._clamp_fp_penalty_cutoff(0.2, 0.45, 0.65), 0.45)
-        self.assertEqual(train._clamp_fp_penalty_cutoff(0.9, 0.45, 0.65), 0.65)
-
-    def test_high_scoring_negative_penalty_is_linear(self):
-        try:
-            import torch
-        except ModuleNotFoundError:
-            self.skipTest("torch is not installed")
-
-        penalty = train._high_scoring_negative_penalty(torch.tensor(0.45), 0.40)
-
-        self.assertAlmostEqual(float(penalty), 0.05, places=6)
-
-    def test_dynamic_fp_penalty_defaults_are_stronger(self):
-        with without_project_env():
-            args = train.build_parser().parse_args([])
-
-        self.assertEqual(args.fp_penalty_weight, 1.0)
-        self.assertEqual(args.fp_threshold_min, 0.40)
 
     def test_training_defaults_use_2020_to_2025(self):
         with without_project_env():
@@ -237,13 +199,6 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
                 "NEGATIVE_LOSS_WEIGHT": "0.8",
                 "DROP6_NEGATIVE_LOSS_WEIGHT": "1.7",
                 "NEUTRAL_NEGATIVE_LOSS_WEIGHT": "0.9",
-                "HIGH_SCORE_POSITIVE_BONUS": "1.5",
-                "HIGH_SCORE_POSITIVE_POSITION": "0.75",
-                "FP_DYNAMIC_PENALTY": "1",
-                "FP_PENALTY_WEIGHT": "0.2",
-                "FP_THRESHOLD_EMA_ALPHA": "0.3",
-                "FP_THRESHOLD_MIN": "0.4",
-                "FP_THRESHOLD_MAX": "0.9",
                 "RECALL_TARGET": "80",
                 "PRECISION_TOP_K": "20",
                 "PRECISION_THRESHOLD": "0.30",
@@ -266,13 +221,6 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(args.negative_loss_weight, 0.8)
         self.assertEqual(args.drop6_negative_loss_weight, 1.7)
         self.assertEqual(args.neutral_negative_loss_weight, 0.9)
-        self.assertEqual(args.high_score_positive_bonus, 1.5)
-        self.assertEqual(args.high_score_positive_position, 0.75)
-        self.assertTrue(args.fp_dynamic_penalty)
-        self.assertEqual(args.fp_penalty_weight, 0.2)
-        self.assertEqual(args.fp_threshold_ema_alpha, 0.3)
-        self.assertEqual(args.fp_threshold_min, 0.4)
-        self.assertEqual(args.fp_threshold_max, 0.9)
         self.assertTrue(args.on_the_fly_tokenize)
         self.assertIsNone(eval_args.min_positive_recall)
         self.assertEqual(eval_args.precision_top_k, 20)
@@ -458,8 +406,6 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
                 train_order=[2, 0, 1],
                 rng=rng,
                 evaluation_threshold=0.48,
-                high_score_positive_cutoff=0.52,
-                fp_penalty_cutoff=0.44,
                 total_nonfinite_skips=3,
             )
 
@@ -469,8 +415,6 @@ class BlackboxFinetuneRecall60Tests(unittest.TestCase):
         self.assertEqual(state["next_micro_step"], 1600)
         self.assertEqual(state["train_order"], [2, 0, 1])
         self.assertAlmostEqual(state["evaluation_threshold"], 0.48)
-        self.assertAlmostEqual(state["high_score_positive_cutoff"], 0.52)
-        self.assertAlmostEqual(state["fp_penalty_cutoff"], 0.44)
         self.assertEqual(state["total_nonfinite_skips"], 3)
 
     def test_precision_target_tag_uses_top_k_and_threshold(self):
