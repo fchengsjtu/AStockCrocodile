@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
+export ASTOCK_DISABLE_LOCAL_DEPS="${ASTOCK_DISABLE_LOCAL_DEPS:-1}"
 
 env_flag() {
   case "${1:-}" in

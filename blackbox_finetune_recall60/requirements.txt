@@ -8,3 +8,4 @@ accelerate>=0.30.0
 bitsandbytes>=0.43.0; platform_system != "Windows"
 safetensors>=0.4.3
 pandas>=2.0.0
+akshare>=1.16.0
